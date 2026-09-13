@@ -51,7 +51,8 @@ Videos are listed), with or without the sensor's marks, then choose how to count
 4. **Count.** `gate.py` and `detect.py` run in the background. The page shows
    what they are doing: a live picture, the progress and the time left.
 5. **Check.** Each crossing the tool found plays as a short loop; press `Y`
-   or `N`. The likely misses it listed come next, answered the same way.
+   or `N`, or `U` when you cannot tell. The likely misses it listed come next,
+   answered the same way.
    Finally, you can watch the movement it could not explain, at 2× speed, and
    press `I` or `O` for anyone it never detected. Do this on busy entrances.
    If two cameras see the same person at the same moment, the second crossing
@@ -76,9 +77,18 @@ crossing with its time and show a snapshot of each one. The count is labelled
 VERIFIED COUNT (automatic, then checked by a person) or MANUAL COUNT. The logo
 comes from `assets/logo.png`.
 
-The automatic report's number holds only crossings a person confirmed. Its
-details page also says whether the unexplained movement was watched. If that
-step was skipped, anyone the tool never detected is missing from the count.
+The automatic report's number holds only crossings a person confirmed. When
+the check is not complete, the accuracy card says **INCOMPLETE** instead of a
+percentage, with the reason under the cards: some of the movement the tool
+could not explain was not watched (automatic), or less than 99% of a camera's
+footage was watched (manual). Anyone in that footage may be missing from the
+count. Crossings answered Unsure are never counted: the report lists them,
+and gives the count and the accuracy both ways they could go.
+
+A Y/N question is about one person. When a group crosses and the tool counts
+only one of them, the others are not asked about: on one busy clip that halved
+the count. Until the check can take a number of people, watch group crossings
+by hand.
 
 **Learning examples.** Set a shared folder on the report step. Every counted
 crossing is then saved there, as the camera's frames from 1.5 s before to
@@ -116,6 +126,37 @@ people in crowds. To train one on your own cameras:
 
 The marked frames are camera pictures of people, so they stay in `labels/` in
 the data folder, which git ignores.
+
+A first try (1,009 heads on 180 pictures, 2026-09-13) did not beat the current
+detector: on a store it never saw it found 28 of 234 heads, where the current
+one found 166. Most frames were marked footage, and it learned the sensor's
+height bubbles rather than heads. It is not used.
+
+## Measuring the automatic count (`bench.py`)
+
+    uv run bench.py                # every clip with a finished count by a person
+    uv run bench.py VIDEO [VIDEO]  # just these
+
+For each clip it replays the recorded detections through today's tracking and
+counting rule (seconds per clip, nothing in the run folder changes) and puts
+every crossing the person verified where the checker would meet it:
+
+- **counted**: the tool counted it (a Y/N question);
+- **on the list**: offered as a possible miss (a Y/N question);
+- **by watching**: only inside movement the tool could not explain;
+- **never shown**: nowhere the tool pointed.
+
+It also counts wrong counts (the same person twice, the wrong direction,
+nobody) and the work: Y/N questions and minutes of movement to watch.
+Results are saved in `bench/` in the data folder, to compare later changes.
+
+Only a clip counted fully by hand (the wizard's Manual mode, with all the
+footage watched) measures **crossing recall**. A check of the tool's own
+output cannot contain someone the tool never showed, so on those clips
+"never shown" only means "shown when the clip was checked, but not by
+today's method". A hand count of part of the footage is shown but left out of
+the totals. If a camera's drawing changed since its count ran, the clip is
+skipped unless you pass `--allow-config-change`.
 
 ## Windows app
 

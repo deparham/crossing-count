@@ -121,6 +121,47 @@ def accuracy_range(sensor: int | None, verified: int, unsure: int) -> list[float
     return [min(vals), max(vals)] if vals else None
 
 
+def review_items(camera: str, picture: int, candidates: dict[str, Any], discarded: dict[str, Any],
+                 unexplained: dict[str, Any], dirs: list[str], duration: float
+                 ) -> list[dict[str, Any]]:
+    """What one camera's count asks a person to check: every counted crossing, and every
+    possible miss (rule rejections that are often real, tracks lost at the line)."""
+    def clip(t0: float, t1: float | None = None) -> list[float]:
+        return [round(max(0.0, t0 - CLIP_BEFORE_S), 2),
+                round(min(duration, (t0 if t1 is None else t1) + CLIP_AFTER_S), 2)]
+
+    base = {"camera": camera, "picture": picture}
+    items: list[dict[str, Any]] = []
+    for c in candidates.get("candidates", []):
+        if c["direction"] in dirs:
+            t = float(c["t_seconds"])
+            items.append({**base, "id": c["id"], "kind": "counted", "why": "detected",
+                          "t": t, "direction": c["direction"], "clip": clip(t),
+                          "point": c.get("crossing_xy"), "path": c.get("path")})
+    for d in discarded.get("discarded", []):
+        first = (d.get("crossings") or [{}])[0]
+        if d.get("reason") in POSSIBLE_REASONS and first.get("direction") in dirs:
+            t = float(first["t"])
+            items.append({**base, "id": d["id"], "kind": "possible", "why": d["reason"],
+                          "t": t, "direction": first["direction"], "clip": clip(t, t + 1.5),
+                          "point": _near(d.get("path"), t), "path": d.get("path")})
+    for u in unexplained.get("unexplained", []):
+        if u.get("kind") == MISS_KIND and u.get("direction_guess") in dirs:
+            items.append({**base, "id": u["id"], "kind": "possible", "why": "lost",
+                          "t": float(u["t_seconds"]), "direction": u["direction_guess"],
+                          "clip": clip(float(u["start_s"]), float(u["end_s"])),
+                          "point": None, "path": None})
+    return items
+
+
+def watch_stretches(camera: str, picture: int, unexplained: dict[str, Any]) -> list[dict[str, Any]]:
+    """Movement near the line that gave no count and no possible miss: a person the tool
+    never detected there is found only by watching it."""
+    return [{"id": u["id"], "camera": camera, "picture": picture,
+             "start": float(u["start_s"]), "end": float(u["end_s"])}
+            for u in unexplained.get("unexplained", []) if u.get("kind") != MISS_KIND]
+
+
 def default_folders() -> list[Path]:
     home = Path.home()
     return [p for p in (home / "Downloads", home / "Desktop", home / "Movies", home / "Videos")
@@ -703,35 +744,12 @@ class Wizard:
         """Every counted crossing, then every possible miss, in the chosen directions."""
         if self.state["job"]["status"] != "done":
             return []
-        dirs = self.dirs()
         dur = float(self.state["duration_s"])
-
-        def clip(t0: float, t1: float | None = None) -> list[float]:
-            return [round(max(0.0, t0 - CLIP_BEFORE_S), 2),
-                    round(min(dur, (t0 if t1 is None else t1) + CLIP_AFTER_S), 2)]
-
         items: list[dict[str, Any]] = []
         for cam in self.state["cameras"]:
-            base = {"camera": cam["sensor"], "picture": cam["picture"]}
-            for c in self._read(cam, "candidates").get("candidates", []):
-                if c["direction"] in dirs:
-                    t = float(c["t_seconds"])
-                    items.append({**base, "id": c["id"], "kind": "counted", "why": "detected",
-                                  "t": t, "direction": c["direction"], "clip": clip(t),
-                                  "point": c.get("crossing_xy"), "path": c.get("path")})
-            for d in self._read(cam, "discarded").get("discarded", []):
-                first = (d.get("crossings") or [{}])[0]
-                if d.get("reason") in POSSIBLE_REASONS and first.get("direction") in dirs:
-                    t = float(first["t"])
-                    items.append({**base, "id": d["id"], "kind": "possible", "why": d["reason"],
-                                  "t": t, "direction": first["direction"], "clip": clip(t, t + 1.5),
-                                  "point": _near(d.get("path"), t), "path": d.get("path")})
-            for u in self._read(cam, "unexplained").get("unexplained", []):
-                if u.get("kind") == MISS_KIND and u.get("direction_guess") in dirs:
-                    items.append({**base, "id": u["id"], "kind": "possible", "why": "lost",
-                                  "t": float(u["t_seconds"]), "direction": u["direction_guess"],
-                                  "clip": clip(float(u["start_s"]), float(u["end_s"])),
-                                  "point": None, "path": None})
+            items += review_items(cam["sensor"], cam["picture"], self._read(cam, "candidates"),
+                                  self._read(cam, "discarded"), self._read(cam, "unexplained"),
+                                  self.dirs(), dur)
         items.sort(key=lambda i: (i["kind"] != "counted",
                                   prompt_priority(i["why"]) if i["kind"] == "possible" else 0,
                                   i["t"], i["picture"]))
@@ -742,12 +760,8 @@ class Wizard:
         """Movement near the line that produced no count and no likely miss."""
         if self.state["job"]["status"] != "done":
             return []
-        out = []
-        for cam in self.state["cameras"]:
-            for u in self._read(cam, "unexplained").get("unexplained", []):
-                if u.get("kind") != MISS_KIND:
-                    out.append({"id": u["id"], "camera": cam["sensor"], "picture": cam["picture"],
-                                "start": float(u["start_s"]), "end": float(u["end_s"])})
+        out = [r for cam in self.state["cameras"]
+               for r in watch_stretches(cam["sensor"], cam["picture"], self._read(cam, "unexplained"))]
         out.sort(key=lambda r: (r["start"], r["picture"]))
         return out
 
