@@ -12,6 +12,7 @@ import json
 import os
 import pickle
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -419,6 +420,7 @@ class Wizard:
             }
             self._save()
         for key, value in (("mode", None), ("marks", None), ("examples", None), ("people", {}),
+                           ("decisions", []),
                            ("manual", {"counts": [], "watched": {}, "positions": {},
                                        "done": False, "next_id": 1})):
             self.state.setdefault(key, value)
@@ -681,9 +683,62 @@ class Wizard:
         else:
             threading.Thread(target=work, daemon=True).start()
 
+    # ---- the record of a check ---------------------------------------------------------
+
+    def checked_work(self) -> int:
+        """How much a person has answered or added in the current check."""
+        return len(self.state["answers"]) + len(self.state["added"])
+
+    def _reviewer(self) -> str:
+        return str(self.state["store"].get("operator") or "")
+
+    def _decide(self, action: str, **info: Any) -> None:
+        """The audit trail of the current check: every decision, who made it and when."""
+        self.state["decisions"].append({"at": _now(), "by": self._reviewer(), "action": action,
+                                        **info})
+
+    def _archive(self, reason: str) -> Path | None:
+        """Keep the current check, and a copy of its report, before it is replaced."""
+        if not self.checked_work() and not self.state.get("report"):
+            return None
+        folder = self.dir / "history"
+        folder.mkdir(parents=True, exist_ok=True)
+        stem = f"{datetime.now().astimezone():%Y%m%d-%H%M%S}-{reason}"
+        k = 1
+        while (folder / f"{stem}.json").exists():
+            k += 1
+            stem = f"{stem.rsplit('~', 1)[0]}~{k}"
+        report = self.state.get("report") or {}
+        kept = None
+        if report.get("path") and Path(report["path"]).is_file():
+            kept = folder / f"{stem}.pptx"
+            shutil.copy2(report["path"], kept)
+        c = self.counts()
+        out = folder / f"{stem}.json"
+        write_json_atomic(out, {**self.state, "archived_at": _now(), "archive_reason": reason,
+                                "report_copy": str(kept) if kept else None,
+                                "verified": c["verified"], "unsure": c["unsure"]})
+        return out
+
+    def history(self) -> list[dict[str, Any]]:
+        """Earlier checks of this video, newest first."""
+        out = []
+        for p in sorted((self.dir / "history").glob("*.json"), reverse=True):
+            try:
+                h = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            out.append({"file": str(p), "archived_at": h.get("archived_at"),
+                        "reason": h.get("archive_reason"), "verified": h.get("verified"),
+                        "answers": len(h.get("answers", {})),
+                        "by": h.get("store", {}).get("operator", "")})
+        return out
+
     # ---- counting ----------------------------------------------------------------------
 
-    def start(self) -> None:
+    def start(self, confirm: bool = False) -> None:
+        """Run the automatic count. Running a checked count again needs confirm: the check
+        starts afresh, and the old one is kept in the history folder first."""
         with self._lock:
             if self.manual():
                 raise WizardError("This is a manual count: there is nothing to run.")
@@ -693,10 +748,19 @@ class Wizard:
                 raise WizardError("Draw the cameras first.")
             if not self.dirs():
                 raise WizardError("Choose Traffic In or Traffic Out first.")
+            if self.checked_work() and not confirm:
+                raise WizardError(f"This count has been checked ({self.checked_work()} answers "
+                                  f"and added crossings). Running it again starts a new check; "
+                                  f"the answers are kept in the video's history but do not "
+                                  f"carry over.")
             commands = self._commands(self)
+            archived = self._archive("rerun")
             self.state["job"] = {"status": "running", "started_at": _now(), "finished_at": None,
                                  "error": None, "log": []}
-            self.state.update(answers={}, people={}, added=[], watched=[], watch=None, report=None)
+            self.state.update(answers={}, people={}, added=[], watched=[], watch=None, report=None,
+                              decisions=[])
+            self._decide("run", model=self.state["model"],
+                         kept=str(archived) if archived else None)
             self._save()
             self._job = _Job(commands, Progress(cameras=len(self.state["cameras"])),
                              self._finished)
@@ -788,7 +852,8 @@ class Wizard:
             raise WizardError("answer yes, no or unsure")
         if not 1 <= people <= MAX_GROUP:
             raise WizardError(f"a group is 1 to {MAX_GROUP} people")
-        if item_id not in {i["id"] for i in self.check_items()}:
+        item = next((i for i in self.check_items() if i["id"] == item_id), None)
+        if item is None:
             raise WizardError(f"there is no crossing {item_id} to check")
         with self._lock:
             self.state["people"].pop(item_id, None)
@@ -798,6 +863,9 @@ class Wizard:
                 self.state["answers"][item_id] = answer
                 if answer == "yes" and people > 1:
                     self.state["people"][item_id] = people
+            self._decide("answer" if answer else "undo", id=item_id, answer=answer,
+                         people=people if answer == "yes" else None,
+                         item={k: item[k] for k in ("kind", "why", "camera", "t", "direction")})
             self._save()
 
     def add(self, sensor: str, t: float, direction: str, range_id: str | None = None) -> None:
@@ -808,14 +876,18 @@ class Wizard:
             raise WizardError(f"{t:.2f} s is outside the video")
         with self._lock:
             self.state["added"].append({"camera": sensor, "t": round(float(t), 2),
-                                        "direction": direction, "range": range_id, "at": _now()})
+                                        "direction": direction, "range": range_id, "at": _now(),
+                                        "by": self._reviewer()})
+            self._decide("add", camera=sensor, t=round(float(t), 2), direction=direction,
+                         range=range_id)
             self._save()
 
     def remove_added(self, index: int) -> None:
         with self._lock:
             if not 0 <= index < len(self.state["added"]):
                 raise WizardError("no such added crossing")
-            del self.state["added"][index]
+            removed = self.state["added"].pop(index)
+            self._decide("remove_added", entry=removed)
             self._save()
 
     def set_watch(self, mode: str | None) -> None:
@@ -823,12 +895,14 @@ class Wizard:
             raise WizardError("watch mode must be doing, done or skipped")
         with self._lock:
             self.state["watch"] = mode
+            self._decide("watch", mode=mode)
             self._save()
 
     def mark_watched(self, range_id: str, done: bool = True) -> None:
         with self._lock:
             watched = [r for r in self.state["watched"] if r != range_id]
             self.state["watched"] = [*watched, range_id] if done else watched
+            self._decide("watched" if done else "not_watched", range=range_id)
             self._save()
 
     def counts(self) -> dict[str, Any]:
@@ -952,7 +1026,7 @@ class Wizard:
     def public(self) -> dict[str, Any]:
         with self._lock:
             return {**self.state, "dirs": self.dirs(), "counts": self.counts(),
-                    "run_dir": str(self.run_dir)}
+                    "run_dir": str(self.run_dir), "history": self.history()}
 
     # ---- pictures ----------------------------------------------------------------------
 
@@ -1131,7 +1205,8 @@ class Wizard:
             f"Footage: {st['filename']} ({_dur(float(st['duration_s']))}), cameras {cams}.",
             ("People were detected and tracked automatically, and crossings of each camera's "
              "counting line found with the camera's rule (line and mask zone)."),
-            (f"A person checked every crossing the tool found: {c['confirmed']} confirmed, "
+            (f"{store['operator'] or 'A person'} checked every crossing the tool found: "
+             f"{c['confirmed']} confirmed, "
              f"{c['rejected']} rejected. Of {c['found'] + c['not_found']} possible misses it "
              f"listed, {c['found']} were real."),
             watched,

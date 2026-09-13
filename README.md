@@ -104,6 +104,11 @@ inside the company.
 Everything is saved as you go, to `runs/<video>/wizard/state.json`. Open the
 same video again to carry on where you left off.
 
+Every answer, undo, added crossing and watching decision is logged there with
+the time and the checker's name (asked once, then remembered). Running a
+checked count again asks first: the check starts afresh, and the old one, with
+a copy of its report, is kept in `runs/<video>/wizard/history/`.
+
 ## Training a head detector (`label.py`, `train_heads.py`)
 
 The current detector learned from side-on photos, so from overhead it loses

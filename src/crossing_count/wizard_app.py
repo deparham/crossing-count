@@ -34,6 +34,10 @@ class OpenIn(BaseModel):
     path: str
 
 
+class RunIn(BaseModel):
+    confirm: bool = False  # run a count that was already checked (the check is kept)
+
+
 class DirectionIn(BaseModel):
     direction: str
 
@@ -183,6 +187,9 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
             s = Setup(w.video, sites)
         except (WizardError, ValueError, OSError, FFmpegError) as exc:
             raise HTTPException(400, f"Could not open {path.name}: {exc}") from exc
+        name = paths.load_settings().get("operator")
+        if name and not w.state["store"].get("operator"):
+            w.set_store(operator=str(name))
         draw = f"/draw/{uuid.uuid4().hex[:10]}"
         app.router.routes[:] = [r for r in app.router.routes
                                 if not (isinstance(r, Mount) and r.path.startswith("/draw/"))]
@@ -298,8 +305,8 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         return run(lambda: wiz().set_model(m.model))
 
     @app.post("/api/run")
-    def start() -> dict[str, Any]:
-        return run(wiz().start)
+    def start(r: RunIn | None = None) -> dict[str, Any]:
+        return run(lambda: wiz().start(confirm=bool(r and r.confirm)))
 
     @app.post("/api/stop")
     def stop() -> dict[str, Any]:
@@ -347,6 +354,8 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     @app.post("/api/store")
     def store(s: StoreIn) -> dict[str, Any]:
+        if s.operator and s.operator.strip():  # the checker's name, for the next video too
+            paths.save_settings({"operator": s.operator.strip()})
         return run(lambda: wiz().set_store(s.name, s.code, s.location, s.report_date,
                                            s.operator))
 

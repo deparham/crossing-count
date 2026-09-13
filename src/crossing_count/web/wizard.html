@@ -411,14 +411,18 @@ $("sensorNext").addEventListener("click", async () => {
 ENTER.count = () => {
   const s = W.st;
   $("runWhat").textContent = `${s.cameras.map((c) => c.sensor).join(" and ")} · ${s.dirs.map((d) => LABEL[d]).join(" and ")} · ${period()}. ` +
-    "It finds the moments with movement near the line, then detects and tracks people there. You can do other work meanwhile.";
+    "It finds the moments with movement near the line, then detects and tracks people there. You can do other work meanwhile." +
+    (s.history && s.history.length ? ` Earlier checks of this video are kept in its history (${s.history.length}).` : "");
   $("model").value = s.model;
   if (s.job.status !== "idle") { $("runCard").hidden = false; pollJob(); }
   if (s.job.status === "running") W.timer = setInterval(pollJob, 1000);
 };
 $("model").addEventListener("change", async () => { try { setState(await api("/api/model", { model: $("model").value })); } catch (e) { msg(e.message, "err"); } });
 $("start").addEventListener("click", async () => {
-  try { setState(await api("/api/run", {})); $("runCard").hidden = false; $("toCheck").hidden = true; $("results").innerHTML = ""; clearInterval(W.timer); W.timer = setInterval(pollJob, 1000); pollJob(); }
+  const done = Object.keys(W.st.answers || {}).length + (W.st.added || []).length;
+  if (done && !confirm(`This count has been checked (${done} answers). Running it again starts a new check: `
+                       + "your answers are kept in the video's history, but do not carry over. Run it again?")) return;
+  try { setState(await api("/api/run", { confirm: done > 0 })); $("runCard").hidden = false; $("toCheck").hidden = true; $("results").innerHTML = ""; clearInterval(W.timer); W.timer = setInterval(pollJob, 1000); pollJob(); }
   catch (e) { msg(e.message, "err"); }
 });
 $("stop").addEventListener("click", async () => { try { await api("/api/stop", {}); } catch (e) { msg(e.message, "err"); } });
@@ -456,6 +460,10 @@ async function pollJob() {
 
 // ---------- check (automatic count) ----------
 ENTER.check = async () => {
+  if (!W.st.store.operator) {  // recorded with every answer; remembered for the next video
+    const name = (prompt("Your name, recorded with each answer:") || "").trim();
+    if (name) { try { setState(await api("/api/store", { operator: name })); } catch (e) { msg(e.message, "err"); } }
+  }
   try { W.ch = await api("/api/check"); } catch (e) { msg(e.message, "err"); return; }
   W.back = [];
   nextThing();

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from collections.abc import Callable
@@ -198,6 +199,46 @@ def test_a_group_is_counted_as_its_people(two_tile_video: dict[str, Any], review
     pages = texts(w.make_report())
     assert "1–3" in pages[1] and "group of 3" in pages[1]
     assert "groups crossing together: 3 people" in pages[1]
+
+
+def test_a_check_is_logged_and_kept_when_the_count_runs_again(
+        two_tile_video: dict[str, Any], review_run_dir: Path, tmp_path: Path) -> None:
+    w = Wizard(two_tile_video["video"], two_tile_video["dir"], tmp_path,
+               copy_outputs(review_run_dir))
+    s = Setup(w.video, two_tile_video["dir"])
+    w.set_cameras(s.existing(), [t.as_dict() for t in s.tiles])
+    w.set_direction("in")
+    w.set_sensor({"in": 2})
+    w.set_store(name="Lismore", code="SYN-1", operator="Pat")
+    w.start()
+    wait(w)
+    first, *rest = w.check_items()
+    for i in rest:
+        w.answer(i["id"], "no")
+    w.answer(first["id"], "yes", people=2)
+    w.answer(first["id"], None)
+    w.answer(first["id"], "yes")
+    w.add("CAM-A", 12.0, "in")
+    w.remove_added(0)
+    w.set_watch("skipped")
+    log = w.state["decisions"]
+    assert log[0]["action"] == "run" and [d["action"] for d in log[-6:]] == [
+        "answer", "undo", "answer", "add", "remove_added", "watch"]
+    assert log[-6]["people"] == 2 and log[-6]["item"]["t"] == first["t"]
+    assert all(d["by"] == "Pat" and d["at"] for d in log)
+    report = w.make_report()
+    assert "Pat checked every crossing" in texts(report)[1]
+
+    with pytest.raises(WizardError, match="Running it again starts a new check"):
+        w.start()
+    w.start(confirm=True)
+    wait(w)
+    assert w.state["answers"] == {} and [d["action"] for d in w.state["decisions"]] == ["run"]
+    (h,) = w.history()
+    assert h["answers"] == len(rest) + 1 and h["verified"] == {"in": 1} and h["by"] == "Pat"
+    kept = json.loads(Path(h["file"]).read_text())
+    assert kept["answers"][first["id"]] == "yes" and Path(kept["report_copy"]).is_file()
+    assert w.state["decisions"][0]["kept"] == h["file"]
 
 
 def test_report_layout(tmp_path: Path) -> None:
