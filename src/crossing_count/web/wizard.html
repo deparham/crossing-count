@@ -352,7 +352,11 @@ async function rnSetup() {
   if (W.rnStores) return;
   try {
     W.rnStores = (await api("/api/retailnext/stores")).stores;
-    $("rnStores").innerHTML = W.rnStores.map((s) => `<option value="${esc(s.code)}">${esc(s.name)}</option>`).join("");
+    const shared = new Set(W.rnStores.filter((s, i, all) => all.findIndex((x) => x.code === s.code) !== i).map((s) => s.code));
+    $("rnStores").innerHTML = W.rnStores.map((s) => {  // a code two customers share is typed as subscription/code
+      const value = shared.has(s.code) ? `${s.subscription}/${s.code}` : s.code;
+      return `<option value="${esc(value)}">${esc(s.name)} · ${esc(s.subscription)}</option>`;
+    }).join("");
   } catch (e) { msg(e.message, "err"); }
 }
 $("rnFind").addEventListener("click", async () => {
@@ -363,7 +367,7 @@ $("rnFind").addEventListener("click", async () => {
     const r = await api("/api/retailnext/busiest", pick);
     W.rnPick = { ...pick, windows: r.windows };
     $("rnWindows").innerHTML = !r.windows.length ? '<div class="muted" style="margin-top:8px">RetailNext has no traffic for that day.</div>'
-      : `<div class="muted" style="margin-top:8px">${esc(r.store)}: the busiest ${pick.minutes} minutes for ${RN_DIR[pick.direction]} on ${esc(pick.date)}</div>` +
+      : `<div class="muted" style="margin-top:8px">${esc(r.store)} (${esc(r.subscription)}): the busiest ${pick.minutes} minutes for ${RN_DIR[pick.direction]} on ${esc(pick.date)}</div>` +
         r.windows.map((w, i) => `<div style="display:flex;gap:12px;align-items:center;margin-top:6px"><b>${esc(w.start)}–${esc(w.until)}</b>` +
           `<span>${w.in} in · ${w.out} out${w.validity !== "complete" ? ` <span class="warn">(RetailNext: ${esc(w.validity)})</span>` : ""}</span>` +
           `<button data-win="${i}">${i ? "Download" : "Download the busiest"}</button></div>`).join("");

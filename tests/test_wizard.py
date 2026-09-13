@@ -307,6 +307,11 @@ def test_retailnexts_numbers_from_its_api(two_tile_video: dict[str, Any], review
     assert w.state["sensor_source"] is not None  # the same numbers sent back: still RetailNext's
     w.set_sensor(intervals={"11:45": {"in": 12, "out": 22}, "12:00": {"in": 33, "out": 44}})
     assert w.state["sensor_source"] is None and "typed in" in w._system_line()
+    # a store whose entrances are not its cameras: its own total, no per-camera numbers
+    warnings = w.use_retailnext({"store": "Armadale", "cameras": {}, "note": "the store's total",
+                                 "total": rows(2, 3, 4, 5)})
+    assert w.state["sensor"] == {"in": 6, "out": 8} and w.state["sensor_cameras"] == {}
+    assert warnings == ["the store's total"] and "Armadale: the store's total" in w._system_line()
 
 
 def test_report_layout(tmp_path: Path) -> None:

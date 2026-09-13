@@ -562,20 +562,25 @@ class Wizard:
         dirs = self.dirs()
         per_iv = {k: dict.fromkeys(dirs, 0) for k in keys}
         per_cam: dict[str, dict[str, int]] = {}
-        warnings: list[str] = []
-        for cam, rows in got["cameras"].items():
+        warnings: list[str] = [str(got["note"])] if got.get("note") else []
+        # each camera's rows, or the store's total when its entrances are not the cameras
+        sources = got["cameras"] or {"": got.get("total") or []}
+        for cam, rows in sources.items():
             by_start = {str(r["start"]): r for r in rows}
-            per_cam[cam] = dict.fromkeys(dirs, 0)
+            label = cam or str(got.get("store") or "the store")
+            if cam:
+                per_cam[cam] = dict.fromkeys(dirs, 0)
             for k in keys:
                 r = by_start.get(k)
                 if r is None:
-                    raise WizardError(f"RetailNext gave no number for {cam} at {k}.")
+                    raise WizardError(f"RetailNext gave no number for {label} at {k}.")
                 if r["validity"] != "complete":
-                    warnings.append(f"RetailNext marked {cam} {r['start']}–{r['finish']} as "
+                    warnings.append(f"RetailNext marked {label} {r['start']}–{r['finish']} as "
                                     f"{r['validity']}: its number there is not a full count.")
                 for d in dirs:
                     per_iv[k][d] += int(r.get(d) or 0)
-                    per_cam[cam][d] += int(r.get(d) or 0)
+                    if cam:
+                        per_cam[cam][d] += int(r.get(d) or 0)
         if len(keys) > 1:
             self.set_sensor(intervals={k: dict(v) for k, v in per_iv.items()},
                             cameras={c: dict(v) for c, v in per_cam.items()})
@@ -584,7 +589,9 @@ class Wizard:
                             cameras={c: dict(v) for c, v in per_cam.items()})
         with self._lock:
             self.state["sensor_source"] = {
-                "source": "RetailNext API", "store": got.get("store"), "cameras": list(got["cameras"]),
+                "source": "RetailNext API", "subscription": got.get("subscription"),
+                "store": got.get("store"),
+                "cameras": list(got["cameras"]) or ["the store's total"],
                 "fetched_at": _now(), "warnings": warnings, "numbers": self._sensor_numbers()}
             self._save()
         return warnings
@@ -595,8 +602,10 @@ class Wizard:
 
     def _system_line(self) -> str:
         src = self.state.get("sensor_source")
-        how = (f"fetched from RetailNext's API ({src['store']}: {' + '.join(src['cameras'])}) "
-               f"on {str(src['fetched_at'])[:10]}" if src else "typed in from RetailNext")
+        sub = f", subscription {src['subscription']}" if src and src.get("subscription") else ""
+        how = (f"fetched from RetailNext's API ({src['store']}{sub}: "
+               f"{' + '.join(src['cameras'])}) on {str(src['fetched_at'])[:10]}"
+               if src else "typed in from RetailNext")
         text = (f"System count: RetailNext, same cameras and period, {how}. Accuracy = 100% "
                 f"minus the system's error as a share of the verified count.")
         return text + "".join(f" {w}" for w in (src or {}).get("warnings", []))

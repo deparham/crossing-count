@@ -154,6 +154,70 @@ NODES: list[dict[str, Any]] = [
 ]
 
 
+@pytest.fixture
+def credentials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[tuple[str, str], str]:
+    """A credential store in memory, and a data folder of the test's own."""
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path))
+    store: dict[tuple[str, str], str] = {}
+    monkeypatch.setattr(keyring, "set_password", lambda s, u, p: store.__setitem__((s, u), p))
+    monkeypatch.setattr(keyring, "get_password", lambda s, u: store.get((s, u)))
+    monkeypatch.setattr(keyring, "delete_password", lambda s, u: store.pop((s, u)))
+    return store
+
+
+def test_every_connected_subscription_is_kept(credentials: dict[tuple[str, str], str],
+                                              tmp_path: Path) -> None:
+    (tmp_path / "settings.json").write_text('{"retailnext_subscription": "old"}')  # one, as before
+    credentials[(rn.SERVICE, "old")] = json.dumps({"access_key": "A0", "secret_key": "S0"})
+    rn.save_connection("rag", "A1", "S1")
+    rn.save_connection("https://gazman.cloud.retailnext.net", "A2", "S2")
+    assert rn.subscriptions() == ["old", "rag", "gazman"]
+    assert [c.subscription for c in rn.connections()] == ["old", "rag", "gazman"]
+    assert rn.load_connection("rag") == rn.Connection("rag", "A1", "S1")
+    assert rn.load_connection() == rn.Connection("gazman", "A2", "S2")  # the last connected
+    rn.forget_connection("rag")
+    assert rn.subscriptions() == ["old", "gazman"] and (rn.SERVICE, "rag") not in credentials
+
+
+def test_a_store_is_found_in_whichever_subscription_has_it() -> None:
+    gazman = [{"uuid": "g1", "location_type": "store", "store_id": "GZ-001", "name": "Gazman One"}]
+    assert rn.find_store_in({"rag": NODES, "gazman": gazman}, "GZ-001")[0] == "gazman"
+    assert rn.find_store_in({"rag": NODES, "gazman": gazman}, "cn-123")[0] == "rag"
+    both = {"rag": NODES, "acme": NODES}
+    with pytest.raises(rn.RetailNextError, match="rag/CN-123"):
+        rn.find_store_in(both, "CN-123")
+    assert rn.find_store_in(both, "acme/CN-123")[0] == "acme"
+    with pytest.raises(rn.RetailNextError, match="None of the connected"):
+        rn.find_store_in({"rag": NODES, "gazman": gazman}, "ZZ-404")
+
+
+ARMADALE: list[dict[str, Any]] = [  # a store keeping its camera's video under the store itself
+    {"uuid": "s2", "location_type": "store", "store_id": "392", "name": "392 Perri Cutten Armadale",
+     "time_zone": "Australia/Hobart"},
+    {"uuid": "vA", "type": "video", "parent_uuid": "s2", "name": "Armadale_Entrance"},
+    {"uuid": "eA", "location_type": "entrance", "parent_uuid": "s2", "name": "Entrance"},
+    {"uuid": "tA", "type": "traffic", "parent_uuid": "eA", "name": "Perri Cutten Armadale Traffic 1"},
+]
+
+
+def test_a_store_whose_entrances_are_not_named_like_its_cameras(server: list[Any]) -> None:
+    seen = server.pop(0)
+    assert rn.video_channels(ARMADALE, "s2") == {"Armadale_Entrance": "vA"}
+    assert rn.video_channels(NODES, "s1") == {"CN-123-PB1": "v1", "CN-123-R2": "v2"}
+    group = {"type": "time", "start": "11:00", "finish": "11:15"}
+    server.append({"ok": True, "metrics": [
+        {"name": "traffic_in", "ok": True, "data": [{"value": 4, "validity": "complete", "group": group}]},
+        {"name": "traffic_out", "ok": True, "data": [{"value": 6, "validity": "complete", "group": group}]}]})
+    at = datetime.fromisoformat
+    got = rn.camera_counts(CONN, ARMADALE, "392", ["Armadale_Entrance"],
+                           at("2026-09-12T11:00:00"), at("2026-09-12T11:15:00"))
+    assert got["cameras"] == {} and got["total"][0]["out"] == 6 and "total" in got["note"]
+    assert json.loads(seen[0].data)["locations"] == ["s2"]  # the whole store: all its cameras
+    with pytest.raises(rn.RetailNextError, match="no entrance called Back_Door"):
+        rn.camera_counts(CONN, ARMADALE, "392", ["Back_Door"],
+                         at("2026-09-12T11:00:00"), at("2026-09-12T11:15:00"))
+
+
 def test_the_busiest_window_for_the_traffic_validated() -> None:
     def row(start: str, finish: str, i: int, o: int, validity: str = "complete") -> dict[str, Any]:
         return {"start": start, "finish": finish, "in": i, "out": o, "validity": validity}
@@ -212,7 +276,7 @@ def test_the_app_finds_the_busiest_time_and_downloads_it(monkeypatch: pytest.Mon
     home.mkdir()
     (home / "settings.json").write_text('{"retailnext_subscription": "acme"}')
     monkeypatch.setenv("CROSSING_COUNT_HOME", str(home))
-    monkeypatch.setattr(rn, "load_connection", lambda: CONN)
+    monkeypatch.setattr(rn, "connections", lambda: [CONN])
     monkeypatch.setattr(rn, "locations", lambda conn, types=None: NODES)
     rows = [{"start": f"11:{m:02d}", "finish": f"11:{m + 15:02d}", "in": 5, "out": o,
              "validity": "complete"} for m, o in ((0, 2), (15, 9), (30, 4))]
@@ -233,9 +297,9 @@ def test_the_app_finds_the_busiest_time_and_downloads_it(monkeypatch: pytest.Mon
     footage = tmp_path / "footage"
     footage.mkdir()
     client = TestClient(create_wizard_app(tmp_path, tmp_path / "runs", [footage]))
-    assert client.get("/api/retailnext").json() == {"connected": True}
+    assert client.get("/api/retailnext").json() == {"connected": True, "subscriptions": ["acme"]}
     assert client.get("/api/retailnext/stores").json()["stores"] == [
-        {"code": "CN-123", "name": "Tweed Heads CN-123"}]
+        {"code": "CN-123", "name": "Tweed Heads CN-123", "subscription": "acme"}]
     found = client.post("/api/retailnext/busiest", json={
         "code": "CN-123", "date": "2026-09-12", "minutes": 15, "direction": "out"}).json()
     assert (found["windows"][0]["start"], found["windows"][0]["out"]) == ("11:15", 9)

@@ -94,19 +94,32 @@ def clean_key(text: str) -> str:
     return _PASTE_MARKS.sub("", text).strip()
 
 
+def subscriptions() -> list[str]:
+    """The connected subscriptions (names only: the keys are in the credential store), in
+    the order they were connected."""
+    settings = paths.load_settings()
+    subs = [str(s) for s in settings.get("retailnext_subscriptions") or [] if s]
+    old = str(settings.get("retailnext_subscription") or "")  # from when one was kept
+    return subs if not old or old in subs else [old, *subs]
+
+
 def save_connection(subscription: str, access_key: str, secret_key: str) -> Connection:
+    """Add a subscription (or give one a new key); the others stay connected."""
     conn = Connection(subscription_name(subscription), clean_key(access_key),
                       clean_key(secret_key))
     if not conn.access_key or not conn.secret_key:
         raise RetailNextError("Both the access key and the secret key are needed.")
     keyring.set_password(SERVICE, conn.subscription, json.dumps(
         {"access_key": conn.access_key, "secret_key": conn.secret_key}))
-    paths.save_settings({"retailnext_subscription": conn.subscription})
+    subs = [s for s in subscriptions() if s != conn.subscription] + [conn.subscription]
+    paths.save_settings({"retailnext_subscriptions": subs, "retailnext_subscription": ""})
     return conn
 
 
-def load_connection() -> Connection | None:
-    sub = str(paths.load_settings().get("retailnext_subscription") or "")
+def load_connection(subscription: str | None = None) -> Connection | None:
+    """One subscription's connection; without a name, the one connected last."""
+    subs = subscriptions()
+    sub = subscription or (subs[-1] if subs else "")
     if not sub:
         return None
     try:
@@ -119,12 +132,31 @@ def load_connection() -> Connection | None:
     return Connection(sub, str(data["access_key"]), str(data["secret_key"]))
 
 
-def forget_connection() -> None:
-    sub = str(paths.load_settings().get("retailnext_subscription") or "")
-    if sub:
+def reconnect(subscription: str) -> Connection | None:
+    """Connect a subscription whose key is already in the credential store: nothing to
+    type. None if its key is not there."""
+    sub = subscription_name(subscription)
+    conn = load_connection(sub)
+    if conn is not None:
+        subs = [s for s in subscriptions() if s != sub] + [sub]
+        paths.save_settings({"retailnext_subscriptions": subs, "retailnext_subscription": ""})
+    return conn
+
+
+def connections() -> list[Connection]:
+    """Every connected subscription whose key is in the credential store."""
+    return [c for s in subscriptions() if (c := load_connection(s)) is not None]
+
+
+def forget_connection(subscription: str | None = None) -> None:
+    """Remove one subscription's key from this computer, or every one's."""
+    subs = subscriptions()
+    gone = [subscription] if subscription else subs
+    for sub in gone:
         with contextlib.suppress(keyring.errors.PasswordDeleteError):
             keyring.delete_password(SERVICE, sub)
-    paths.save_settings({"retailnext_subscription": ""})
+    paths.save_settings({"retailnext_subscriptions": [s for s in subs if s not in gone],
+                         "retailnext_subscription": ""})
 
 
 _KEY_SHAPE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -315,11 +347,30 @@ def busiest(rows: list[dict[str, Any]], length_min: int, direction: str, top: in
     return chosen
 
 
+def _under(nodes: list[dict[str, Any]], root_uuid: str) -> list[dict[str, Any]]:
+    """Every node below a location, however deep."""
+    kids: dict[Any, list[dict[str, Any]]] = {}
+    for n in nodes:
+        kids.setdefault(n.get("parent_uuid"), []).append(n)
+    out, todo = [], [root_uuid]
+    while todo:
+        for k in kids.get(todo.pop(), []):
+            out.append(k)
+            todo.append(k["uuid"])
+    return out
+
+
 def video_channels(nodes: list[dict[str, Any]], store_uuid: str) -> dict[str, str]:
-    """Each camera's video channel (by camera name), as the location list gives them."""
+    """Each camera's video channel, by camera name, wherever the store keeps it: under an
+    entrance (named like the entrance, as CN-123-PB1) or straight under the store (named
+    as the channel is, as Armadale_Entrance)."""
     ents = {n["uuid"]: n for n in entrances(nodes, store_uuid).values()}
-    return {str(ents[n["parent_uuid"]]["name"]): str(n["uuid"]) for n in nodes
-            if n.get("type") == "video" and n.get("parent_uuid") in ents}
+    out: dict[str, str] = {}
+    for n in _under(nodes, store_uuid):
+        if n.get("type") == "video":
+            parent = ents.get(n.get("parent_uuid"))
+            out[str(parent["name"] if parent else n.get("name"))] = str(n["uuid"])
+    return dict(sorted(out.items()))  # by name: the order the cameras sit in an export
 
 
 def local_period(day: date, start: str, until: str, time_zone: str) -> tuple[datetime, datetime]:
@@ -469,6 +520,30 @@ def find_store(nodes: list[dict[str, Any]], code: str) -> dict[str, Any]:
     return hits[0]
 
 
+def find_store_in(sets: dict[str, list[dict[str, Any]]], code: str) -> tuple[str, dict[str, Any]]:
+    """(subscription, store) for a store code, in whichever connected subscription has it.
+    "rag/CN-123" says which, for a code two customers share."""
+    hint, _, bare = code.strip().rpartition("/")
+    hits: list[tuple[str, dict[str, Any]]] = []
+    errors: list[RetailNextError] = []
+    for sub, nodes in sets.items():
+        if hint and sub != hint:
+            continue
+        try:
+            hits.append((sub, find_store(nodes, bare)))
+        except RetailNextError as e:
+            errors.append(e)
+    if len(hits) == 1:
+        return hits[0]
+    if hits:
+        raise RetailNextError(f"{bare} is a store in {' and '.join(s for s, _ in hits)}: type it "
+                              f"as {hits[0][0]}/{bare} to say which.")
+    if len(errors) == 1:
+        raise errors[0]
+    raise RetailNextError(f"None of the connected RetailNext subscriptions "
+                          f"({', '.join(sets) or 'none'}) has a store with the code {bare!r}.")
+
+
 def entrances(nodes: list[dict[str, Any]], store_uuid: str) -> dict[str, dict[str, Any]]:
     """A store's entrances by name: one per sensor, named like it (CN-123-PB1)."""
     return {str(n.get("name")): n for n in nodes
@@ -478,21 +553,35 @@ def entrances(nodes: list[dict[str, Any]], store_uuid: str) -> dict[str, dict[st
 def camera_counts(conn: Connection, nodes: list[dict[str, Any]], code: str, cameras: list[str],
                   start: datetime, end: datetime, minutes: int = 15) -> dict[str, Any]:
     """RetailNext's own rows (retailnext.traffic_table) for each camera over the footage's
-    period, from the store's entrance of the same name, in the store's time zone."""
+    period, from the store's entrance of the same name, in the store's time zone.
+
+    Some stores' entrances are not named like their cameras (Armadale: entrance "Entrance",
+    camera "Armadale_Entrance"). When the cameras counted are all the store's cameras, the
+    store's own total is used instead ("total", with no per-camera rows), and said so.
+    """
     store = find_store(nodes, code)
     ents = entrances(nodes, str(store["uuid"]))
     lower = {name.lower(): node for name, node in ents.items()}
-    missing = [c for c in cameras if c.lower() not in lower]
-    if missing:
-        raise RetailNextError(f"RetailNext's {store.get('name')} has no entrance called "
-                              f"{', '.join(missing)} (it has {', '.join(sorted(ents)) or 'none'}): "
-                              f"name the cameras as RetailNext does.")
     day, frm, until = period_of(start, end, minutes)
     tz = store.get("time_zone")
-    return {"store": store.get("name"), "store_uuid": store["uuid"], "time_zone": tz,
-            "day": day.isoformat(), "from": frm, "until": until,
-            "cameras": {c: traffic_table(traffic(conn, [str(lower[c.lower()]["uuid"])], day, frm,
-                                                 until, minutes, tz)) for c in cameras}}
+    out: dict[str, Any] = {"store": store.get("name"), "store_uuid": store["uuid"],
+                           "time_zone": tz, "day": day.isoformat(), "from": frm,
+                           "until": until, "cameras": {}}
+    missing = [c for c in cameras if c.lower() not in lower]
+    if not missing:
+        out["cameras"] = {c: traffic_table(traffic(conn, [str(lower[c.lower()]["uuid"])], day,
+                                                   frm, until, minutes, tz)) for c in cameras}
+        return out
+    channels = {n.lower() for n in video_channels(nodes, str(store["uuid"]))}
+    if channels and {c.lower() for c in cameras} == channels:
+        out["total"] = traffic_table(traffic(conn, [str(store["uuid"])], day, frm, until,
+                                             minutes, tz))
+        out["note"] = (f"RetailNext's numbers are {store.get('name')}'s total: its entrances "
+                       f"are not named like the cameras, and these are all its cameras.")
+        return out
+    raise RetailNextError(f"RetailNext's {store.get('name')} has no entrance called "
+                          f"{', '.join(missing)} (it has {', '.join(sorted(ents)) or 'none'}): "
+                          f"name the cameras as RetailNext does.")
 
 
 def period_of(start: datetime, end: datetime, minutes: int = 15) -> tuple[date, str, str]:

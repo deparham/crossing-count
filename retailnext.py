@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """RetailNext's own counts, from its cloud API (optional; only downloads).
 
-    uv run retailnext.py connect      type the subscription name, access key and secret
-                                      key; they are kept in this computer's credential
-                                      store (Keychain, Credential Manager), then tested
-    uv run retailnext.py locations    list the stores and other locations the key can see
-    uv run retailnext.py traffic VIDEO [--location UUID] [--minutes 15]
-                                      RetailNext's traffic in and out for the video's
-                                      period; the answer is saved in retailnext/ in the
-                                      data folder, as it came
-    uv run retailnext.py check        look for the usual mistakes, without showing the key
-    uv run retailnext.py forget       remove the key from this computer
+    uv run retailnext.py connect [NAME]   add a subscription (one per customer): its name,
+                                          access key and secret key, kept in this computer's
+                                          credential store (Keychain, Credential Manager).
+                                          For one whose key is already stored, nothing is
+                                          typed; --new-key enters a new key.
+    uv run retailnext.py list             the connected subscriptions
+    uv run retailnext.py check [NAME]     test them all (or one), without showing any key
+    uv run retailnext.py locations [--subscription NAME]
+                                          the stores and other locations the keys can see
+    uv run retailnext.py traffic VIDEO [--location UUID] [--subscription NAME] [--minutes 15]
+                                          RetailNext's traffic for the video's period, from
+                                          whichever subscription has its store; the answer is
+                                          saved in retailnext/ in the data folder, as it came
+    uv run retailnext.py forget NAME      remove that subscription's key from this computer
 
+Everything else (the wizard included) uses whichever connected subscription has the store.
 Nothing is sent to RetailNext but these queries.
 """
 
@@ -20,7 +25,6 @@ from __future__ import annotations
 import argparse
 import getpass
 import re
-import socket
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -30,13 +34,17 @@ from crossing_count.retailnext import (
     Connection,
     RetailNextError,
     clean_key,
+    connections,
     forget_connection,
     key_problems,
     load_connection,
     locations,
     period_of,
+    reconnect,
     save_connection,
     save_raw,
+    subscription_name,
+    subscriptions,
     traffic,
     traffic_table,
 )
@@ -59,105 +67,137 @@ def ask_secret(show: bool) -> str:
             return secret
 
 
-def need() -> Connection:
-    conn = load_connection()
-    if conn is None:
+def chosen(name: str | None) -> list[Connection]:
+    """That subscription, or every connected one."""
+    if name:
+        conn = load_connection(subscription_name(name))
+        if conn is None:
+            raise RetailNextError(f"{name} is not connected on this computer: run "
+                                  f"'retailnext.py connect {name}'.")
+        return [conn]
+    conns = connections()
+    if not conns:
         raise RetailNextError("Not connected yet: run 'retailnext.py connect' first.")
-    return conn
+    return conns
 
 
-def store_for(conn: Connection, video: Path) -> dict[str, Any]:
-    """The store whose name or id carries the code in the video's name (e.g. YD-612)."""
+def store_for(conns: list[Connection], video: Path) -> tuple[Connection, dict[str, Any]]:
+    """The store whose name or id carries the code in the video's name (e.g. YD-612), in
+    whichever subscription has it."""
     m = re.search(r"\b([A-Z]{2,4})-(\d{2,5})\b", video.name)
     if not m:
         raise RetailNextError("No store code (like YD-612) in the video's name: pass --location.")
     code, number = m.group(0), m.group(2)
-    stores = locations(conn, ["store"])
-    hits = [s for s in stores if code.lower() in str(s.get("name", "")).lower()
+    hits = [(conn, s) for conn in conns for s in locations(conn, ["store"])
+            if code.lower() in str(s.get("name", "")).lower()
             or str(s.get("store_id", "")) in (code, number)]
     if len(hits) != 1:
-        names = ", ".join(f"{s.get('name')} ({s.get('uuid')})" for s in hits[:10]) or "none"
-        raise RetailNextError(f"{len(hits)} stores match {code}: {names}. Pass --location UUID.")
+        names = ", ".join(f"{s.get('name')} ({c.subscription}, {s.get('uuid')})"
+                          for c, s in hits[:10]) or "none"
+        raise RetailNextError(f"{len(hits)} stores match {code}: {names}. Pass --location UUID "
+                              f"(and --subscription).")
     return hits[0]
+
+
+def check(conn: Connection) -> bool:
+    print(f"{conn.subscription} ({conn.base.removeprefix('https://')})")
+    for problem in key_problems(conn) or ["The keys have the expected shape."]:
+        print(f"  {problem}")
+    try:
+        print(f"  RetailNext accepted the key: it sees {len(locations(conn, ['store']))} store(s).")
+    except RetailNextError as e:
+        print(f"  {e}")
+        return False
+    return True
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("connect")
+    c.add_argument("name", nargs="?", help="the subscription, e.g. rag (asked if not given)")
+    c.add_argument("--new-key", action="store_true", help="enter a new key even if one is stored")
     c.add_argument("--show-secret", action="store_true",
                    help="show the secret key while typing it, to compare with the token page")
-    sub.add_parser("locations")
+    sub.add_parser("list")
+    k = sub.add_parser("check")
+    k.add_argument("name", nargs="?")
+    loc = sub.add_parser("locations")
+    loc.add_argument("--subscription")
     t = sub.add_parser("traffic")
     t.add_argument("video", type=Path)
     t.add_argument("--location", help="a location's uuid, from 'locations'")
+    t.add_argument("--subscription", help="needed with --location when several are connected")
     t.add_argument("--minutes", type=int, default=15)
     t.add_argument("--time-zone", help="the store's IANA time zone, e.g. Australia/Brisbane "
                                        "(found by itself for a store)")
-    sub.add_parser("check")
-    sub.add_parser("forget")
+    f = sub.add_parser("forget")
+    f.add_argument("name")
     args = ap.parse_args(argv)
     try:
-        if args.cmd == "check":
-            conn = need()
-            host = conn.base.removeprefix("https://")
-            print(f"Subscription: {conn.subscription} ({host})")
-            try:
-                socket.getaddrinfo(host, 443)
-            except socket.gaierror:
-                print("  that address does not exist: the subscription name is probably wrong")
-            for problem in key_problems(conn) or ["The keys have the expected shape."]:
-                print(f"  {problem}")
-            try:
-                print(f"RetailNext accepted the key: it sees {len(locations(conn, ['store']))} "
-                      f"store(s).")
-            except RetailNextError as e:
-                print(e)
-                return 1
-            return 0
         if args.cmd == "connect":
-            conn = save_connection(input("Subscription (in rag.cloud.retailnext.net it is 'rag'; "
-                                         "the whole address works too): "),
-                                   input("Access key: "), ask_secret(args.show_secret))
-            for problem in key_problems(conn):
-                print(f"Warning: {problem}")
+            if args.name and not args.new_key and (conn := reconnect(args.name)) is not None:
+                print(f"{conn.subscription}'s key is already on this computer: connected.")
+            else:
+                name = args.name or input("Subscription (in rag.cloud.retailnext.net it is "
+                                          "'rag'; the whole address works too): ")
+                conn = save_connection(name, input("Access key: "), ask_secret(args.show_secret))
+                for problem in key_problems(conn):
+                    print(f"Warning: {problem}")
             stores = locations(conn, ["store"])
-            print(f"Connected to {conn.subscription}: the key sees {len(stores)} store(s). "
-                  f"It is kept in this computer's credential store.")
+            print(f"{conn.subscription}: the key sees {len(stores)} store(s). Connected: "
+                  f"{', '.join(subscriptions())}.")
+        elif args.cmd == "list":
+            subs = subscriptions()
+            for s in subs:
+                print(f"  {s}" + ("" if load_connection(s) else
+                                  "   (its key is not on this computer: connect it again)"))
+            print("" if subs else "None connected: run 'retailnext.py connect'.")
+        elif args.cmd == "check":
+            results = [check(conn) for conn in chosen(args.name)]  # every one, even after a failure
+            return 0 if all(results) else 1
         elif args.cmd == "locations":
-            nodes = locations(need())
-            for n in sorted(nodes, key=lambda n: (str(n.get("location_type")), str(n.get("name")))):
-                print(f"{n.get('location_type', '?')!s:<14} {str(n.get('name', ''))[:44]:<44} "
-                      f"{n.get('store_id') or ''!s:<8} {n.get('uuid')}")
-            print(f"\n{len(nodes)} locations. Saved {save_raw('locations', nodes)}")
+            for conn in chosen(args.subscription):
+                nodes = locations(conn)
+                for n in sorted(nodes, key=lambda n: (str(n.get("location_type")), str(n.get("name")))):
+                    print(f"{conn.subscription:<10} {n.get('location_type', '?')!s:<14} "
+                          f"{str(n.get('name', ''))[:44]:<44} {n.get('store_id') or ''!s:<8} "
+                          f"{n.get('uuid')}")
+                print(f"\n{conn.subscription}: {len(nodes)} locations. Saved "
+                      f"{save_raw(f'locations-{conn.subscription}', nodes)}\n")
         elif args.cmd == "traffic":
             from crossing_count import video as vid  # loads the video libraries: only here
 
-            conn = need()
             span = vid.parse_filename_interval(args.video.name)
             if span is None:
                 raise RetailNextError("The video's name has no start and end time.")
             day, start, until = period_of(datetime.fromisoformat(span.start),
                                           datetime.fromisoformat(span.end), args.minutes)
+            conns = chosen(args.subscription)
             tz = args.time_zone
             if args.location:
-                where, label = args.location, args.location
+                if len(conns) > 1:
+                    raise RetailNextError("Several subscriptions are connected: say which with "
+                                          "--subscription.")
+                conn, where, label = conns[0], args.location, args.location
             else:
-                store = store_for(conn, args.video)
-                where, label = str(store["uuid"]), str(store.get("name"))
+                conn, store = store_for(conns, args.video)
+                where, label = str(store["uuid"]), f"{store.get('name')} ({conn.subscription})"
                 tz = tz or store.get("time_zone")
             print(f"{label}: {day} {start}-{until} ({tz or 'no time zone given'}), per "
                   f"{args.minutes} minutes")
             answer = traffic(conn, [where], day, start, until, args.minutes, tz)
-            query = {"location": where, "day": str(day), "from": start, "until": until,
-                     "minutes": args.minutes, "time_zone": tz}
+            query = {"subscription": conn.subscription, "location": where, "day": str(day),
+                     "from": start, "until": until, "minutes": args.minutes, "time_zone": tz}
             print(f"Saved {save_raw('traffic', {'query': query, 'answer': answer})}")
             for row in traffic_table(answer):
                 flag = "" if row["validity"] == "complete" else f"  ({row['validity']})"
                 print(f"  {row['start']} - {row['finish']}   in {row['in']}   out {row['out']}{flag}")
         elif args.cmd == "forget":
-            forget_connection()
-            print("The RetailNext key is no longer on this computer.")
+            name = subscription_name(args.name)
+            forget_connection(name)
+            print(f"{name}'s key is no longer on this computer. Connected: "
+                  f"{', '.join(subscriptions()) or 'none'}.")
     except RetailNextError as e:
         print(e, file=sys.stderr)
         return 1

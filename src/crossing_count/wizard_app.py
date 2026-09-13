@@ -159,7 +159,7 @@ class _Current:
     wizard: Wizard | None = None
     setup: Setup | None = None
     draw: str | None = None
-    rn_nodes: list[dict[str, Any]] | None = None  # RetailNext's locations, fetched once
+    rn_nodes: dict[str, list[dict[str, Any]]] | None = None  # per subscription, fetched once
     rn_job: dict[str, Any] | None = None  # the footage being exported and downloaded
 
 
@@ -185,7 +185,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     def public() -> dict[str, Any]:
         return {**wiz().public(), "draw_url": cur.draw,
-                "retailnext": bool(paths.load_settings().get("retailnext_subscription")),
+                "retailnext": bool(rn.subscriptions()),
                 "logo": str(logo) if logo is not None and logo.is_file() else None,
                 "pictures": [t.as_dict() for t in setup().tiles]}
 
@@ -229,18 +229,29 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     def state() -> dict[str, Any]:
         return public()
 
-    def rn_connection() -> rn.Connection:
-        conn = rn.load_connection()
-        if conn is None:
+    cur.rn_nodes = {}
+
+    def rn_connections() -> dict[str, rn.Connection]:
+        conns = {c.subscription: c for c in rn.connections()}
+        if not conns:
             raise HTTPException(400, "Not connected to RetailNext yet: run 'retailnext.py "
-                                     "connect' once (in the Windows app: CrossingCount "
-                                     "retailnext connect).")
-        return conn
+                                     "connect' once for each subscription (in the Windows app: "
+                                     "CrossingCount retailnext connect).")
+        return conns
 
     def rn_locations(conn: rn.Connection) -> list[dict[str, Any]]:
-        if cur.rn_nodes is None:
-            cur.rn_nodes = rn.locations(conn)
-        return cur.rn_nodes
+        nodes = cur.rn_nodes if cur.rn_nodes is not None else {}
+        if conn.subscription not in nodes:
+            nodes[conn.subscription] = rn.locations(conn)
+        cur.rn_nodes = nodes
+        return nodes[conn.subscription]
+
+    def rn_store(code: str) -> tuple[rn.Connection, list[dict[str, Any]], dict[str, Any]]:
+        """The store with this code, in whichever connected subscription has it."""
+        conns = rn_connections()
+        sets = {sub: rn_locations(c) for sub, c in conns.items()}
+        sub, store = rn.find_store_in(sets, code)
+        return conns[sub], sets[sub], store
 
     def rn_day(text: str) -> date:
         try:
@@ -250,32 +261,36 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     @app.get("/api/retailnext")
     def retailnext_status() -> dict[str, Any]:
-        return {"connected": bool(paths.load_settings().get("retailnext_subscription"))}
+        return {"connected": bool(rn.subscriptions()), "subscriptions": rn.subscriptions()}
 
     @app.get("/api/retailnext/stores")
     def retailnext_stores() -> dict[str, Any]:
-        try:
-            nodes = rn_locations(rn_connection())
-        except rn.RetailNextError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        stores = [{"code": str(n["store_id"]), "name": str(n.get("name") or "")} for n in nodes
-                  if n.get("location_type") == "store" and n.get("store_id")
-                  and not n.get("archive_date")]
-        return {"stores": sorted(stores, key=lambda s: s["code"])}
+        """Every connected subscription's stores, each with its subscription."""
+        stores = []
+        for sub, conn in rn_connections().items():
+            try:
+                nodes = rn_locations(conn)
+            except rn.RetailNextError as exc:
+                raise HTTPException(400, f"{sub}: {exc}") from exc
+            stores += [{"code": str(n["store_id"]), "name": str(n.get("name") or ""),
+                        "subscription": sub} for n in nodes
+                       if n.get("location_type") == "store" and n.get("store_id")
+                       and not n.get("archive_date")]
+        return {"stores": sorted(stores, key=lambda s: (s["code"], s["subscription"]))}
 
     @app.post("/api/retailnext/busiest")
     def retailnext_busiest(b: BusiestIn) -> dict[str, Any]:
         """The busiest windows of the day for the traffic validated, from RetailNext."""
-        conn = rn_connection()
         day = rn_day(b.date)
         try:
-            store = rn.find_store(rn_locations(conn), b.code)
+            conn, _, store = rn_store(b.code)
             rows = rn.day_traffic(conn, str(store["uuid"]), day, store.get("time_zone"))
             windows = rn.busiest(rows, b.minutes, b.direction)
         except rn.RetailNextError as exc:
             raise HTTPException(400, str(exc)) from exc
         return {"store": store.get("name"), "code": store.get("store_id"),
-                "time_zone": store.get("time_zone"), "windows": windows}
+                "subscription": conn.subscription, "time_zone": store.get("time_zone"),
+                "windows": windows}
 
     @app.post("/api/retailnext/download")
     def retailnext_download(b: DownloadIn) -> dict[str, Any]:
@@ -283,17 +298,17 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         (in the background: GET this to follow it)."""
         if cur.rn_job and cur.rn_job.get("state") in ("exporting", "downloading"):
             raise HTTPException(409, "A download is already under way.")
-        conn = rn_connection()
         day = rn_day(b.date)
         try:
-            nodes = rn_locations(conn)
-            store = rn.find_store(nodes, b.code)
+            conn, nodes, store = rn_store(b.code)
             tz = store.get("time_zone")
             if not tz:
                 raise rn.RetailNextError(f"RetailNext gives no time zone for {store.get('name')}.")
             channels = rn.video_channels(nodes, str(store["uuid"]))
             if not channels:
-                raise rn.RetailNextError(f"RetailNext lists no video channels for {store.get('name')}.")
+                raise rn.RetailNextError(
+                    f"RetailNext has no camera video for {store.get('name')}: its counts come from "
+                    f"a sensor without video, so the footage has to come from elsewhere.")
             start, end = rn.local_period(day, b.start, b.until, str(tz))
         except rn.RetailNextError as exc:
             raise HTTPException(400, str(exc)) from exc
@@ -343,16 +358,17 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     def retailnext_fetch() -> dict[str, Any]:
         """RetailNext's own numbers for these cameras and this period, from its API."""
         w = wiz()
-        conn = rn_connection()
         start, end = w.period()
         if start is None or end is None:
             raise HTTPException(400, "The video's name has no clock time, so RetailNext's "
                                      "numbers cannot be looked up.")
         try:
-            got = rn.camera_counts(conn, rn_locations(conn), w.state["store"]["code"],
+            conn, nodes, store = rn_store(w.state["store"]["code"])
+            got = rn.camera_counts(conn, nodes, str(store.get("store_id") or w.state["store"]["code"]),
                                    [c["sensor"] for c in w.state["cameras"]], start, end)
         except rn.RetailNextError as exc:
             raise HTTPException(400, str(exc)) from exc
+        got["subscription"] = conn.subscription
         warnings: list[str] = []
         return {**run(lambda: warnings.extend(w.use_retailnext(got))),
                 "retailnext_warnings": warnings}

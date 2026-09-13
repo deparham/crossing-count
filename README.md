@@ -185,9 +185,17 @@ skipped unless you pass `--allow-config-change`.
 
 ## RetailNext's numbers from its API (`retailnext.py`, optional)
 
-    uv run retailnext.py connect      # subscription name, access key, secret key
-    uv run retailnext.py locations    # the stores (and other locations) the key sees
+    uv run retailnext.py connect      # add a subscription: name, access key, secret key
+    uv run retailnext.py list         # the connected subscriptions
+    uv run retailnext.py check        # test every connected key
+    uv run retailnext.py locations    # the stores (and other locations) the keys see
     uv run retailnext.py traffic VIDEO  # RetailNext's 15-minute traffic for that period
+
+Connect each customer's subscription once; they all stay connected, and the
+app uses whichever one has the store you pick, so you never switch. A store
+code two customers share is typed as `subscription/code` (e.g. `rag/CN-123`).
+`connect rag` re-adds a subscription whose key is already on this computer
+without typing it; `forget rag` removes one.
 
 A RetailNext admin makes the key under Admin Settings > System Access Tokens;
 a key limited to Data, to the stores you validate, and with an expiry date is
