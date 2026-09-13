@@ -58,6 +58,7 @@ def prompt_priority(why: str) -> int:
     return PROMPT_PRIORITY.get(why, 1)
 CLIP_BEFORE_S = 2.5
 CLIP_AFTER_S = 1.5
+MIN_WATCHED_PCT = 99.0  # a hand count that watched less of a camera's footage is incomplete
 FOUND = {  # how each verified crossing came to be counted, for the report
     "detected": "Detected, confirmed",
     "lost": "Track lost at line, confirmed",
@@ -111,6 +112,13 @@ def distinct_people(dets: list[Any], overlap: float = 0.3, near_px: float = 40.0
 def _dur(seconds: float) -> str:
     s = max(0, round(seconds))
     return f"{s // 60} min {s % 60} s" if s >= 60 else f"{s} s"
+
+
+def accuracy_range(sensor: int | None, verified: int, unsure: int) -> list[float] | None:
+    """The system's accuracy whichever way the unsure crossings go: [lowest, highest]."""
+    vals = [a for v in range(verified, verified + unsure + 1)
+            if (a := sensor_accuracy(sensor, v)["accuracy_pct"]) is not None]
+    return [min(vals), max(vals)] if vals else None
 
 
 def default_folders() -> list[Path]:
@@ -744,8 +752,8 @@ class Wizard:
         return out
 
     def answer(self, item_id: str, answer: str | None) -> None:
-        if answer not in ("yes", "no", None):
-            raise WizardError("answer yes or no")
+        if answer not in ("yes", "no", "unsure", None):
+            raise WizardError("answer yes, no or unsure")
         if item_id not in {i["id"] for i in self.check_items()}:
             raise WizardError(f"there is no crossing {item_id} to check")
         with self._lock:
@@ -787,23 +795,36 @@ class Wizard:
             self._save()
 
     def counts(self) -> dict[str, Any]:
+        """The numbers, and whether the check is complete enough to give an accuracy.
+
+        Complete means every crossing the tool counted or listed as a possible miss was
+        answered, and every stretch of movement near the line that it could not explain
+        was watched (a hand count: at least MIN_WATCHED_PCT of each camera's footage).
+        Otherwise someone the tool never detected may be missing from the verified count,
+        so the report gives no accuracy. Crossings answered "unsure" are not counted; the
+        count and the accuracy are given for both ways they could go.
+        """
         dirs = self.dirs()
+        c: dict[str, Any]
         if self.manual():
             m = self.state["manual"]
-            verified = {d: sum(1 for c in m["counts"] if c["direction"] == d) for d in dirs}
-            return {"manual": True, "detected": dict.fromkeys(dirs, 0), "verified": verified,
-                    "confirmed": 0, "rejected": 0, "found": 0, "not_found": 0, "added": 0,
-                    "unanswered": 0, "items": 0, "watch_ranges": 0, "watch_s": 0.0,
-                    "watch_done": 0,
-                    "watched_pct": {c["sensor"]: c["watched_pct"]
-                                    for c in self.manual_summary()["cameras"]},
-                    "accuracy": {d: sensor_accuracy(self.state["sensor"].get(d), verified[d])
-                                 for d in dirs},
-                    "checked": bool(m["done"])}
+            cams = self.manual_summary()["cameras"]
+            verified = {d: sum(1 for x in m["counts"] if x["direction"] == d) for d in dirs}
+            c = {"manual": True, "detected": dict.fromkeys(dirs, 0), "verified": verified,
+                 "unsure": dict.fromkeys(dirs, 0), "confirmed": 0, "rejected": 0, "found": 0,
+                 "not_found": 0, "added": 0, "unanswered": 0, "items": 0, "watch_ranges": 0,
+                 "watch_s": 0.0, "watch_done": 0,
+                 "watched_pct": {cam["sensor"]: cam["watched_pct"] for cam in cams},
+                 "unwatched_s": round(sum(b - a for cam in cams for a, b in cam["unwatched"]), 1),
+                 "checked": bool(m["done"])}
+            problems = [] if m["done"] else ["Counting is not finished."]
+            problems += [f"Only {cam['watched_pct']:.0f}% of {cam['sensor']}'s footage was "
+                         f"watched." for cam in cams if cam["watched_pct"] < MIN_WATCHED_PCT]
+            return self._completeness(c, problems)
         answers = self.state["answers"]
-        c: dict[str, Any] = {"detected": dict.fromkeys(dirs, 0), "verified": dict.fromkeys(dirs, 0),
-                             "confirmed": 0, "rejected": 0, "found": 0, "not_found": 0,
-                             "added": 0, "unanswered": 0}
+        c = {"detected": dict.fromkeys(dirs, 0), "verified": dict.fromkeys(dirs, 0),
+             "unsure": dict.fromkeys(dirs, 0), "confirmed": 0, "rejected": 0, "found": 0,
+             "not_found": 0, "added": 0, "unanswered": 0}
         items = self.check_items()
         for it in items:
             if it["kind"] == "counted":
@@ -811,6 +832,9 @@ class Wizard:
             a = answers.get(it["id"])
             if a is None:
                 c["unanswered"] += 1
+                continue
+            if a == "unsure":
+                c["unsure"][it["direction"]] += 1
                 continue
             if a == "yes":
                 c["verified"][it["direction"]] += 1
@@ -823,15 +847,43 @@ class Wizard:
                 c["verified"][a["direction"]] += 1
                 c["added"] += 1
         ranges = self.watch_ranges()
+        unwatched = [r for r in ranges if r["id"] not in self.state["watched"]]
         c["items"] = len(items)
         c["watch_ranges"] = len(ranges)
         c["watch_s"] = round(sum(r["end"] - r["start"] for r in ranges), 1)
-        c["watch_done"] = sum(1 for r in ranges if r["id"] in self.state["watched"])
-        c["accuracy"] = {d: sensor_accuracy(self.state["sensor"].get(d), c["verified"][d])
-                         for d in dirs}
+        c["watch_done"] = len(ranges) - len(unwatched)
+        c["unwatched_s"] = round(sum(r["end"] - r["start"] for r in unwatched), 1)
         c["checked"] = (self.state["job"]["status"] == "done" and c["unanswered"] == 0
                         and (self.state["watch"] in ("done", "skipped") or not ranges))
+        problems = []
+        if self.state["job"]["status"] != "done":
+            problems.append("The automatic count has not finished.")
+        if c["unanswered"]:
+            problems.append(f"{c['unanswered']} crossing(s) were not checked.")
+        if unwatched:
+            problems.append(f"{len(unwatched)} of {len(ranges)} stretches of movement near the "
+                            f"line that the tool could not explain were not watched "
+                            f"({_dur(c['unwatched_s'])} of footage).")
+        return self._completeness(c, problems)
+
+    def _completeness(self, c: dict[str, Any], problems: list[str]) -> dict[str, Any]:
+        sensor = self.state["sensor"]
+        c["accuracy"] = {d: sensor_accuracy(sensor.get(d), c["verified"][d]) for d in self.dirs()}
+        c["accuracy_range"] = {d: accuracy_range(sensor.get(d), c["verified"][d], c["unsure"][d])
+                               for d in self.dirs()}
+        c["incomplete"] = problems
+        c["status"] = "incomplete" if problems else "complete"
         return c
+
+    def unsure_rows(self) -> list[dict[str, Any]]:
+        """Crossings the checker could not decide: listed in the report, never counted."""
+        if self.manual():
+            return []
+        answers = self.state["answers"]
+        return [{"t": it["t"], "camera": it["camera"], "picture": it["picture"],
+                 "direction": it["direction"], "point": it["point"],
+                 "found": "Unclear to the checker: not counted"}
+                for it in self.check_items() if answers.get(it["id"]) == "unsure"]
 
     def verified_rows(self) -> list[dict[str, Any]]:
         if self.manual():
@@ -1017,7 +1069,8 @@ class Wizard:
         return start, end
 
     def report_data(self, c: dict[str, Any], rows: list[dict[str, Any]], frame: Path,
-                    caption: str, thumbs: list[dict[str, str]]) -> dict[str, Any]:
+                    caption: str, thumbs: list[dict[str, str]],
+                    unsure: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         st, store = self.state, self.state["store"]
         start, end = self._period()
         cams = ", ".join(cam["sensor"] for cam in st["cameras"])
@@ -1051,8 +1104,14 @@ class Wizard:
                 f"Share of the footage watched: {shares}.",
                 method[-1],
             ]
-            if any(c["watched_pct"] < 99 for c in summary):
-                method.insert(3, "Parts of the footage were not watched, so the count may be low.")
+        unsure = unsure or []
+        if unsure:
+            method.insert(3, f"{len(unsure)} crossing(s) were unclear to the checker. They are "
+                             f"listed below but not in the verified count; the count and the "
+                             f"accuracy are given for both ways they could go.")
+        if c["incomplete"]:
+            method.insert(0, "VALIDATION INCOMPLETE. " + " ".join(c["incomplete"]) + " No accuracy "
+                          "is given: people in footage nobody watched may be missing from the count.")
         return {
             "count_label": "MANUAL COUNT" if self.manual() else "VERIFIED COUNT",
             "frames_title": ("VALIDATION FRAMES — BUSIEST MOMENT" if self.manual()
@@ -1063,12 +1122,14 @@ class Wizard:
             "captured_date": start.strftime("%d/%m/%Y") if start else "",
             "time_range": f"{start:%H:%M}-{end:%H:%M}" if start and end else "",
             "directions": [{"key": d, "label": LABELS[d], "verified": c["verified"][d],
-                            "system": st["sensor"][d],
-                            "accuracy": c["accuracy"][d]["accuracy_pct"]} for d in self.dirs()],
+                            "unsure": c["unsure"][d], "system": st["sensor"][d],
+                            "accuracy": c["accuracy"][d]["accuracy_pct"],
+                            "accuracy_range": c["accuracy_range"][d]} for d in self.dirs()],
+            "complete": not c["incomplete"], "incomplete": c["incomplete"],
             "frame": str(frame), "frame_caption": caption,
             "crossings": [{"n": n, "time": self.clock(r["t"]), "camera": r["camera"],
                            "direction": LABELS[r["direction"]], "found": r["found"]}
-                          for n, r in enumerate(rows, 1)],
+                          for n, r in [*enumerate(rows, 1), *(("?", u) for u in unsure)]],
             "thumbs": thumbs, "method": method,
         }
 
@@ -1093,7 +1154,7 @@ class Wizard:
             rows = self.verified_rows()
             frame, caption = self.render_busy_frame()
             thumbs = self.render_thumbnails(rows)
-            data = self.report_data(c, rows, frame, caption, thumbs)
+            data = self.report_data(c, rows, frame, caption, thumbs, self.unsure_rows())
             start, end = self._period()
             when = f"{start:%Y-%m-%d %H%M}-{end:%H%M}" if start and end else "report"
             words = f"{store['code']} {store['name']} camera validation {when}"

@@ -133,6 +133,42 @@ def test_count_check_and_report(two_tile_video: dict[str, Any], review_run_dir: 
     assert again.counts()["verified"]["in"] == 1 and again.state["report"]
 
 
+def test_unwatched_movement_and_unsure_answers(two_tile_video: dict[str, Any],
+                                              review_run_dir: Path, tmp_path: Path,
+                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    w = Wizard(two_tile_video["video"], two_tile_video["dir"], tmp_path,
+               copy_outputs(review_run_dir))
+    s = Setup(w.video, two_tile_video["dir"])
+    w.set_cameras(s.existing(), [t.as_dict() for t in s.tiles])
+    w.set_direction("in")
+    w.set_sensor({"in": 1})
+    w.start()
+    wait(w)
+    stretch = {"id": "u9", "camera": "CAM-A", "picture": 0, "start": 10.0, "end": 25.0}
+    monkeypatch.setattr(w, "watch_ranges", lambda: [stretch])
+    items = w.check_items()
+    counted = [i for i in items if i["kind"] == "counted"]
+    for i in items:
+        w.answer(i["id"], "no")
+    w.answer(counted[0]["id"], "unsure")
+    with pytest.raises(WizardError):
+        w.answer(counted[0]["id"], "maybe")
+    w.set_watch("skipped")
+    c = w.counts()
+    assert c["checked"] and c["status"] == "incomplete" and c["unwatched_s"] == 15.0
+    assert c["incomplete"] == [("1 of 1 stretches of movement near the line that the tool could "
+                                "not explain were not watched (15 s of footage).")]
+    assert c["verified"]["in"] == 0 and c["unsure"]["in"] == 1  # unsure is never counted
+    assert c["accuracy_range"]["in"] == [100.0, 100.0]  # right if the unsure one was real
+    w.set_store(name="Lismore", code="SYN-1")
+    pages = texts(w.make_report())
+    assert "INCOMPLETE" in pages[0] and "Validation incomplete: 1 of 1" in pages[0]
+    assert "0–1" in pages[0]  # the verified count, both ways the unsure crossing could go
+    assert "VALIDATION INCOMPLETE" in pages[1] and "Unclear to the checker" in pages[1]
+    w.mark_watched("u9")
+    assert w.counts()["status"] == "complete" and w.counts()["incomplete"] == []
+
+
 def test_report_layout(tmp_path: Path) -> None:
     img = np.full((480, 640, 3), 90, np.uint8)
     cv2.imwrite(str(tmp_path / "frame.jpg"), img)
@@ -142,7 +178,7 @@ def test_report_layout(tmp_path: Path) -> None:
         p = tmp_path / f"t{n}.jpg"
         cv2.imwrite(str(p), img[:400, :400])
         thumbs.append({"path": str(p), "label": f"{n + 1} · IN"})
-    data = {
+    data: dict[str, Any] = {
         "store_name": "Lismore", "store_code": "RW-128", "location": "Entrance",
         "report_date": "25/08/2026", "captured_date": "22/08/2026", "time_range": "11:15-11:30",
         "directions": [{"key": "in", "label": "Traffic In", "verified": 11, "system": 10,
@@ -163,6 +199,15 @@ def test_report_layout(tmp_path: Path) -> None:
     assert "ACCURACY IN" in pages[0] and "90.9%" in pages[0] and "100%" in pages[0]
     assert "Crossing details (continued)" in pages[2] and "Crossing snapshots" in pages[4]
     assert "Page 6 of 6" in pages[5]
+
+    data["directions"][0].update(unsure=2, accuracy_range=[81.8, 90.9])
+    data.update(complete=False, incomplete=["2 of 5 stretches were not watched (1 min 0 s)."])
+    cover = texts(build_report(data, tmp_path / "r2.pptx", None))[0]
+    assert "INCOMPLETE" in cover and "90.9%" not in cover and "11–13" in cover
+    assert "Validation incomplete: 2 of 5 stretches" in cover
+    data["complete"] = True  # everything watched, two crossings still unclear
+    cover = texts(build_report(data, tmp_path / "r3.pptx", None))[0]
+    assert "81.8–90.9%" in cover and "INCOMPLETE" not in cover
 
 
 def test_wizard_page_api(two_tile_video: dict[str, Any], review_run_dir: Path,

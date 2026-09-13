@@ -20,6 +20,7 @@ from crossing_count.heads import (
     busy_times,
     head_points,
     match_heads,
+    merge_found,
 )
 from crossing_count.heads_app import create_label_app
 from crossing_count.util import default_run_dir
@@ -108,6 +109,11 @@ def test_training_set_holds_out_a_chosen_video(tmp_path: Path) -> None:
 
 def test_matching_found_heads_to_marked_ones() -> None:
     assert match_heads([(100, 100), (300, 300)], [[104, 98, 14], [500, 500, 14]]) == (1, 1, 1)
+
+
+def test_boxes_on_one_head_become_one_point() -> None:
+    pts: list[tuple[float, float]] = [(100, 100), (108, 104), (300, 300)]
+    assert merge_found(pts, [0.3, 0.6, 0.2]) == [(108, 104), (300, 300)]  # surest one kept
 
 
 def test_marking_page_api(two_tile_video: dict[str, Any], tmp_path: Path) -> None:

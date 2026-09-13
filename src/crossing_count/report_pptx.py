@@ -31,6 +31,7 @@ CARD_BG = RGBColor(0xEE, 0xF4, 0xF6)
 GREY = RGBColor(0x4A, 0x55, 0x68)
 ROW_BG = RGBColor(0xF5, 0xF8, 0xF9)
 WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+WARN_TEXT = RGBColor(0xB0, 0x3A, 0x2E)
 SERIF = "Georgia"
 SANS = "Arial"  # installed on every Mac and PC; Calibri is not on Macs without Office
 FOOTER = "iTOi Solutions  –  Confidential"
@@ -105,6 +106,13 @@ def _pct(v: float | None) -> str:
     return f"{v:.0f}%" if float(v).is_integer() else f"{v:.1f}%"
 
 
+def _value_size(value: str, base: float) -> float:
+    """Card numbers at full size, a range a little smaller, a word (INCOMPLETE) smaller still."""
+    if value[:1].isalpha():
+        return round(base * 0.4, 1)
+    return base if len(value) <= 5 else round(base * 5 / len(value), 1)
+
+
 def _header(slide: Any, data: dict[str, Any], logo: Path | None) -> None:
     if logo is not None and logo.is_file():
         _picture(slide, str(logo), 0.52, 0.26, 2.0, 0.74)
@@ -142,20 +150,38 @@ def _cover(slide: Any, data: dict[str, Any]) -> None:
     card_h = 1.49 if one else 1.08
     top = 3.70
     kind = str(data.get("count_label", "VERIFIED COUNT")).split()[0]  # VERIFIED or MANUAL
+    complete = bool(data.get("complete", True))
     for r in rows:
         tag = "" if one else f" {r['key'].upper()}"
-        cards = ((f"{kind}{tag or ' COUNT'}", str(r["verified"])),
+        unsure = int(r.get("unsure") or 0)
+        span = r.get("accuracy_range")
+        if not complete:  # footage nobody watched may hold people missing from the count
+            accuracy = "INCOMPLETE"
+        elif unsure and span:
+            accuracy = (_pct(span[0]) if span[0] == span[1]
+                        else f"{_pct(span[0])[:-1]}–{_pct(span[1])}")
+        else:
+            accuracy = _pct(r["accuracy"])
+        verified = f"{r['verified']}–{r['verified'] + unsure}" if unsure else str(r["verified"])
+        cards = ((f"{kind}{tag or ' COUNT'}", verified),
                  (f"SYSTEM{tag or ' COUNT'}", str(r["system"])),
-                 (f"ACCURACY{tag}", _pct(r["accuracy"])))
+                 (f"ACCURACY{tag}", accuracy))
         for j, (label, value) in enumerate(cards):
             left, hi = 0.53 + j * 2.47, j == 2
             _panel(slide, left, top, 2.24, card_h, TEAL if hi else CARD_BG, shadow=True)
             _write(_box(slide, left, top + (0.27 if one else 0.15), 2.24, 0.3), label, 11,
                    bold=True, color=WHITE if hi else GREY, align=PP_ALIGN.CENTER, spacing=2)
             _write(_box(slide, left, top + (0.58 if one else 0.40), 2.24, 0.8 if one else 0.6),
-                   value, 50 if one else 36, bold=True, font=SERIF,
-                   color=WHITE if hi else NAVY, align=PP_ALIGN.CENTER)
+                   value, _value_size(value, 50 if one else 36), bold=True, font=SERIF,
+                   color=WHITE if hi else NAVY, align=PP_ALIGN.CENTER,
+                   anchor=MSO_ANCHOR.MIDDLE if value[:1].isalpha() else MSO_ANCHOR.TOP)
         top += card_h + 0.22
+    if not complete:
+        note = _box(slide, 0.53, top - 0.08, 7.2, 0.5)
+        note.text_frame.word_wrap = True
+        _write(note, "Validation incomplete: " + " ".join(data.get("incomplete", []))
+               + " No accuracy is given.", 10, bold=True, color=WARN_TEXT)
+        top += 0.5
 
     _write(_box(slide, 0.5, top, 7.27, 0.3),
            str(data.get("frames_title", "VALIDATION FRAMES — AUTOMATED DETECTION OVERLAY")),

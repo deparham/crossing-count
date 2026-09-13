@@ -21,7 +21,7 @@ from typing import Any
 
 from crossing_count import paths
 from crossing_count.detector import pick_device
-from crossing_count.heads import HeadLabels, LabelError, match_heads
+from crossing_count.heads import HeadLabels, LabelError, match_heads, merge_found
 
 MIN_HEADS = 200
 
@@ -84,7 +84,9 @@ def main(argv: list[str] | None = None) -> int:
         xyxy = boxes.xyxy.tolist() if boxes is not None else []
         sure = boxes.conf.tolist() if boxes is not None else []
         for c in confs:
-            found = [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for b, s in zip(xyxy, sure) if s >= c]
+            kept = [(b, s) for b, s in zip(xyxy, sure, strict=True) if s >= c]
+            found = merge_found([((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for b, _ in kept],
+                                [s for _, s in kept])
             score = match_heads(found, marked)
             new[c] = [a + b for a, b in zip(new[c], score, strict=True)]
             if frame.get("prefilled"):

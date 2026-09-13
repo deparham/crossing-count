@@ -149,6 +149,18 @@ def add_video(video: str | Path, per_camera: int = 30, root: Path | None = None,
     return added
 
 
+def merge_found(points: list[tuple[float, float]], confs: list[float],
+                merge_px: float = 1.5 * DEFAULT_R) -> list[tuple[float, float]]:
+    """One point per head: a head detector often puts two or three boxes on one head,
+    too small to overlap enough for its own duplicate removal. Surest first."""
+    out: list[tuple[float, float]] = []
+    for k in sorted(range(len(points)), key=lambda k: -confs[k]):
+        x, y = points[k]
+        if all(np.hypot(x - p[0], y - p[1]) > merge_px for p in out):
+            out.append((x, y))
+    return out
+
+
 def match_heads(found: list[tuple[float, float]], marked: list[list[float]]
                 ) -> tuple[int, int, int]:
     """(found and marked, found but not marked, marked but not found), nearest first."""

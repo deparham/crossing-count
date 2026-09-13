@@ -475,7 +475,7 @@ function nextThing() {
 function play(clip, rate) { V.playbackRate = rate; V.currentTime = clip[0]; V.play().catch(() => {}); }
 function counts() {
   const c = W.st.counts;
-  return `<div class="nums">${W.st.dirs.map((d) => `<div>${LABEL[d]} verified<b>${c.verified[d]}</b><span class="muted">the tool found ${c.detected[d]}</span></div>`).join("")}</div>`;
+  return `<div class="nums">${W.st.dirs.map((d) => `<div>${LABEL[d]} verified<b>${c.verified[d]}</b><span class="muted">the tool found ${c.detected[d]}${c.unsure[d] ? ` · ${c.unsure[d]} unsure` : ""}</span></div>`).join("")}</div>`;
 }
 function showItem(i) {
   const ch = W.ch, it = ch.items[i], dir = it.direction.toUpperCase();
@@ -495,10 +495,11 @@ function showItem(i) {
   const where = it.twin && it.twin.camera === it.camera ? "on this camera" : `on ${esc(it.twin && it.twin.camera)}`;
   const twin = it.twin ? `<div class="warn" style="margin-top:8px">A ${dir} already counted ${where} at ${clock(it.twin.t)} may be this same person. Same person: press <kbd>N</kbd>, so they are counted once. Someone else (for example in a group): press <kbd>Y</kbd>.</div>` : "";
   $("panel").innerHTML = `<div class="muted">${head}</div><div style="font-size:16px;margin-top:6px">${q}</div>${twin}
-    <div class="answer"><button id="yes"><kbd>Y</kbd> Yes</button><button id="no"><kbd>N</kbd> No</button></div>
-    <div class="muted">It loops; press <kbd>R</kbd> to replay from the start.</div>${counts()}`;
+    <div class="answer"><button id="yes"><kbd>Y</kbd> Yes</button><button id="no"><kbd>N</kbd> No</button><button id="unsure"><kbd>U</kbd> Unsure</button></div>
+    <div class="muted">It loops; press <kbd>R</kbd> to replay from the start. Unsure is never counted: the report lists it and gives the count both ways.</div>${counts()}`;
   $("yes").addEventListener("click", () => answer("yes"));
   $("no").addEventListener("click", () => answer("no"));
+  $("unsure").addEventListener("click", () => answer("unsure"));
 }
 async function answer(a) {
   const it = W.cur;
@@ -523,6 +524,7 @@ function showWatchPrompt() {
   $("panel").innerHTML = `<div style="font-size:16px">All crossings checked.</div>
     <p>The tool also saw movement near the line that it could not explain: <b>${c.watch_ranges}</b> stretches, about <b>${mins}</b> at 2× speed.
     People the tool never detected can only be found by watching these. On a busy entrance, watch them.</p>
+    <p class="warn">If you skip them, the report will say the validation is incomplete and give no accuracy figure.</p>
     <div class="answer"><button id="wyes" class="primary">Watch them</button><button id="wno">Skip</button></div>${counts()}`;
   $("wyes").addEventListener("click", async () => { setState(await api("/api/watch", { mode: "doing" })); W.ch.watch_mode = "doing"; nextThing(); });
   $("wno").addEventListener("click", async () => { setState(await api("/api/watch", { mode: "skipped" })); W.ch.watch_mode = "skipped"; nextThing(); });
@@ -739,6 +741,7 @@ window.addEventListener("keydown", (e) => {
   } else {
     if (k === "y") go_(() => answer("yes"));
     else if (k === "n") go_(() => answer("no"));
+    else if (k === "u") go_(() => answer("unsure"));
     else if (k === "z" || k === "backspace") go_(goBack);
     else if (k === "r") go_(() => { if (W.cur) { V.currentTime = W.mode === "item" ? W.cur.clip[0] : W.cur.start; V.play().catch(() => {}); } });
     else if (k === "arrowleft") go_(() => (V.currentTime = Math.max(0, V.currentTime - 1)));
@@ -766,9 +769,13 @@ ENTER.report = async () => {
   $("storeName").value = st.name; $("storeCode").value = st.code; $("storeLoc").value = st.location;
   $("repDate").value = st.report_date || new Date().toLocaleDateString("en-GB"); $("operator").value = st.operator || "";
   $("numbers").innerHTML = `<div class="nums">${s.dirs.map((d) => {
-    const acc = c.accuracy[d];
-    return `<div>${LABEL[d]}<b>${c.verified[d]} ${manual ? "counted" : "verified"}</b>RetailNext ${s.sensor[d]} · accuracy ${acc.accuracy_pct == null ? "–" : acc.accuracy_pct + "%"}</div>`;
-  }).join("")}</div>`;
+    const acc = c.accuracy[d], span = c.accuracy_range[d], u = c.unsure[d];
+    const accText = c.status !== "complete" ? "no accuracy (incomplete)"
+      : u && span ? `accuracy ${span[0] === span[1] ? span[0] : span[0] + "–" + span[1]}%`
+      : `accuracy ${acc.accuracy_pct == null ? "–" : acc.accuracy_pct + "%"}`;
+    return `<div>${LABEL[d]}<b>${c.verified[d]}${u ? "–" + (c.verified[d] + u) : ""} ${manual ? "counted" : "verified"}</b>RetailNext ${s.sensor[d]} · ${accText}</div>`;
+  }).join("")}</div>` + (c.incomplete.length
+    ? `<div class="warn">Validation incomplete: ${c.incomplete.map(esc).join(" ")} The report will give no accuracy figure.</div>` : "");
   $("logoInfo").textContent = s.logo ? `Logo: ${s.logo}` : "No logo file found (assets/logo.png): the report header will show the company name as text.";
   W.settings = await api("/api/settings").catch(() => ({ examples_dir: "" }));
   $("exDir").value = W.settings.examples_dir || "";

@@ -52,6 +52,9 @@ def test_hand_count_and_report(manual: Wizard, tmp_path: Path) -> None:
     removed = manual.manual_undo("CN-9-PB1")
     assert removed is not None and removed["t"] == 40.0
     manual.manual_watched("CN-9-PB1", 0.0, 30.0)
+    part = manual.counts()
+    assert part["status"] == "incomplete" and part["unwatched_s"] == 30.0
+    assert "Only 50% of CN-9-PB1's footage was watched." in part["incomplete"]
     manual.manual_watched("CN-9-PB1", 29.9, 60.0)
     (cam,) = manual.manual_summary()["cameras"]
     assert cam["in"] == 2 and cam["watched_pct"] > 99 and not cam["unwatched"]
@@ -62,6 +65,7 @@ def test_hand_count_and_report(manual: Wizard, tmp_path: Path) -> None:
     manual.manual_done()
     c = manual.counts()
     assert c["verified"] == {"in": 2} and c["accuracy"]["in"]["accuracy_pct"] == 100.0
+    assert c["status"] == "complete"
     pages = texts(manual.make_report())
     assert "MANUAL COUNT" in pages[0] and "BUSIEST MOMENT" in pages[0]
     assert "Counted by hand" in "\n".join(pages)

@@ -76,7 +76,7 @@ def moments(w: Wizard) -> list[dict[str, Any]]:
     answers = st["answers"]
     for it in w.check_items():
         a = answers.get(it["id"])
-        if a is None:
+        if a not in ("yes", "no"):  # unanswered or unsure: nothing certain to learn from
             continue
         what = "detection" if it["kind"] == "counted" else "possible_miss"
         out.append({"label": "crossing" if a == "yes" else "no_crossing",
