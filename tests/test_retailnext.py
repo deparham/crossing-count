@@ -60,6 +60,7 @@ CONN = rn.Connection("acme", "AK", "SK")
 
 def test_subscription_names() -> None:
     assert rn.subscription_name("https://Acme.api.retailnext.net/v2/") == "acme"
+    assert rn.subscription_name("rag.cloud.retailnext.net") == "rag"  # the web address
     assert rn.subscription_name("acme-au") == "acme-au"
     with pytest.raises(rn.RetailNextError):
         rn.subscription_name("not a name!")

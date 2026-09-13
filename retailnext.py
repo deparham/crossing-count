@@ -96,8 +96,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             return 0
         if args.cmd == "connect":
-            conn = save_connection(input("Subscription name (the first part of your RetailNext "
-                                         "web address): "),
+            conn = save_connection(input("Subscription (in rag.cloud.retailnext.net it is 'rag'; "
+                                         "the whole address works too): "),
                                    input("Access key: "),
                                    input("Secret key: ") if args.show_secret
                                    else getpass.getpass("Secret key (hidden; paste with Cmd+V): "))
