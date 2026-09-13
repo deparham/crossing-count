@@ -93,6 +93,30 @@ inside the company.
 Everything is saved as you go, to `runs/<video>/wizard/state.json`. Open the
 same video again to carry on where you left off.
 
+## Training a head detector (`label.py`, `train_heads.py`)
+
+The current detector learned from side-on photos, so from overhead it loses
+people in crowds. To train one on your own cameras:
+
+1. Open **Mark heads** from the count wizard (or run `uv run label.py`) and
+   add frames from your videos. It picks about 30 moments per camera, mostly
+   the busiest.
+2. Put a circle on every head. Where a video was counted with the wizard, the
+   detector's fairly sure people (25% or more) come already circled in yellow,
+   at the far end of each body; drag, delete or add circles as needed. The
+   guesses are rough: on a busy picture about half need moving or deleting,
+   and people away from the counting line get no guess at all.
+3. Aim for about 1000 heads, from several stores, busy and quiet, with and
+   without the sensor's marks. That takes roughly 2 hours.
+4. `uv run train_heads.py` trains on this computer. It then reports how many
+   heads the new detector and the current one each find, miss and invent, on
+   marked frames it never trained on. The new weights go to `models/heads.pt`
+   in the data folder, and nothing counts with them until they prove better
+   on checked clips.
+
+The marked frames are camera pictures of people, so they stay in `labels/` in
+the data folder, which git ignores.
+
 ## Windows app
 
 The app installs on Windows as a normal program, with a Start-menu and a

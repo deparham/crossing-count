@@ -25,6 +25,7 @@
   .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
   details { margin-top: 12px; } details li { margin: 4px 0; }
   #modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; }
+  #modal[hidden] { display: none; }
   #modal .card { width: min(900px, 94vw); max-height: 80vh; overflow: auto; }
   table { width: 100%; border-collapse: collapse; } td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
   tr.pick { cursor: pointer; } tr.pick:hover { background: var(--panel2); }

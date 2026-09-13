@@ -32,6 +32,10 @@ from .util import default_run_dir, slugify, write_json_atomic
 TARGET_HEADS = 1000
 DEFAULT_R = 14.0  # head radius in a 640x480 picture
 HEAD_ALONG = 1.8  # head = feet + 1.8 x (box centre - feet): the far end of a standing body
+# Detection keeps people down to 8% sure so that nobody is missed; as guesses to correct,
+# only fairly sure ones help. On a busy 11:30 picture with about 9 people, 31 detections
+# gave 22 guesses, most on racks and mannequins; at 25% there were 9.
+PREFILL_CONF = 0.25
 MIN_GAP_S = 5.0  # frames from one camera at least this far apart
 BUSY_SHARE = 0.8  # most frames from the busiest moments, the rest spread evenly
 _ID = re.compile(r"^[a-z0-9_-]{1,200}$")
@@ -51,6 +55,8 @@ def head_points(dets: list[Any], tile: dict[str, int], merge_px: float = 1.5 * D
     w, h = tile["x1"] - tile["x0"], tile["y1"] - tile["y0"]
     out: list[list[float]] = []
     for d in sorted(dets, key=lambda d: -float(getattr(d, "conf", 0.0))):
+        if float(getattr(d, "conf", 1.0)) < PREFILL_CONF:
+            break  # sorted: the rest are less sure still
         poly = d.polygon() if hasattr(d, "polygon") else np.array(
             [[d.bbox[0], d.bbox[1]], [d.bbox[2], d.bbox[3]]], dtype=np.float32)
         centre = np.asarray(poly, dtype=np.float64).mean(axis=0)
