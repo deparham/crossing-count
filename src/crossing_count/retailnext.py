@@ -119,9 +119,11 @@ def key_problems(conn: Connection) -> list[str]:
                    f"key's shape (8-4-4-4-12 letters and digits, like the one on the token page).")
     if re.search(r"\s", conn.access_key + conn.secret_key):
         out.append("There is a space or line break inside a key.")
-    if odd := len(re.findall(r"[^A-Za-z0-9_-]", conn.secret_key)):
-        out.append(f"The secret key has {odd} character(s) other than letters, digits, - and _: "
-                   f"a secret key normally has none. Enter it again.")
+    if odd := [i + 1 for i, ch in enumerate(conn.secret_key) if not re.match(r"[A-Za-z0-9_-]", ch)]:
+        where = ", ".join(str(i) for i in odd)
+        out.append(f"The secret key has a character other than letters, digits, - and _ at "
+                   f"position {where} of {len(conn.secret_key)}: a secret key has none. Compare "
+                   f"that character with the token page and enter the key again.")
     if not 16 <= len(conn.secret_key) <= 64:
         out.append(f"The secret key is {len(conn.secret_key)} characters long, which is unusual.")
     return out
