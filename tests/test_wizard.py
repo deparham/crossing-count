@@ -151,7 +151,8 @@ def test_report_layout(tmp_path: Path) -> None:
 
 
 def test_wizard_page_api(two_tile_video: dict[str, Any], review_run_dir: Path,
-                         tmp_path: Path) -> None:
+                         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path / "home"))  # never the real settings
     client = TestClient(create_wizard_app(two_tile_video["dir"], tmp_path,
                                           [two_tile_video["dir"]], None,
                                           copy_outputs(review_run_dir)))
@@ -170,6 +171,8 @@ def test_wizard_page_api(two_tile_video: dict[str, Any], review_run_dir: Path,
         if client.get("/api/job").json()["status"] != "running":
             break
         time.sleep(0.05)
+    job = client.get("/api/job").json()
+    assert job["status"] == "done", job
     assert client.get("/api/preview.jpg", params={"picture": 0, "t": 5}).status_code == 200
     check = client.get("/api/check").json()
     for it in check["items"]:

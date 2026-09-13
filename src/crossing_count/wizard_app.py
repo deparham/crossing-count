@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 from starlette.routing import Mount
 
+from . import overlay as ov
 from . import paths
 from .examples import check_folder
 from .review_app import WEB_DIR, _range_response
@@ -193,14 +194,18 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     def drawn() -> dict[str, Any]:
         s = setup()
         cfgs = s.existing()
+        marks = s.marks()
         return {"pictures": [
-            {"picture": t.index,
+            {"picture": t.index, "marks": bool(marks[t.index]["marks"]),
              "configs": [{"sensor": c["sensor"], "file": c["file"]} for c in cfgs
                          if c["picture"] == t.index and not c["problem"]]}
             for t in s.tiles],
-            # a saved drawing matched by the burned-in line: the footage shows the marks
-            "marks_guess": any(c["picture"] is not None and c["match"] is not None
-                               for c in cfgs)}
+            # RetailNext's blue lines found on the people-free picture, or a saved drawing
+            # whose recorded blue line matches this video
+            "marks_guess": any(bool(m["marks"]) for m in marks) or any(
+                c["picture"] is not None and c["match"] is not None
+                and c["overlay_hue"] is not None
+                and ov.MARK_HUES[0] <= c["overlay_hue"] <= ov.MARK_HUES[1] for c in cfgs)}
 
     @app.post("/api/mode")
     def mode(m: ModeIn) -> dict[str, Any]:

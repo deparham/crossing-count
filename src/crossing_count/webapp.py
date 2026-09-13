@@ -65,6 +65,14 @@ class Setup:
                                           interval_s=self.audit.median_interval_s)
         self.tiles = lay.detect_tiles_in(self.median)
         self._frames: dict[float, NDArray[np.uint8]] = {}
+        self._marks: list[dict[str, Any]] | None = None
+
+    def marks(self) -> list[dict[str, Any]]:
+        """Per picture: does it show the sensor's burned-in lines (not a clean export)?"""
+        if self._marks is None:
+            self._marks = [ov.counting_overlay_evidence(t.crop(self.median)[t.header_px:])
+                           for t in self.tiles]
+        return self._marks
 
     def tile(self, i: int) -> lay.Tile:
         if not 0 <= i < len(self.tiles):
@@ -132,6 +140,7 @@ class Setup:
             except ConfigError as exc:
                 problem = str(exc)
             out.append({"path": str(p), "file": p.name, "sensor": cfg.sensor, "site": cfg.site,
+                        "overlay_hue": cfg.overlay_hsv[0] if cfg.overlay_hsv else None,
                         "rule": cfg.rule, "picture": best if matched else None,
                         "match": scores.get(best) if matched and best is not None else None,
                         "problem": problem})
@@ -196,6 +205,11 @@ class Setup:
         if len(d.line) >= 2:
             line = np.asarray(d.line, dtype=np.float64)
             hsv = ov.overlay_color_from_line(crop, line)
+            # The sensor draws its lines in blue. Any other colour under the drawn line is
+            # the floor of a clean picture, and recording it would make later "matches"
+            # meaningless.
+            if hsv is not None and not ov.MARK_HUES[0] <= hsv[0] <= ov.MARK_HUES[1]:
+                hsv = None
             if hsv is not None:
                 res["line_match"] = round(ov.line_match_score(crop, line, hsv), 3)
         if errors:
@@ -225,9 +239,9 @@ class Setup:
         if d.same_track_returns != "flag":
             raw["same_track_returns"] = d.same_track_returns
         warnings.extend(warns)
-        if hsv is None:
-            warnings.append("No burned-in line colour found under the counting line. Draw it on "
-                            "the light-blue line; otherwise multi-camera videos need --tile.")
+        if hsv is None and self.marks()[tile.index]["marks"]:
+            warnings.append("Your line is not on the burned-in light-blue line. Draw it on the "
+                            "line, or the drawing cannot be matched to this camera later.")
         elif res["line_match"] is not None and res["line_match"] < 0.8:
             warnings.append(f"Only {res['line_match']:.0%} of your line sits on the burned-in "
                             f"line. Add points where it bends.")

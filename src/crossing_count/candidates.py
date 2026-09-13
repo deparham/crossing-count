@@ -303,6 +303,13 @@ def track_camera(
     joins = splits = 0
     ids = itertools.count(1)
     wall0 = time.monotonic()
+    last_report = 0.0
+
+    def report(seconds_done: float) -> None:
+        el = time.monotonic() - wall0
+        print(f"\r    tracking {100 * seconds_done / total:5.1f}% of active time "
+              f"({seconds_done / el if el else 0:4.1f}x realtime)", end="", file=sys.stderr,
+              flush=True)
 
     for rs, re_ in ranges:
         rt = _RangeTracker(detector, fps / stride, ids, tracker_kw or {})
@@ -315,6 +322,10 @@ def track_camera(
             if len(batch) >= batch_frames:
                 rt.feed(batch)
                 batch = []
+                # a range can be most of the clip: report inside it, about once a second
+                if progress and time.monotonic() - last_report >= 1.0:
+                    last_report = time.monotonic()
+                    report(done + min(fr.t, re_) - rs)
         rt.feed(batch)
         det_times.extend(rt.det_times)
         det_counts.extend(rt.det_counts)
@@ -335,9 +346,7 @@ def track_camera(
         joins += n
         done += re_ - rs
         if progress:
-            el = time.monotonic() - wall0
-            print(f"\r    tracking {100 * done / total:5.1f}% of active time "
-                  f"({done / el if el else 0:4.1f}x realtime)", end="", file=sys.stderr, flush=True)
+            report(done)
     if progress:
         print(file=sys.stderr)
     return TrackingResult(tracks, det_times, det_counts, joins, splits, frame_dt)

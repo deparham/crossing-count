@@ -336,8 +336,10 @@ ENTER.draw = async () => {
   if (!manual) return showDraw();
   $("marksPics").innerHTML = W.st.pictures.map((p, i) => `<figure><img src="${pic(i)}" alt="Picture ${i + 1}"><span class="muted">Picture ${i + 1}</span></figure>`).join("");
   $("marksHint").textContent = W.drawn && W.drawn.marks_guess
-    ? "It looks like it does: a camera drawn before matches the line on this video."
-    : "Look at the pictures: RetailNext's counting line is light blue with small triangles.";
+    ? "It looks like it does: RetailNext's blue lines were found on this video. Check the pictures and confirm."
+    : "No RetailNext lines were found, so this looks like clean footage. Check the pictures and confirm.";
+  const guess = W.drawn ? (W.drawn.marks_guess ? "1" : "0") : null;
+  document.querySelectorAll("#marksCard [data-marks]").forEach((b) => b.classList.toggle("primary", b.dataset.marks === guess));
   document.querySelectorAll("#marksCard [data-marks]").forEach((b) => b.classList.toggle("on", W.st.marks !== null && String(+W.st.marks) === b.dataset.marks));
   if (W.st.marks === true) showNames(); else if (W.st.marks === false) showDraw();
   else { $("namesCard").hidden = true; $("drawWrap").hidden = true; }
@@ -484,7 +486,8 @@ function showItem(i) {
   if (it.kind === "counted") { head = `Crossing ${k} of ${counted.length}`; q = `The tool counted someone going <span class="pill ${it.direction}">${dir}</span> at ${clock(it.t)} on ${esc(it.camera)}.<br>Is that a real person going ${dir}?`; }
   else if (it.why === "lost") { head = `Possible miss ${k} of ${possible.length}`; q = `The tool lost a person right at the line at ${clock(it.t)} on ${esc(it.camera)}.<br>Did someone go <span class="pill ${it.direction}">${dir}</span> here?`; }
   else { head = `Possible miss ${k} of ${possible.length}`; q = `The counting rule rejected this <span class="pill ${it.direction}">${dir}</span> at ${clock(it.t)} on ${esc(it.camera)} (they did not reach the mask zone the way the rule expects).<br>Did someone really go ${dir}?`; }
-  const twin = it.twin ? `<div class="warn" style="margin-top:8px">At the same moment ${esc(it.twin.camera)} already has a crossing (${clock(it.twin.t)}). If it is the same person, press <kbd>N</kbd> so they are counted once.</div>` : "";
+  const where = it.twin && it.twin.camera === it.camera ? "on this camera" : `on ${esc(it.twin && it.twin.camera)}`;
+  const twin = it.twin ? `<div class="warn" style="margin-top:8px">A ${dir} already counted ${where} at ${clock(it.twin.t)} may be this same person. Same person: press <kbd>N</kbd>, so they are counted once. Someone else (for example in a group): press <kbd>Y</kbd>.</div>` : "";
   $("panel").innerHTML = `<div class="muted">${head}</div><div style="font-size:16px;margin-top:6px">${q}</div>${twin}
     <div class="answer"><button id="yes"><kbd>Y</kbd> Yes</button><button id="no"><kbd>N</kbd> No</button></div>
     <div class="muted">It loops; press <kbd>R</kbd> to replay from the start.</div>${counts()}`;

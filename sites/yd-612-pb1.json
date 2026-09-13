@@ -1,0 +1,58 @@
+{
+  "site": "YD-612",
+  "sensor": "YD-612-PB1",
+  "line": [
+    [
+      0.3333,
+      0.6104
+    ],
+    [
+      0.3533,
+      0.5712
+    ],
+    [
+      0.6162,
+      0.5633
+    ],
+    [
+      0.6503,
+      0.6042
+    ]
+  ],
+  "inside_side": "below",
+  "mask_zone": [
+    [
+      0.3286,
+      0.7419
+    ],
+    [
+      0.3286,
+      0.6996
+    ],
+    [
+      0.6842,
+      0.6854
+    ],
+    [
+      0.6831,
+      0.7277
+    ]
+  ],
+  "min_dwell_in_zone_s": 0.0,
+  "pending_timeout_s": 20.0,
+  "stitch_gap_max_s": 1.5,
+  "filter_zones": [],
+  "exclusion_zones": [],
+  "fps_assumed": 10.0,
+  "traced_on": {
+    "video": "Export - YD-612-PB1 - 2026-09-12-114500 AEST to 2026-09-12-120000 AEST.mp4",
+    "tile_index": 0,
+    "tile_size": [
+      640,
+      480
+    ],
+    "date": "2026-09-13",
+    "method": "setup page"
+  },
+  "notes": "drawn on 'Export - YD-612-PB1 - 2026-09-12-114500 AEST to 2026-09-12-120000 AEST.mp4' picture #0"
+}

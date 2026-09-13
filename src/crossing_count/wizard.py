@@ -230,12 +230,14 @@ class _Job:
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}
         status: str = "done"
         error: str | None = None
+        cwd = paths.data_root()
+        cwd.mkdir(parents=True, exist_ok=True)
         for cmd in self.commands:
             if self.stopped:
                 break
             name = Path(cmd[1]).name if len(cmd) > 1 else cmd[0]
             try:
-                proc = subprocess.Popen(cmd, cwd=paths.data_root(), env=env,
+                proc = subprocess.Popen(cmd, cwd=cwd, env=env,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             except OSError as exc:

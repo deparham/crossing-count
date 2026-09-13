@@ -27,6 +27,41 @@ Image = NDArray[np.uint8]
 MIN_SAT = 35
 MIN_VAL = 50
 
+# RetailNext draws its counting line and zones as thin lines, light blue to dark blue.
+MARK_HUES = (80, 130)  # any colour a drawing's recorded line may have
+MARK_BANDS = (  # (hue low, hue high, min saturation, min value)
+    (80, 112, 60, 90),  # the light-blue counting line and zones
+    (100, 130, 80, 40),  # the dark-blue lines
+)
+MARK_MIN_SEGMENTS = 6
+# Per 640-pixel-wide picture, light and dark lines together: exports with marks had
+# 1100-2600 px of such lines (Carindale's mostly dark blue); clean ones at most 305 px.
+MARK_MIN_LENGTH_PX = 600.0
+
+
+def counting_overlay_evidence(img: Image) -> dict[str, float | int | bool]:
+    """Does a camera picture show the sensor's burned-in lines?
+
+    Looks, in a people-free picture, for thin straight lines in RetailNext's blues.
+    Thick blue things (signs, clothes, displays) are removed first, so only
+    line-like marks count.
+    """
+    scale = img.shape[1] / 640.0
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    n, total = 0, 0.0
+    for lo, hi, smin, vmin in MARK_BANDS:
+        m = ((h >= lo) & (h <= hi) & (s >= smin) & (v >= vmin)).astype(np.uint8) * 255
+        thin = cv2.subtract(m, cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8)))
+        segs = cv2.HoughLinesP(thin, 1, np.pi / 180, threshold=30,
+                               minLineLength=max(20.0, 40 * scale), maxLineGap=6)
+        arr = (np.asarray(segs, dtype=np.float64).reshape(-1, 4) if segs is not None
+               else np.zeros((0, 4)))
+        lengths = np.hypot(arr[:, 2] - arr[:, 0], arr[:, 3] - arr[:, 1])
+        n, total = n + int(len(lengths)), total + float(lengths.sum())
+    return {"segments": n, "length_px": round(total, 1),
+            "marks": n >= MARK_MIN_SEGMENTS and total >= MARK_MIN_LENGTH_PX * scale}
+
 
 def sample_polyline(line: FloatArray, step: float = 2.0) -> FloatArray:
     pts: list[FloatArray] = []
