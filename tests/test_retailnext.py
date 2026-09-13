@@ -135,6 +135,39 @@ def test_the_answer_as_rows_with_validity() -> None:
         rn.traffic_table({"ok": True, "metrics": [{"name": "traffic_in", "ok": False}]})
 
 
+NODES: list[dict[str, Any]] = [
+    {"uuid": "s1", "location_type": "store", "store_id": "CN-123", "name": "Tweed Heads CN-123",
+     "time_zone": "Australia/Sydney"},
+    {"uuid": "e1", "location_type": "entrance", "parent_uuid": "s1", "name": "CN-123-PB1"},
+    {"uuid": "e2", "location_type": "entrance", "parent_uuid": "s1", "name": "CN-123-R2"},
+    {"uuid": "t1", "type": "traffic", "parent_uuid": "e1", "name": "CN-123-PB1 Traffic 1"},
+]
+
+
+def test_each_camera_is_asked_at_its_own_entrance(server: list[Any]) -> None:
+    seen = server.pop(0)
+
+    def answer(i: int, o: int) -> dict[str, Any]:
+        group = {"type": "time", "start": "11:30", "finish": "11:45"}
+        return {"ok": True, "metrics": [
+            {"name": "traffic_in", "ok": True, "data": [{"value": i, "validity": "complete", "group": group}]},
+            {"name": "traffic_out", "ok": True, "data": [{"value": o, "validity": "complete", "group": group}]}]}
+
+    at = datetime.fromisoformat  # footage clock times are the store's own, without a zone
+    server.extend([answer(15, 13), answer(5, 10)])
+    got = rn.camera_counts(CONN, NODES, "cn-123", ["CN-123-PB1", "cn-123-r2"],
+                           at("2026-09-12T11:30:00"), at("2026-09-12T11:45:00"))
+    assert got["store"] == "Tweed Heads CN-123" and got["time_zone"] == "Australia/Sydney"
+    assert got["cameras"]["CN-123-PB1"][0]["in"] == 15 and got["cameras"]["cn-123-r2"][0]["out"] == 10
+    assert [json.loads(r.data)["locations"] for r in seen] == [["e1"], ["e2"]]
+    assert json.loads(seen[0].data)["time_zone"] == "Australia/Sydney"
+    with pytest.raises(rn.RetailNextError, match="no entrance called CN-123-L9"):
+        rn.camera_counts(CONN, NODES, "CN-123", ["CN-123-L9"], at("2026-09-12T11:30:00"),
+                         at("2026-09-12T11:45:00"))
+    with pytest.raises(rn.RetailNextError, match="no store"):
+        rn.find_store(NODES, "YD-999")
+
+
 def test_the_footage_period_in_whole_intervals() -> None:
     at = datetime.fromisoformat
     assert rn.period_of(at("2026-09-12T11:30:00"), at("2026-09-12T11:45:00")) == (

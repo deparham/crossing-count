@@ -56,7 +56,11 @@ Videos are listed), with or without the sensor's marks, then choose how to count
    for each interval, as in its table; each camera's own number is optional.
    The report then gets a page comparing them interval by interval (with a
    chart) and camera by camera, noting partly covered intervals, the largest
-   difference, and cameras that overlap.
+   difference, and cameras that overlap. Once connected to RetailNext
+   (`retailnext.py connect`), **Fetch from RetailNext** fills all of this in
+   from each camera's entrance in RetailNext, and warns about intervals
+   RetailNext marked incomplete or imputed; the report says the numbers came
+   from its API (or that they were typed in, if you changed them).
 4. **Count.** `gate.py` and `detect.py` run in the background. The page shows
    what they are doing: a live picture, the progress and the time left.
 5. **Check.** Each crossing the tool found plays as a short loop. Count

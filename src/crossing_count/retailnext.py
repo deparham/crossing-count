@@ -263,6 +263,45 @@ def traffic_table(answer: Any) -> list[dict[str, Any]]:
     return sorted(rows.values(), key=lambda r: str(r["start"]))
 
 
+def find_store(nodes: list[dict[str, Any]], code: str) -> dict[str, Any]:
+    """The store with this code: RetailNext's store id (e.g. CN-123), else its name."""
+    c = code.strip().lower()
+    stores = [n for n in nodes if n.get("location_type") == "store"]
+    hits = [n for n in stores if c and str(n.get("store_id") or "").lower() == c]
+    hits = hits or [n for n in stores if c and c in str(n.get("name", "")).lower()]
+    if len(hits) != 1:
+        found = ", ".join(str(n.get("name")) for n in hits[:5])
+        raise RetailNextError(f"RetailNext has {len(hits) or 'no'} store(s) with the code "
+                              f"{code!r}{f': {found}' if found else ''}.")
+    return hits[0]
+
+
+def entrances(nodes: list[dict[str, Any]], store_uuid: str) -> dict[str, dict[str, Any]]:
+    """A store's entrances by name: one per sensor, named like it (CN-123-PB1)."""
+    return {str(n.get("name")): n for n in nodes
+            if n.get("location_type") == "entrance" and n.get("parent_uuid") == store_uuid}
+
+
+def camera_counts(conn: Connection, nodes: list[dict[str, Any]], code: str, cameras: list[str],
+                  start: datetime, end: datetime, minutes: int = 15) -> dict[str, Any]:
+    """RetailNext's own rows (retailnext.traffic_table) for each camera over the footage's
+    period, from the store's entrance of the same name, in the store's time zone."""
+    store = find_store(nodes, code)
+    ents = entrances(nodes, str(store["uuid"]))
+    lower = {name.lower(): node for name, node in ents.items()}
+    missing = [c for c in cameras if c.lower() not in lower]
+    if missing:
+        raise RetailNextError(f"RetailNext's {store.get('name')} has no entrance called "
+                              f"{', '.join(missing)} (it has {', '.join(sorted(ents)) or 'none'}): "
+                              f"name the cameras as RetailNext does.")
+    day, frm, until = period_of(start, end, minutes)
+    tz = store.get("time_zone")
+    return {"store": store.get("name"), "store_uuid": store["uuid"], "time_zone": tz,
+            "day": day.isoformat(), "from": frm, "until": until,
+            "cameras": {c: traffic_table(traffic(conn, [str(lower[c.lower()]["uuid"])], day, frm,
+                                                 until, minutes, tz)) for c in cameras}}
+
+
 def period_of(start: datetime, end: datetime, minutes: int = 15) -> tuple[date, str, str]:
     """The day and whole intervals ("HH:MM" from and until) that cover [start, end]."""
     if end.date() != start.date() and end.time() != datetime.min.time():

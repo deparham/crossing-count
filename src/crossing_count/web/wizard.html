@@ -144,6 +144,7 @@
   <div class="card">
     <div class="big">What did RetailNext count?</div>
     <div class="muted" id="sensorHint"></div>
+    <div style="margin:10px 0"><button id="rnFetch" hidden>Fetch from RetailNext</button> <span id="rnStatus" class="muted"></span></div>
     <div id="sensorInputs" class="grid2"></div>
     <button id="sensorNext" class="primary">Next →</button>
   </div>
@@ -414,9 +415,21 @@ ENTER.retail = () => {
       s.dirs.map((d) => `<td>${num(`data-cam="${esc(x.sensor)}" data-dir="${d}"`, (sc[x.sensor] || {})[d], "")}</td>`).join("") + "</tr>").join("") + "</table></details>";
   }
   $("sensorInputs").innerHTML = html;
+  const src = s.sensor_source;
+  $("rnFetch").hidden = !s.retailnext;
+  $("rnStatus").innerHTML = !s.retailnext ? "To fill these in from RetailNext itself, connect once with <kbd>retailnext.py connect</kbd>."
+    : src ? `Fetched from RetailNext: ${esc(src.store)}, ${src.cameras.map(esc).join(" + ")}.` +
+      (src.warnings.length ? ` <span class="warn">${src.warnings.map(esc).join(" ")}</span>` : " Every interval fully counted. Check them, then Next.")
+    : "Fills in RetailNext's numbers for these cameras and this period.";
   const first = $("sensorInputs").querySelector("input"); if (first) first.focus();
   $("sensorInputs").querySelectorAll("input").forEach((el) => el.addEventListener("keydown", (e) => { if (e.key === "Enter") $("sensorNext").click(); }));
 };
+$("rnFetch").addEventListener("click", async () => {
+  $("rnFetch").disabled = true; $("rnStatus").textContent = "Asking RetailNext…";
+  try { setState(await api("/api/retailnext/fetch", {})); ENTER.retail(); }
+  catch (e) { $("rnStatus").textContent = ""; msg(e.message, "err"); }
+  finally { $("rnFetch").disabled = false; }
+});
 $("sensorNext").addEventListener("click", async () => {
   const box = $("sensorInputs"), body = {}, n = (el) => Math.max(0, Math.round(+el.value));
   const need = (el, what) => { msg(`Enter RetailNext's ${what}.`, "warn"); el.focus(); };

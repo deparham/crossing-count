@@ -22,6 +22,7 @@ from starlette.routing import Mount
 
 from . import overlay as ov
 from . import paths
+from . import retailnext as rn
 from .examples import check_folder
 from .review_app import WEB_DIR, _range_response
 from .webapp import Setup, create_app
@@ -136,6 +137,7 @@ class _Current:
     wizard: Wizard | None = None
     setup: Setup | None = None
     draw: str | None = None
+    rn_nodes: list[dict[str, Any]] | None = None  # RetailNext's locations, fetched once
 
 
 def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = None,
@@ -160,6 +162,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     def public() -> dict[str, Any]:
         return {**wiz().public(), "draw_url": cur.draw,
+                "retailnext": bool(paths.load_settings().get("retailnext_subscription")),
                 "logo": str(logo) if logo is not None and logo.is_file() else None,
                 "pictures": [t.as_dict() for t in setup().tiles]}
 
@@ -202,6 +205,30 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     @app.get("/api/state")
     def state() -> dict[str, Any]:
         return public()
+
+    @app.post("/api/retailnext/fetch")
+    def retailnext_fetch() -> dict[str, Any]:
+        """RetailNext's own numbers for these cameras and this period, from its API."""
+        w = wiz()
+        conn = rn.load_connection()
+        if conn is None:
+            raise HTTPException(400, "Not connected to RetailNext yet: run 'retailnext.py "
+                                     "connect' once (in the Windows app: CrossingCount "
+                                     "retailnext connect).")
+        start, end = w.period()
+        if start is None or end is None:
+            raise HTTPException(400, "The video's name has no clock time, so RetailNext's "
+                                     "numbers cannot be looked up.")
+        try:
+            if cur.rn_nodes is None:
+                cur.rn_nodes = rn.locations(conn)
+            got = rn.camera_counts(conn, cur.rn_nodes, w.state["store"]["code"],
+                                   [c["sensor"] for c in w.state["cameras"]], start, end)
+        except rn.RetailNextError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        warnings: list[str] = []
+        return {**run(lambda: warnings.extend(w.use_retailnext(got))),
+                "retailnext_warnings": warnings}
 
     @app.get("/api/drawn")
     def drawn() -> dict[str, Any]:

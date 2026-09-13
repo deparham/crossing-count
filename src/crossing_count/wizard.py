@@ -422,6 +422,7 @@ class Wizard:
             self._save()
         for key, value in (("mode", None), ("marks", None), ("examples", None), ("people", {}),
                            ("decisions", []), ("sensor_intervals", {}), ("sensor_cameras", {}),
+                           ("sensor_source", None),
                            ("manual", {"counts": [], "watched": {}, "positions": {},
                                        "done": False, "next_id": 1})):
             self.state.setdefault(key, value)
@@ -540,7 +541,65 @@ class Wizard:
             self.state["sensor"].update(totals)
             if cameras is not None:
                 self.state["sensor_cameras"] = cams
+            src = self.state.get("sensor_source")
+            if src and src.get("numbers") != self._sensor_numbers():
+                self.state["sensor_source"] = None  # changed by hand: no longer RetailNext's own
             self._save()
+
+    def _sensor_numbers(self) -> dict[str, Any]:
+        return {"sensor": dict(self.state["sensor"]),
+                "intervals": dict(self.state["sensor_intervals"]),
+                "cameras": dict(self.state["sensor_cameras"])}
+
+    def use_retailnext(self, got: dict[str, Any]) -> list[str]:
+        """RetailNext's numbers from its API (retailnext.camera_counts): the cameras' sum
+        per 15-minute interval, and each camera's own. Returns warnings for intervals
+        RetailNext marked incomplete or imputed, which are not full counts."""
+        keys = [i["key"] for i in self.intervals()]
+        if keys == ["all"]:
+            raise WizardError("The video's name has no clock time, so RetailNext's numbers "
+                              "cannot be looked up.")
+        dirs = self.dirs()
+        per_iv = {k: dict.fromkeys(dirs, 0) for k in keys}
+        per_cam: dict[str, dict[str, int]] = {}
+        warnings: list[str] = []
+        for cam, rows in got["cameras"].items():
+            by_start = {str(r["start"]): r for r in rows}
+            per_cam[cam] = dict.fromkeys(dirs, 0)
+            for k in keys:
+                r = by_start.get(k)
+                if r is None:
+                    raise WizardError(f"RetailNext gave no number for {cam} at {k}.")
+                if r["validity"] != "complete":
+                    warnings.append(f"RetailNext marked {cam} {r['start']}–{r['finish']} as "
+                                    f"{r['validity']}: its number there is not a full count.")
+                for d in dirs:
+                    per_iv[k][d] += int(r.get(d) or 0)
+                    per_cam[cam][d] += int(r.get(d) or 0)
+        if len(keys) > 1:
+            self.set_sensor(intervals={k: dict(v) for k, v in per_iv.items()},
+                            cameras={c: dict(v) for c, v in per_cam.items()})
+        else:
+            self.set_sensor(values=dict(per_iv[keys[0]]),
+                            cameras={c: dict(v) for c, v in per_cam.items()})
+        with self._lock:
+            self.state["sensor_source"] = {
+                "source": "RetailNext API", "store": got.get("store"), "cameras": list(got["cameras"]),
+                "fetched_at": _now(), "warnings": warnings, "numbers": self._sensor_numbers()}
+            self._save()
+        return warnings
+
+    def period(self) -> tuple[datetime | None, datetime | None]:
+        """The footage's clock period, from its name."""
+        return self._period()
+
+    def _system_line(self) -> str:
+        src = self.state.get("sensor_source")
+        how = (f"fetched from RetailNext's API ({src['store']}: {' + '.join(src['cameras'])}) "
+               f"on {str(src['fetched_at'])[:10]}" if src else "typed in from RetailNext")
+        text = (f"System count: RetailNext, same cameras and period, {how}. Accuracy = 100% "
+                f"minus the system's error as a share of the verified count.")
+        return text + "".join(f" {w}" for w in (src or {}).get("warnings", []))
 
     def intervals(self) -> list[dict[str, Any]]:
         """RetailNext's 15-minute intervals this footage overlaps, and how much of each."""
@@ -1362,8 +1421,7 @@ class Wizard:
              f"{c['rejected']} rejected. Of {c['found'] + c['not_found']} possible misses it "
              f"listed, {c['found']} were real."),
             watched,
-            ("System count: RetailNext, same cameras and period. Accuracy = 100% minus the "
-             "system's error as a share of the verified count."),
+            self._system_line(),
         ]
         method.insert(2, self._made_with())
         if self.manual():

@@ -278,6 +278,37 @@ def test_retailnext_per_interval_and_per_camera(two_tile_video: dict[str, Any],
     assert w.state["sensor_intervals"] == {} and w.state["sensor"]["in"] == 5
 
 
+def test_retailnexts_numbers_from_its_api(two_tile_video: dict[str, Any], review_run_dir: Path,
+                                         tmp_path: Path) -> None:
+    w = Wizard(two_tile_video["video"], two_tile_video["dir"], tmp_path,
+               copy_outputs(review_run_dir))
+    s = Setup(w.video, two_tile_video["dir"])
+    w.set_cameras(s.existing(), [t.as_dict() for t in s.tiles])
+    w.set_direction("both")
+
+    def rows(i1: int, o1: int, i2: int, o2: int, second: str = "complete") -> list[dict[str, Any]]:
+        return [{"start": "11:45", "finish": "12:00", "in": i1, "out": o1, "validity": "complete"},
+                {"start": "12:00", "finish": "12:15", "in": i2, "out": o2, "validity": second}]
+
+    got = {"store": "Test store", "cameras": {"CAM-A": rows(1, 2, 3, 4, "imputed"),
+                                              "CAM-B": rows(10, 20, 30, 40)}}
+    with pytest.raises(WizardError, match="no clock time"):
+        w.use_retailnext(got)
+    w.state["clock_start"] = "2026-09-12T11:59:40+10:00"
+    warnings = w.use_retailnext(got)
+    assert len(warnings) == 1 and "CAM-A 12:00–12:15 as imputed" in warnings[0]
+    assert w.state["sensor_intervals"] == {"11:45": {"in": 11, "out": 22},
+                                           "12:00": {"in": 33, "out": 44}}
+    assert w.state["sensor"] == {"in": 44, "out": 66}
+    assert w.state["sensor_cameras"]["CAM-B"] == {"in": 40, "out": 60}
+    assert "fetched from RetailNext's API (Test store: CAM-A + CAM-B)" in w._system_line()
+    w.set_sensor(intervals={"11:45": {"in": 11, "out": 22}, "12:00": {"in": 33, "out": 44}},
+                 cameras=w.state["sensor_cameras"])
+    assert w.state["sensor_source"] is not None  # the same numbers sent back: still RetailNext's
+    w.set_sensor(intervals={"11:45": {"in": 12, "out": 22}, "12:00": {"in": 33, "out": 44}})
+    assert w.state["sensor_source"] is None and "typed in" in w._system_line()
+
+
 def test_report_layout(tmp_path: Path) -> None:
     img = np.full((480, 640, 3), 90, np.uint8)
     cv2.imwrite(str(tmp_path / "frame.jpg"), img)
