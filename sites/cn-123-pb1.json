@@ -1,0 +1,86 @@
+{
+  "site": "CN-123",
+  "sensor": "CN-123-PB1",
+  "line": [
+    [
+      0.2117,
+      0.4331
+    ],
+    [
+      0.4742,
+      0.4331
+    ],
+    [
+      0.7014,
+      0.4331
+    ]
+  ],
+  "inside_side": "below",
+  "mask_zone": [
+    [
+      0.182,
+      0.5829
+    ],
+    [
+      0.4033,
+      0.6015
+    ],
+    [
+      0.8358,
+      0.5735
+    ],
+    [
+      0.8319,
+      0.6065
+    ],
+    [
+      0.4611,
+      0.6292
+    ],
+    [
+      0.1805,
+      0.6065
+    ]
+  ],
+  "min_dwell_in_zone_s": 0.0,
+  "pending_timeout_s": 20.0,
+  "stitch_gap_max_s": 1.5,
+  "filter_zones": [
+    [
+      [
+        0.1092,
+        0.5098
+      ],
+      [
+        0.9961,
+        0.4994
+      ],
+      [
+        0.963,
+        0.7921
+      ],
+      [
+        0.1308,
+        0.8844
+      ]
+    ]
+  ],
+  "exclusion_zones": [],
+  "fps_assumed": 10.0,
+  "overlay_hsv": [
+    92,
+    107,
+    164
+  ],
+  "traced_on": {
+    "video": "Export - Multiple Channels - 2026-09-12-113000 AEST to 2026-09-12-114500 AEST.mp4",
+    "tile_index": 0,
+    "tile_size": [
+      640,
+      480
+    ],
+    "date": "2026-09-12",
+    "method": "setup page"
+  },
+  "notes": "drawn on 'Export - Multiple Channels - 2026-09-12-113000 AEST to 2026-09-12-114500 AEST.mp4' picture #0"
+}

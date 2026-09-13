@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera setup · crossing-count</title>
+<style>
+  :root {
+    --bg: #101317; --panel: #181d23; --panel2: #20262e; --border: #2b333d;
+    --text: #e7eaee; --muted: #97a1ad; --accent: #4da3ff; --ok: #3ecf8e; --warn: #f5b942; --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; padding: 10px 16px;
+           border-bottom: 1px solid var(--border); background: var(--panel); }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .muted { color: var(--muted); }
+  #tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  #tabs button { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+                 border-radius: 6px; padding: 5px 10px; cursor: pointer; font: inherit; }
+  #tabs button.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; height: calc(100% - 50px); }
+  #stage { position: relative; overflow: auto; padding: 12px 16px; }
+  #controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 8px; }
+  #time { width: 280px; }
+  #wrap { position: relative; display: inline-block; }
+  #canvas { display: block; background: #000; cursor: crosshair; border-radius: 4px; }
+  #mag { position: absolute; top: 8px; right: 8px; width: 180px; height: 180px; border: 1px solid #fff;
+         border-radius: 4px; background: #000; pointer-events: none; display: none; }
+  #hint { margin: 8px 0 0; min-height: 1.4em; }
+  aside { background: var(--panel); border-left: 1px solid var(--border); padding: 12px 14px; overflow: auto; }
+  aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+             margin: 16px 0 6px; font-weight: 600; }
+  .field { display: grid; gap: 3px; margin-bottom: 8px; }
+  .field label { color: var(--muted); font-size: 12px; }
+  input[type=text], input[type=number], select {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 5px;
+    padding: 6px 8px; font: inherit; width: 100%; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .tool { display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 8px;
+          padding: 6px 8px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; margin-bottom: 2px; }
+  .tool:hover { background: var(--panel2); }
+  .tool.active { border-color: var(--accent); background: var(--panel2); }
+  .tool .sw { width: 14px; height: 14px; border-radius: 3px; }
+  .tool .count { color: var(--muted); font-size: 12px; }
+  .tool button { background: none; border: 0; color: var(--muted); cursor: pointer; font: inherit; padding: 0 2px; }
+  .tool button:hover { color: var(--err); }
+  kbd { background: var(--panel2); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; font-size: 12px; }
+  #status { background: var(--panel2); border-radius: 6px; padding: 8px 10px; min-height: 60px; }
+  #status ul { margin: 4px 0; padding-left: 18px; }
+  .err { color: var(--err); } .warn { color: var(--warn); } .ok { color: var(--ok); }
+  #save { margin-top: 10px; width: 100%; padding: 9px; border-radius: 6px; border: 0; font: inherit; font-weight: 600;
+          background: var(--accent); color: #fff; cursor: pointer; }
+  #save:disabled { background: #34404d; color: var(--muted); cursor: not-allowed; }
+  #saved { margin-top: 6px; font-size: 13px; word-break: break-all; }
+  details { margin-top: 14px; color: var(--muted); font-size: 13px; }
+  details li { margin: 2px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Camera setup</h1>
+  <span id="video" class="muted">loading…</span>
+  <div id="tabs" role="tablist" aria-label="Camera pictures"></div>
+</header>
+<main>
+  <section id="stage">
+    <div id="controls">
+      <label><input type="checkbox" id="peopleFree" checked> People-free picture</label>
+      <label>Frame at <input type="range" id="time" min="0" max="1" step="0.1" value="0" disabled></label>
+      <span id="timeLabel" class="muted"></span>
+      <label>Zoom
+        <select id="zoom"><option value="fit" selected>Fit</option><option>1</option><option>1.5</option><option>2</option><option>2.5</option></select>
+      </label>
+    </div>
+    <div id="wrap">
+      <canvas id="canvas" width="960" height="720" aria-label="Camera picture with drawn zones"></canvas>
+      <canvas id="mag" width="180" height="180"></canvas>
+    </div>
+    <p id="hint" class="muted"></p>
+  </section>
+  <aside>
+    <div class="field"><label for="existing">Load a saved camera</label>
+      <select id="existing"><option value="">—</option></select></div>
+    <div class="row2">
+      <div class="field"><label for="site">Site</label><input type="text" id="site" placeholder="e.g. CN-123"></div>
+      <div class="field"><label for="sensor">Camera / sensor</label><input type="text" id="sensor" placeholder="e.g. CN-123-R2"></div>
+    </div>
+
+    <h2>Draw</h2>
+    <div id="tools"></div>
+
+    <h2>Rule</h2>
+    <div class="row2">
+      <div class="field"><label for="dwell">Min time in mask (s)</label>
+        <input type="number" id="dwell" min="0" step="0.1" value="0"></div>
+      <div class="field"><label for="timeout">Pending timeout (s)</label>
+        <input type="number" id="timeout" min="1" step="1" value="20"></div>
+      <div class="field"><label for="stitch">Stitch gap (s)</label>
+        <input type="number" id="stitch" min="0.1" step="0.1" value="1.5"></div>
+      <div class="field"><label for="returns">Out-and-back on one track</label>
+        <select id="returns"><option value="flag">don't count, flag</option><option value="count">count both</option></select></div>
+    </div>
+
+    <h2>Check</h2>
+    <div id="status" aria-live="polite"><span class="muted">Draw the counting line to begin.</span></div>
+    <button id="save" disabled>Save camera</button>
+    <div id="saved"></div>
+
+    <details>
+      <summary>Keys</summary>
+      <ul>
+        <li><kbd>Enter</kbd> or double-click: finish the shape</li>
+        <li><kbd>Backspace</kbd>: remove the last point while drawing</li>
+        <li><kbd>Esc</kbd>: cancel the shape being drawn</li>
+        <li><kbd>⌘Z</kbd> / <kbd>Ctrl Z</kbd>: undo</li>
+        <li><kbd>1</kbd>–<kbd>7</kbd>: pick a tool</li>
+        <li>Move tool: drag a point; <kbd>Alt</kbd>-click a point to delete it</li>
+      </ul>
+    </details>
+  </aside>
+</main>
+
+<script>
+"use strict";
+const TOOLS = [
+  { key: "line", label: "Counting line", color: "#ff2bff", kind: "polyline",
+    help: "Click along the light-blue line with triangles, one point per bend, left to right. Enter to finish." },
+  { key: "inside", label: "Inside (store) side", color: "#ff2bff", kind: "point",
+    help: "Click once on the store side of the line (the side the triangles point to)." },
+  { key: "mask_zone", label: "Mask zone", color: "#1fdc3c", kind: "polygon", multi: false,
+    help: "Click the corners of the grey mask band. Enter to finish." },
+  { key: "filter_zones", label: "Filter zone", color: "#ff8c1a", kind: "polygon", multi: true,
+    help: "Click the corners of the light-blue filter outline. Enter finishes one zone." },
+  { key: "exclusion_zones", label: "Exclusion zone", color: "#ff4040", kind: "polygon", multi: true,
+    help: "Optional: crossings touching these are flagged for the reviewer, never dropped." },
+  { key: "gate_ignore_zones", label: "Gate-ignore zone", color: "#b8b8b8", kind: "polygon", multi: true,
+    help: "Optional, rare: motion here is never a person (e.g. an advertising screen)." },
+  { key: "move", label: "Move points", color: "#4da3ff", kind: "move",
+    help: "Drag any point to adjust it. Alt-click a point to delete it." },
+];
+const $ = (id) => document.getElementById(id);
+const canvas = $("canvas"), ctx = canvas.getContext("2d");
+const mag = $("mag"), mctx = mag.getContext("2d");
+
+const S = {
+  info: null, picture: 0, drafts: {}, tool: "line", current: null, cursor: null,
+  drag: null, hover: null, img: new Image(), scale: 1.5, validation: null, validateTimer: null,
+};
+const empty = () => ({ line: [], inside: null, mask_zone: null, filter_zones: [], exclusion_zones: [],
+                       gate_ignore_zones: [], site: "", sensor: "", dwell: 0, timeout: 20, stitch: 1.5,
+                       returns: "flag", gate: null, undo: [], loaded: false });
+const D = () => S.drafts[S.picture];
+const tile = () => (S.info ? S.info.pictures[S.picture] : null);
+
+function snapshot() {
+  const d = D();
+  d.undo.push(JSON.stringify({ line: d.line, inside: d.inside, mask_zone: d.mask_zone,
+    filter_zones: d.filter_zones, exclusion_zones: d.exclusion_zones, gate_ignore_zones: d.gate_ignore_zones }));
+  if (d.undo.length > 100) d.undo.shift();
+}
+function undo() {
+  const d = D();
+  if (S.current) { S.current = null; draw(); return; }
+  const prev = d.undo.pop();
+  if (!prev) return;
+  Object.assign(d, JSON.parse(prev));
+  changed();
+}
+
+// ---------- drawing ----------
+function P(p) { return [p[0] * S.scale, p[1] * S.scale]; }
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+function path(pts, closed) {
+  ctx.beginPath();
+  pts.forEach((p, i) => { const [x, y] = P(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  if (closed) ctx.closePath();
+}
+function vertices(pts, color, key) {
+  pts.forEach((p, i) => {
+    const [x, y] = P(p);
+    const hot = S.hover && S.hover.key === key && S.hover.pts === pts && S.hover.i === i;
+    ctx.beginPath(); ctx.arc(x, y, hot ? 6 : 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = hot ? "#fff" : color; ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = "#000"; ctx.stroke();
+  });
+}
+function label(text, p, color) {
+  const [x, y] = P(p);
+  ctx.font = "600 12px system-ui, sans-serif";
+  const w = ctx.measureText(text).width;
+  ctx.fillStyle = "rgba(0,0,0,.65)"; ctx.fillRect(x + 6, y - 16, w + 8, 16);
+  ctx.fillStyle = color; ctx.fillText(text, x + 10, y - 4);
+}
+function drawPolygon(pts, color, name, key) {
+  path(pts, true);
+  ctx.fillStyle = hexA(color, 0.14); ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = color; ctx.stroke();
+  vertices(pts, color, key);
+  label(name, pts[0], color);
+}
+function draw() {
+  const t = tile(); if (!t) return;
+  const w = t.x1 - t.x0, h = t.y1 - t.y0;
+  canvas.width = Math.round(w * S.scale); canvas.height = Math.round(h * S.scale);
+  if (S.img.complete && S.img.naturalWidth) ctx.drawImage(S.img, 0, 0, canvas.width, canvas.height);
+  const d = D(); const T = Object.fromEntries(TOOLS.map((x) => [x.key, x]));
+  d.gate_ignore_zones.forEach((z, i) => drawPolygon(z, T.gate_ignore_zones.color, `ignore ${i + 1}`, "gate_ignore_zones"));
+  d.exclusion_zones.forEach((z, i) => drawPolygon(z, T.exclusion_zones.color, `exclusion ${i + 1}`, "exclusion_zones"));
+  d.filter_zones.forEach((z, i) => drawPolygon(z, T.filter_zones.color, `filter ${i + 1}`, "filter_zones"));
+  if (d.mask_zone) drawPolygon(d.mask_zone, T.mask_zone.color, "mask", "mask_zone");
+  if (d.line.length) {
+    path(d.line, false); ctx.lineWidth = 2.5; ctx.strokeStyle = T.line.color; ctx.stroke();
+    vertices(d.line, T.line.color, "line");
+    label("counting line", d.line[0], T.line.color);
+  }
+  if (d.inside) {
+    const [x, y] = P(d.inside);
+    ctx.lineWidth = 3; ctx.strokeStyle = T.inside.color;
+    ctx.beginPath(); ctx.moveTo(x - 8, y); ctx.lineTo(x + 8, y); ctx.moveTo(x, y - 8); ctx.lineTo(x, y + 8); ctx.stroke();
+    label("inside", d.inside, T.inside.color);
+  }
+  if (S.current && S.current.length) {
+    const tool = TOOLS.find((x) => x.key === S.tool);
+    const pts = S.cursor ? [...S.current, S.cursor] : S.current;
+    path(pts, false);
+    ctx.setLineDash([6, 4]); ctx.lineWidth = 2; ctx.strokeStyle = tool.color; ctx.stroke(); ctx.setLineDash([]);
+    if (tool.kind === "polygon" && S.cursor && S.current.length >= 2) {
+      path([S.cursor, S.current[0]], false); ctx.globalAlpha = 0.4; ctx.stroke(); ctx.globalAlpha = 1;
+    }
+    vertices(S.current, tool.color, "current");
+  }
+  drawMag();
+}
+function drawMag() {
+  if (!S.cursor) { mag.style.display = "none"; return; }
+  mag.style.display = "block";
+  const [cx, cy] = P(S.cursor), r = 22;
+  mctx.imageSmoothingEnabled = false;
+  mctx.fillStyle = "#000"; mctx.fillRect(0, 0, 180, 180);
+  mctx.drawImage(canvas, cx - r, cy - r, r * 2, r * 2, 0, 0, 180, 180);
+  mctx.strokeStyle = "#0ff"; mctx.lineWidth = 1;
+  mctx.beginPath(); mctx.moveTo(90, 0); mctx.lineTo(90, 180); mctx.moveTo(0, 90); mctx.lineTo(180, 90); mctx.stroke();
+  // Keep the magnifier away from the cursor.
+  mag.style.left = cx > canvas.width / 2 ? "8px" : ""; mag.style.right = cx > canvas.width / 2 ? "" : "8px";
+}
+
+// ---------- tools & editing ----------
+function allHandles() {
+  const d = D(), out = [];
+  const add = (key, pts) => pts && pts.forEach((p, i) => out.push({ key, pts, i }));
+  add("line", d.line); add("mask_zone", d.mask_zone);
+  d.filter_zones.forEach((z) => add("filter_zones", z));
+  d.exclusion_zones.forEach((z) => add("exclusion_zones", z));
+  d.gate_ignore_zones.forEach((z) => add("gate_ignore_zones", z));
+  if (d.inside) out.push({ key: "inside", pts: null, i: 0 });
+  return out;
+}
+function handleAt(p) {
+  const d = D(); let best = null, bestD = 9 / S.scale;
+  for (const h of allHandles()) {
+    const q = h.key === "inside" ? d.inside : h.pts[h.i];
+    const dist = Math.hypot(q[0] - p[0], q[1] - p[1]);
+    if (dist < bestD) { best = h; bestD = dist; }
+  }
+  return best;
+}
+function finishCurrent() {
+  const tool = TOOLS.find((x) => x.key === S.tool), d = D(), pts = S.current;
+  if (!pts) return;
+  const need = tool.kind === "polyline" ? 2 : 3;
+  if (pts.length < need) { hint(`${tool.label} needs at least ${need} points.`, true); return; }
+  snapshot();
+  if (tool.key === "line") d.line = pts;
+  else if (tool.key === "mask_zone") d.mask_zone = pts;
+  else d[tool.key].push(pts);
+  S.current = null; changed();
+}
+function setTool(key) {
+  if (S.current) finishCurrent();
+  S.current = null; S.tool = key; renderTools();
+  const tool = TOOLS.find((x) => x.key === key);
+  hint(tool.help);
+  canvas.style.cursor = key === "move" ? "grab" : "crosshair";
+  draw();
+}
+function clearTool(key) {
+  snapshot(); const d = D();
+  if (key === "line") d.line = [];
+  else if (key === "inside") d.inside = null;
+  else if (key === "mask_zone") d.mask_zone = null;
+  else d[key] = [];
+  changed();
+}
+function countOf(key) {
+  const d = D();
+  if (key === "line") return d.line.length ? `${d.line.length} pts` : "";
+  if (key === "inside") return d.inside ? "set" : "";
+  if (key === "mask_zone") return d.mask_zone ? "1 zone" : "none";
+  if (key === "move") return "";
+  return d[key].length ? `${d[key].length} zone${d[key].length > 1 ? "s" : ""}` : "none";
+}
+function renderTools() {
+  $("tools").innerHTML = "";
+  TOOLS.forEach((t, i) => {
+    const el = document.createElement("div");
+    el.className = "tool" + (S.tool === t.key ? " active" : "");
+    el.setAttribute("role", "button"); el.tabIndex = 0;
+    el.innerHTML = `<span class="sw" style="background:${t.color}"></span>
+      <span>${i + 1}. ${t.label} <span class="count">${countOf(t.key)}</span></span>
+      ${t.kind === "move" ? "" : `<button title="Clear ${t.label}" aria-label="Clear ${t.label}">clear</button>`}`;
+    el.addEventListener("click", (e) => {
+      if (e.target.tagName === "BUTTON") { e.stopPropagation(); clearTool(t.key); } else setTool(t.key);
+    });
+    $("tools").appendChild(el);
+  });
+}
+function hint(text, warn) { $("hint").textContent = text; $("hint").className = warn ? "warn" : "muted"; }
+
+function toPic(e) {
+  const r = canvas.getBoundingClientRect();
+  return [+((e.clientX - r.left) / S.scale).toFixed(1), +((e.clientY - r.top) / S.scale).toFixed(1)];
+}
+canvas.addEventListener("mousemove", (e) => {
+  S.cursor = toPic(e);
+  if (S.drag) {
+    const d = D();
+    if (S.drag.key === "inside") d.inside = S.cursor; else S.drag.pts[S.drag.i] = S.cursor;
+  } else if (S.tool === "move") S.hover = handleAt(S.cursor);
+  draw();
+});
+canvas.addEventListener("mouseleave", () => { S.cursor = null; S.hover = null; draw(); });
+canvas.addEventListener("mousedown", (e) => {
+  if (e.button !== 0) return;
+  const p = toPic(e), d = D(), tool = TOOLS.find((x) => x.key === S.tool);
+  if (tool.kind === "move") {
+    const h = handleAt(p);
+    if (!h) return;
+    snapshot();
+    if (e.altKey) {
+      if (h.key === "inside") d.inside = null;
+      else {
+        const min = h.key === "line" ? 2 : 3;
+        if (h.pts.length > min) h.pts.splice(h.i, 1); else hint(`A shape needs at least ${min} points; clear it instead.`, true);
+      }
+      changed(); return;
+    }
+    S.drag = h; canvas.style.cursor = "grabbing"; return;
+  }
+  if (tool.kind === "point") { snapshot(); d.inside = p; changed(); return; }
+  S.current = S.current || [];
+  S.current.push(p); draw();
+});
+window.addEventListener("mouseup", () => {
+  if (S.drag) { S.drag = null; canvas.style.cursor = "grab"; changed(); }
+});
+canvas.addEventListener("dblclick", (e) => { e.preventDefault(); finishCurrent(); });
+window.addEventListener("keydown", (e) => {
+  if (["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); return; }
+  if (e.key === "Enter") { e.preventDefault(); finishCurrent(); }
+  else if (e.key === "Escape") { S.current = null; draw(); }
+  else if (e.key === "Backspace" && S.current) { e.preventDefault(); S.current.pop(); if (!S.current.length) S.current = null; draw(); }
+  else if (/^[1-7]$/.test(e.key)) setTool(TOOLS[+e.key - 1].key);
+});
+
+// ---------- server ----------
+function draftBody(extra) {
+  const d = D();
+  return Object.assign({
+    picture: S.picture, site: $("site").value, sensor: $("sensor").value,
+    line: d.line, inside: d.inside, mask_zone: d.mask_zone, filter_zones: d.filter_zones,
+    exclusion_zones: d.exclusion_zones, gate_ignore_zones: d.gate_ignore_zones,
+    min_dwell_in_zone_s: +$("dwell").value || 0, pending_timeout_s: +$("timeout").value || 20,
+    stitch_gap_max_s: +$("stitch").value || 1.5, same_track_returns: $("returns").value, gate: d.gate,
+  }, extra || {});
+}
+function readForm() {
+  const d = D();
+  d.site = $("site").value; d.sensor = $("sensor").value; d.dwell = $("dwell").value;
+  d.timeout = $("timeout").value; d.stitch = $("stitch").value; d.returns = $("returns").value;
+}
+function writeForm() {
+  const d = D();
+  $("site").value = d.site; $("sensor").value = d.sensor; $("dwell").value = d.dwell;
+  $("timeout").value = d.timeout; $("stitch").value = d.stitch; $("returns").value = d.returns;
+}
+function changed() {
+  renderTools(); draw();
+  clearTimeout(S.validateTimer);
+  S.validateTimer = setTimeout(validate, 200);
+}
+async function validate() {
+  readForm();
+  const r = await fetch("api/validate", { method: "POST", headers: { "Content-Type": "application/json" },
+                                           body: JSON.stringify(draftBody()) });
+  const v = await r.json(); S.validation = v; renderStatus(v);
+}
+function esc(s) { return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+function renderStatus(v) {
+  let html = "";
+  if (v.line_match !== null && v.line_match !== undefined) {
+    const cls = v.line_match >= 0.8 ? "ok" : "warn";
+    html += `<div class="${cls}">Your line sits on the burned-in line: <b>${Math.round(v.line_match * 100)}%</b></div>`;
+  }
+  if (v.ok) {
+    html += `<div class="ok">Ready to save. Rule: <b>${esc(v.rule)}</b>, inside is <b>${esc(v.inside_side)}</b> the line.</div>`;
+  }
+  if (v.errors && v.errors.length) html += `<ul class="err">${v.errors.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
+  if (v.warnings && v.warnings.length) html += `<ul class="warn">${v.warnings.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
+  $("status").innerHTML = html || '<span class="muted">Draw the counting line to begin.</span>';
+  $("save").disabled = !v.ok;
+}
+async function save(overwrite) {
+  readForm();
+  const r = await fetch("api/save", { method: "POST", headers: { "Content-Type": "application/json" },
+                                       body: JSON.stringify(draftBody({ overwrite: !!overwrite })) });
+  const v = await r.json();
+  if (!r.ok) { $("saved").innerHTML = `<span class="err">${esc(v.detail || "Could not save")}</span>`; return; }
+  if (v.exists) {
+    if (confirm(`${v.path} already exists. Replace it?`)) return save(true);
+    return;
+  }
+  $("saved").innerHTML = `<span class="ok">Saved ${esc(v.path)}</span>`;
+  await refreshExisting();
+}
+$("save").addEventListener("click", () => save(false));
+["site", "sensor", "dwell", "timeout", "stitch", "returns"].forEach((id) => $(id).addEventListener("input", changed));
+
+function loadImage() {
+  const t = $("peopleFree").checked ? "" : `?t=${$("time").value}`;
+  S.img = new Image(); S.img.onload = draw; S.img.src = `api/picture/${S.picture}.jpg${t}`;
+}
+let timeTimer = null;
+$("time").addEventListener("input", () => {
+  $("timeLabel").textContent = fmt(+$("time").value);
+  clearTimeout(timeTimer); timeTimer = setTimeout(loadImage, 150);
+});
+$("peopleFree").addEventListener("change", () => { $("time").disabled = $("peopleFree").checked; loadImage(); });
+function fitScale() {
+  const t = tile(); if (!t) return;
+  if ($("zoom").value !== "fit") { S.scale = +$("zoom").value; return; }
+  const avail = $("stage").clientWidth - 40;
+  S.scale = Math.max(0.5, Math.min(2.5, avail / (t.x1 - t.x0)));
+}
+$("zoom").addEventListener("change", () => { fitScale(); draw(); });
+window.addEventListener("resize", () => { fitScale(); draw(); });
+function fmt(s) { const m = Math.floor(s / 60); return `${m}:${(s - m * 60).toFixed(1).padStart(4, "0")}`; }
+
+async function loadConfigInto(path) {
+  const r = await fetch(`api/config?path=${encodeURIComponent(path)}&picture=${S.picture}`);
+  if (!r.ok) { hint((await r.json()).detail || "Could not load that camera", true); return; }
+  const c = await r.json(), d = D();
+  snapshot();
+  Object.assign(d, { line: c.line, inside: c.inside, mask_zone: c.mask_zone, filter_zones: c.filter_zones,
+    exclusion_zones: c.exclusion_zones, gate_ignore_zones: c.gate_ignore_zones, site: c.site, sensor: c.sensor,
+    dwell: c.min_dwell_in_zone_s, timeout: c.pending_timeout_s, stitch: c.stitch_gap_max_s,
+    returns: c.same_track_returns, gate: c.gate, loaded: true });
+  writeForm(); changed();
+}
+$("existing").addEventListener("change", () => { if ($("existing").value) loadConfigInto($("existing").value); });
+
+async function refreshExisting() {
+  const info = await (await fetch("api/info")).json();
+  S.info.configs = info.configs; renderExisting(); renderTabs();
+}
+function renderExisting() {
+  const sel = $("existing"); sel.innerHTML = '<option value="">—</option>';
+  for (const c of S.info.configs) {
+    const here = c.picture !== S.picture ? "" : c.match === null ? " · drawn on this picture"
+      : ` · fits this picture ${Math.round(c.match * 100)}%`;
+    const fix = c.problem ? " · needs fixing" : "";
+    sel.insertAdjacentHTML("beforeend", `<option value="${esc(c.path)}">${esc(c.sensor)} (${esc(c.file)})${here}${fix}</option>`);
+  }
+}
+function renderTabs() {
+  $("tabs").innerHTML = "";
+  S.info.pictures.forEach((p, i) => {
+    const b = document.createElement("button");
+    const cfg = S.info.configs.find((c) => c.picture === i);
+    b.textContent = `Picture ${i + 1}` + (cfg ? ` · ${cfg.sensor}` : "");
+    b.className = i === S.picture ? "active" : ""; b.setAttribute("role", "tab");
+    b.addEventListener("click", () => selectPicture(i));
+    $("tabs").appendChild(b);
+  });
+}
+async function selectPicture(i) {
+  if (S.current) finishCurrent();
+  readFormSafe(); S.picture = i; S.current = null;
+  S.drafts[i] = S.drafts[i] || empty();
+  writeForm(); renderTabs(); renderExisting(); renderTools(); fitScale(); loadImage();
+  const match = S.info.configs.find((c) => c.picture === i);
+  if (match && !D().loaded && !D().line.length) await loadConfigInto(match.path);
+  else changed();
+}
+function readFormSafe() { if (S.drafts[S.picture]) readForm(); }
+
+(async function init() {
+  const r = await fetch("api/info");
+  if (!r.ok) {
+    $("video").innerHTML = `<span class="err">The server could not read the video or the saved cameras (HTTP ${r.status}). See the Terminal for details.</span>`;
+    return;
+  }
+  S.info = await r.json();
+  $("video").textContent = `${S.info.video} · ${fmt(S.info.duration_s)} · ${S.info.pictures.length} camera picture(s)`;
+  $("time").max = Math.max(0, S.info.duration_s - 0.3); $("timeLabel").textContent = fmt(0);
+  S.info.pictures.forEach((_, i) => (S.drafts[i] = empty()));
+  setTool("line");
+  await selectPicture(0);
+})();
+</script>
+</body>
+</html>

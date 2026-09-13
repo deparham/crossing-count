@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manual count · crossing-count</title>
+<style>
+  :root {
+    --bg: #101317; --panel: #181d23; --panel2: #20262e; --border: #2b333d;
+    --text: #e7eaee; --muted: #97a1ad; --accent: #4da3ff; --ok: #3ecf8e; --warn: #f5b942; --err: #ff6b6b;
+    --in: #3ecf8e; --out: #ff7a59;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; padding: 10px 16px;
+           border-bottom: 1px solid var(--border); background: var(--panel); }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .muted { color: var(--muted); }
+  input[type=text], input[type=number], textarea { background: var(--panel2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 5px; padding: 4px 8px; font: inherit; }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 5px;
+           padding: 4px 10px; cursor: pointer; font: inherit; }
+  button:hover { border-color: var(--accent); }
+  #cams { display: flex; gap: 8px; flex-wrap: wrap; padding: 10px 16px 0; }
+  #cams button.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; }
+  #stage { padding: 12px 16px; min-width: 0; }
+  #canvas { display: block; background: #000; border-radius: 4px; max-width: 100%; }
+  #timeline { display: block; width: 100%; height: 26px; margin-top: 8px; cursor: pointer; border-radius: 3px; }
+  #controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-top: 8px; }
+  #video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  aside { background: var(--panel); border-left: 1px solid var(--border); padding: 12px 14px; }
+  aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+             margin: 18px 0 6px; font-weight: 600; }
+  .big { display: flex; gap: 12px; }
+  .big div { flex: 1; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; color: var(--muted); }
+  .big b { display: block; font-size: 38px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .big .in b { color: var(--in); } .big .out b { color: var(--out); }
+  kbd { background: #11151a; border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; font-size: 12px; }
+  #list { max-height: 230px; overflow: auto; }
+  #list div { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+  a[data-t], a[data-del], a[data-seek] { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .pill { display: inline-block; padding: 0 7px; border-radius: 10px; font-size: 12px; font-weight: 600; border: 1px solid; min-width: 38px; text-align: center; }
+  .pill.in { color: var(--in); } .pill.out { color: var(--out); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { padding: 3px 4px; border-bottom: 1px solid var(--border); text-align: right; vertical-align: top; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  td input { width: 56px; text-align: right; padding: 2px 4px; }
+  #msg { margin-top: 10px; min-height: 1.4em; }
+  .warn { color: var(--warn); } .ok { color: var(--ok); } .err { color: var(--err); }
+  textarea { width: 100%; min-height: 84px; resize: vertical; }
+  @media (max-width: 900px) {
+    main { grid-template-columns: minmax(0, 1fr); }
+    aside { border-left: 0; border-top: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Manual count</h1>
+  <span id="video-name" class="muted">loading…</span>
+  <label class="muted">Operator <input type="text" id="operator" placeholder="your name" style="width:150px"></label>
+  <button id="export">Save report and CSV</button>
+  <a href="/report" target="_blank" rel="noopener" style="color:var(--accent)">Open report</a>
+</header>
+<div id="cams"></div>
+<main>
+  <section id="stage">
+    <canvas id="canvas" width="960" height="720" aria-label="Camera being counted"></canvas>
+    <canvas id="timeline" height="26" aria-label="Watched stretches and counts; click to jump"></canvas>
+    <div id="controls">
+      <button id="play" title="Space">Play</button>
+      <span id="clock"></span>
+      <span id="rate" class="muted"></span>
+    </div>
+    <div class="muted" style="margin-top:6px">
+      <kbd>I</kbd> someone went in · <kbd>O</kbd> someone went out · <kbd>Z</kbd> undo last count ·
+      <kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> 2 s · <kbd>⇧</kbd>+<kbd>←</kbd>/<kbd>→</kbd> 0.1 s ·
+      <kbd>↑</kbd>/<kbd>↓</kbd> speed · <kbd>1</kbd>–<kbd>4</kbd> camera
+    </div>
+    <div id="msg"></div>
+    <video id="video" src="/video" preload="auto" muted playsinline></video>
+  </section>
+  <aside>
+    <div class="big"><div class="in"><b id="nin">0</b>in</div><div class="out"><b id="nout">0</b>out</div></div>
+    <div id="watched" class="muted" style="margin-top:8px"></div>
+    <h2>Camera name</h2>
+    <input type="text" id="camname" style="width:100%">
+    <h2>Counts on this camera <span class="muted" style="text-transform:none;letter-spacing:0">(click a time to replay it)</span></h2>
+    <div id="list"></div>
+    <h2>Compare with the sensor</h2>
+    <div id="intervals"></div>
+    <h2>Counting rules you follow</h2>
+    <textarea id="notes"></textarea>
+  </aside>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const V = $("video"), C = $("canvas"), ctx = C.getContext("2d"), TL = $("timeline"), tctx = TL.getContext("2d");
+const RATES = [0.5, 1, 1.5, 2, 3, 4];
+const S = { st: null, sum: null, cam: 0, seg: null, flash: null, rateIx: 1 };
+
+function fmtClock(t) {
+  const st = S.st;
+  if (st.clock_start) return new Date(Date.parse(st.clock_start) + t * 1000).toTimeString().slice(0, 8);
+  const m = Math.floor(t / 60); return `${m}:${(t - 60 * m).toFixed(1).padStart(4, "0")}`;
+}
+function fmtHms(t) { t = Math.max(0, Math.floor(t)); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60;
+  return (h ? `${h}:${String(m).padStart(2, "0")}` : `${m}`) + `:${String(s).padStart(2, "0")}`; }
+function fmtDur(s) { s = Math.max(0, Math.round(s)); const m = Math.floor(s / 60); return m ? `${m} min ${s % 60} s` : `${s} s`; }
+function esc(x) { return String(x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function msg(text, cls) { $("msg").innerHTML = text ? `<span class="${cls || "muted"}">${esc(text)}</span>` : ""; }
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+  return j;
+}
+function apply(r) {  // answers can arrive out of order: keep the newest state
+  if (S.st && r.version < S.st.version) return;
+  S.st = r; S.sum = r.summary; render();
+}
+
+// ---------- panel ----------
+function render() {
+  const st = S.st, sum = S.sum, cam = sum.cameras[S.cam];
+  $("cams").innerHTML = "";
+  st.cameras.forEach((c, i) => {
+    const s = sum.cameras[i], b = document.createElement("button");
+    if (i === S.cam) b.className = "on";
+    b.innerHTML = `<kbd>${i + 1}</kbd> ${esc(c.name)} · ${s.in} in / ${s.out} out · watched ${s.watched_pct}%`;
+    b.addEventListener("click", () => switchCam(i));
+    $("cams").appendChild(b);
+  });
+  $("nin").textContent = cam.in; $("nout").textContent = cam.out;
+  const gaps = cam.unwatched.slice(0, 5).map(([a, b]) => `<a data-seek="${a}">${fmtClock(a)}–${fmtClock(b)}</a>`).join(", ");
+  $("watched").innerHTML = `Watched ${cam.watched_pct}% of this camera` +
+    (cam.unwatched.length ? `. Not watched yet: ${gaps}${cam.unwatched.length > 5 ? " …" : ""}` : ": all of it.");
+  if (document.activeElement !== $("camname")) $("camname").value = st.cameras[S.cam].name;
+  if (document.activeElement !== $("operator")) $("operator").value = st.operator || "";
+  if (document.activeElement !== $("notes")) $("notes").value = st.notes || "";
+  const mine = st.counts.filter((c) => c.camera === S.cam).sort((a, b) => b.t - a.t || b.id - a.id);
+  $("list").innerHTML = mine.length ? mine.map((c) =>
+    `<div><span class="pill ${c.direction}">${c.direction.toUpperCase()}</span><a data-t="${c.t}">${fmtClock(c.t)}</a>` +
+    `<span style="flex:1"></span><a data-del="${c.id}" title="Delete this count">remove</a></div>`).join("")
+    : '<span class="muted">none yet</span>';
+  renderIntervals();
+}
+
+function renderIntervals() {
+  if ($("intervals").contains(document.activeElement)) return;  // don't disturb typing
+  const multi = S.st.cameras.length > 1;
+  $("intervals").innerHTML = S.sum.intervals.map((iv) => {
+    const part = iv.full === false ? ` <span class="warn">(the video covers ${fmtDur(iv.covered_s)} of it)</span>` : "";
+    const rows = iv.cameras.map((c) => sensorRow(iv.key, c.index, c.name, c)).join("") +
+      (multi ? sensorRow(iv.key, null, "All cameras", iv.all) : "");
+    return `<div style="margin:8px 0 4px"><b>${esc(iv.label)}</b>${part}</div>` +
+      `<table><tr><th></th><th>You in</th><th>Sensor in</th><th>You out</th><th>Sensor out</th></tr>${rows}</table>`;
+  }).join("") + `<div class="muted" style="margin-top:6px">Type the sensor's numbers from RetailNext. Accuracy shows under each one.</div>`;
+  $("intervals").querySelectorAll("input").forEach((el) => {
+    el.addEventListener("change", async () => {
+      const v = el.value.trim() === "" ? null : Math.max(0, Math.round(+el.value));
+      try {
+        apply(await api("/api/sensor", { interval: el.dataset.key, camera: el.dataset.cam === "" ? null : +el.dataset.cam,
+                                         direction: el.dataset.dir, value: v }));
+      } catch (e) { msg(e.message, "err"); }
+    });
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter") el.blur(); });
+  });
+}
+function sensorRow(key, cam, name, r) {
+  const entered = S.st.sensor[key] || {}, own = (cam === null ? entered.all : entered[cam]) || {};
+  const input = (d) => {
+    const hint = cam === null && own[d] === undefined && r.sensor[d] !== undefined ? r.sensor[d] : "";
+    return `<input type="number" min="0" step="1" data-key="${esc(key)}" data-cam="${cam === null ? "" : cam}" data-dir="${d}" value="${own[d] ?? ""}" placeholder="${hint}" aria-label="Sensor ${d} for ${esc(name)}">`;
+  };
+  const acc = (d) => {
+    const x = r.comparison && r.comparison[d];
+    if (!x || x.sensor === null) return "";
+    const a = x.accuracy_pct === null ? "–" : `${x.accuracy_pct}%`;
+    return `<div class="muted" style="font-size:11px">${a} (${x.error > 0 ? "+" : ""}${x.error})</div>`;
+  };
+  return `<tr><td>${esc(name)}</td><td>${r.in}</td><td>${input("in")}${acc("in")}</td><td>${r.out}</td><td>${input("out")}${acc("out")}</td></tr>`;
+}
+
+// ---------- counting ----------
+async function count(direction) {
+  const t = +V.currentTime.toFixed(2), cam = S.cam;
+  const twin = S.st.counts.some((c) => c.camera === cam && c.direction === direction && Math.abs(c.t - t) < 0.3);
+  S.flash = { text: `${direction.toUpperCase()} +1`, dir: direction, until: performance.now() + 700 };
+  try {
+    apply(await api("/api/count", { camera: cam, t, direction }));
+    if (twin) msg(`That is a second ${direction.toUpperCase()} at the same moment. Two people together? Keep it. A double press? Press Z.`, "warn");
+    else msg(`${direction.toUpperCase()} at ${fmtClock(t)} saved.`, "ok");
+  } catch (e) { msg(`Not saved: ${e.message}`, "err"); }
+}
+async function undo() {
+  try {
+    const r = await api("/api/undo", { camera: S.cam });
+    apply(r);
+    msg(r.removed ? `Removed the ${r.removed.direction.toUpperCase()} at ${fmtClock(r.removed.t)}.` : "Nothing to undo on this camera.", r.removed ? "ok" : "muted");
+  } catch (e) { msg(e.message, "err"); }
+}
+async function removeCount(id) {
+  try { apply(await api("/api/delete", { id })); msg("Count removed.", "ok"); } catch (e) { msg(e.message, "err"); }
+}
+
+// ---------- which stretches were watched ----------
+function track() {
+  if (V.paused || !S.st) return;
+  const now = V.currentTime, g = S.seg;
+  if (!g || g.cam !== S.cam || now < g.last - 0.05 || now - g.last > 3) { flush(); S.seg = { cam: S.cam, from: now, last: now }; return; }
+  g.last = now;
+  if (g.last - g.from >= 5) flush(true);
+}
+function flush(keep) {
+  const g = S.seg;
+  if (!g) return;
+  if (g.last - g.from > 0.2) api("/api/watched", { camera: g.cam, start: g.from, end: g.last }).then(apply).catch(() => {});
+  S.seg = keep ? { cam: g.cam, from: g.last, last: g.last } : null;
+}
+function savePosition() { api("/api/position", { camera: S.cam, t: V.currentTime }).then(apply).catch(() => {}); }
+V.addEventListener("timeupdate", track);
+V.addEventListener("seeking", () => flush());
+V.addEventListener("pause", () => { flush(); savePosition(); });
+V.addEventListener("ended", () => msg("End of the video for this camera. Check the watched share above, then switch camera or save the report.", "ok"));
+window.addEventListener("pagehide", () => {
+  const g = S.seg;
+  if (g && g.last - g.from > 0.2)
+    navigator.sendBeacon("/api/watched", new Blob([JSON.stringify({ camera: g.cam, start: g.from, end: g.last })], { type: "application/json" }));
+});
+
+// ---------- playback ----------
+function switchCam(i) {
+  if (i === S.cam || i >= S.st.cameras.length) return;
+  flush(); savePosition();
+  S.cam = i;
+  V.currentTime = S.st.positions[i] || 0;
+  render();
+  msg(`Now counting ${S.st.cameras[i].name}.`, "ok");
+}
+function setRate(ix) { S.rateIx = Math.max(0, Math.min(RATES.length - 1, ix)); V.playbackRate = V.defaultPlaybackRate = RATES[S.rateIx]; }
+function seekBy(dt) { V.currentTime = Math.max(0, Math.min(S.st.duration_s, V.currentTime + dt)); }
+function togglePlay() { V.paused ? V.play().catch(() => {}) : V.pause(); }
+
+function drawTimeline() {
+  const w = TL.clientWidth, h = TL.height, d = Math.max(1, S.st.duration_s);
+  if (TL.width !== w) TL.width = w;
+  tctx.fillStyle = "#2b333d"; tctx.fillRect(0, 0, w, h);
+  tctx.fillStyle = "rgba(77,163,255,.55)";
+  for (const [a, b] of S.sum.cameras[S.cam].watched) tctx.fillRect(a / d * w, 7, Math.max(1, (b - a) / d * w), h - 14);
+  if (S.seg && S.seg.cam === S.cam) tctx.fillRect(S.seg.from / d * w, 7, Math.max(1, (S.seg.last - S.seg.from) / d * w), h - 14);
+  for (const c of S.st.counts) {
+    if (c.camera !== S.cam) continue;
+    tctx.fillStyle = c.direction === "in" ? "#3ecf8e" : "#ff7a59"; tctx.fillRect(c.t / d * w - 1, 0, 2, h);
+  }
+  tctx.fillStyle = "#ffffff"; tctx.fillRect(V.currentTime / d * w - 1, 0, 3, h);
+}
+function draw() {
+  if (S.st) {
+    const t = S.st.cameras[S.cam].tile, w = t.x1 - t.x0, h = t.y1 - t.y0;
+    const avail = Math.max(320, $("stage").clientWidth - 32);
+    const sc = Math.max(0.5, Math.min(2.2, avail / w, (window.innerHeight - 230) / h));
+    if (C.width !== Math.round(w * sc)) { C.width = Math.round(w * sc); C.height = Math.round(h * sc); }
+    if (V.readyState >= 2) ctx.drawImage(V, t.x0, t.y0, w, h, 0, 0, C.width, C.height);
+    const f = S.flash;
+    if (f && performance.now() < f.until) {
+      ctx.font = "bold 46px system-ui, sans-serif"; ctx.lineWidth = 6; ctx.strokeStyle = "rgba(0,0,0,.7)";
+      ctx.strokeText(f.text, 18, C.height - 22);
+      ctx.fillStyle = f.dir === "in" ? "#3ecf8e" : "#ff7a59"; ctx.fillText(f.text, 18, C.height - 22);
+    }
+    $("clock").textContent = `${fmtClock(V.currentTime)}${S.st.tz ? " " + S.st.tz : ""}   (${fmtHms(V.currentTime)} of ${fmtHms(S.st.duration_s)})`;
+    $("rate").textContent = `${V.playbackRate}×`;
+    $("play").textContent = V.paused ? "Play" : "Pause";
+    drawTimeline();
+  }
+  requestAnimationFrame(draw);
+}
+
+// ---------- input ----------
+window.addEventListener("keydown", (e) => {
+  const a = document.activeElement;
+  if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA")) return;
+  if (!S.st) return;
+  const k = e.key;
+  if (e.repeat && !k.startsWith("Arrow")) { e.preventDefault(); return; }  // a held key acts once
+  const go = (fn) => { e.preventDefault(); fn(); };
+  if (k === " " || e.code === "Space") go(togglePlay);
+  else if (k === "i" || k === "I") go(() => count("in"));
+  else if (k === "o" || k === "O") go(() => count("out"));
+  else if (k === "z" || k === "Z" || k === "Backspace") go(undo);
+  else if (k === "ArrowLeft") go(() => seekBy(e.shiftKey ? -0.1 : -2));
+  else if (k === "ArrowRight") go(() => seekBy(e.shiftKey ? 0.1 : 2));
+  else if (k === "ArrowUp") go(() => setRate(S.rateIx + 1));
+  else if (k === "ArrowDown") go(() => setRate(S.rateIx - 1));
+  else if (/^[1-9]$/.test(k) && +k <= S.st.cameras.length) go(() => switchCam(+k - 1));
+});
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-t],[data-del],[data-seek]");
+  if (!el) return;
+  e.preventDefault();
+  if (el.dataset.del) removeCount(+el.dataset.del);
+  else if (el.dataset.seek) { V.currentTime = +el.dataset.seek; }
+  else { V.currentTime = Math.max(0, +el.dataset.t - 3); V.play().catch(() => {}); }
+});
+TL.addEventListener("click", (e) => { const r = TL.getBoundingClientRect(); V.currentTime = (e.clientX - r.left) / r.width * S.st.duration_s; });
+$("play").addEventListener("click", togglePlay);
+$("intervals").addEventListener("focusout", () => setTimeout(renderIntervals, 0));
+for (const [id, field] of [["operator", "operator"], ["notes", "notes"]]) {
+  $(id).addEventListener("change", async () => {
+    try { apply(await api("/api/meta", { [field]: $(id).value })); msg("Saved.", "ok"); } catch (e) { msg(e.message, "err"); }
+  });
+}
+$("camname").addEventListener("change", async () => {
+  try { apply(await api("/api/camera", { camera: S.cam, name: $("camname").value })); msg("Camera name saved.", "ok"); } catch (e) { msg(e.message, "err"); }
+});
+for (const id of ["operator", "camname"]) $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") $(id).blur(); });
+$("export").addEventListener("click", async () => {
+  try { const r = await api("/api/export", {}); msg(`Saved ${r.written.length} files next to counts.json (manual/export). Open report to see them.`, "ok"); }
+  catch (e) { msg(e.message, "err"); }
+});
+
+(async function init() {
+  try { apply(await api("/api/state")); }
+  catch (e) { $("video-name").innerHTML = `<span class="err">Could not load the count: ${esc(e.message)}</span>`; return; }
+  $("video-name").textContent = S.st.video;
+  V.addEventListener("loadedmetadata", () => { V.currentTime = S.st.positions[S.cam] || 0; }, { once: true });
+  setRate(1);
+  requestAnimationFrame(draw);
+  msg("Press Space to play. Press I when someone goes in and O when someone goes out, as they cross the line.", "muted");
+})();
+</script>
+</body>
+</html>

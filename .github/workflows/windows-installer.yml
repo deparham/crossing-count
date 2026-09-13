@@ -1,0 +1,64 @@
+# Builds the Windows installer (CrossingCount-Setup-<version>.exe) on GitHub's
+# Windows machines. Download it from the run's "Artifacts" section.
+name: Windows installer
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+      - run: uv sync --frozen
+      - run: uv run pytest -q
+
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+      - run: uv sync --frozen --group build
+
+      - name: Model weights (the same files as on the development Mac)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force models | Out-Null
+          $weights = @{
+            "yolo11s.pt" = "85a76fe86dd8afe384648546b56a7a78580c7cb7b404fc595f97969322d502d5"
+            "yolo11m.pt" = "d5ffc1a674953a08e11a8d21e022781b1b23a19b730afc309290bd9fb5305b95"
+          }
+          foreach ($name in $weights.Keys) {
+            Invoke-WebRequest "https://github.com/ultralytics/assets/releases/download/v8.3.0/$name" -OutFile "models/$name"
+            $hash = (Get-FileHash "models/$name" -Algorithm SHA256).Hash.ToLower()
+            if ($hash -ne $weights[$name]) { throw "$name has checksum $hash, expected $($weights[$name])" }
+          }
+
+      - name: Bundle with PyInstaller
+        run: uv run pyinstaller packaging/crossing_count.spec --noconfirm --distpath dist --workpath build
+
+      - name: Self-test the bundle
+        run: dist\CrossingCount\CrossingCount.exe --self-test
+
+      - name: Installer with Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          $version = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "0.1.${{ github.run_number }}" }
+          & $iscc "/DAppVersion=$version" packaging\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CrossingCount-Setup
+          path: dist/installer/*.exe
+          if-no-files-found: error

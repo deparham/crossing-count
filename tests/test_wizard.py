@@ -1,0 +1,183 @@
+"""The count wizard: footage list, progress, checking crossings, and the PowerPoint report."""
+
+from __future__ import annotations
+
+import sys
+import time
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import cv2
+import numpy as np
+import pytest
+from fastapi.testclient import TestClient
+from pptx import Presentation
+
+from crossing_count.report_pptx import A4_H, A4_W, build_report
+from crossing_count.webapp import Setup
+from crossing_count.wizard import Progress, Wizard, WizardError, list_videos, mark_twins
+from crossing_count.wizard_app import PPTX, create_wizard_app
+
+
+def copy_outputs(src: Path) -> Callable[[Wizard], list[list[str]]]:
+    """Stands in for gate.py + detect.py: copies finished outputs into the wizard's run folder."""
+    def commands(w: Wizard) -> list[list[str]]:
+        code = (f"import shutil; shutil.copytree({str(src)!r}, {str(w.run_dir)!r}, "
+                f"dirs_exist_ok=True, ignore=shutil.ignore_patterns('review', 'manual', "
+                f"'wizard', 'export')); print('  gating 00:00:30.00 / 00:01:00.00  (5.0x realtime)')")
+        return [[sys.executable, "-c", code]]
+    return commands
+
+
+def wait(w: Wizard) -> None:
+    for _ in range(400):
+        if w.job_status()["status"] != "running":
+            return
+        time.sleep(0.05)
+    raise AssertionError("the count did not finish")
+
+
+def texts(path: Path) -> list[str]:
+    pages = []
+    for slide in Presentation(str(path)).slides:
+        parts = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                parts.append(shape.text_frame.text)
+            if shape.has_table:
+                parts.extend(c.text for row in shape.table.rows for c in row.cells)
+        pages.append("\n".join(parts))
+    return pages
+
+
+def test_footage_list_shows_only_videos(tmp_path: Path) -> None:
+    for name in ("a.mp4", "B.MOV", "notes.txt", ".hidden.mp4"):
+        (tmp_path / name).write_bytes(b"x")
+    assert {v["name"] for v in list_videos([tmp_path, tmp_path / "missing"])} == {"a.mp4", "B.MOV"}
+
+
+def test_progress_is_read_from_gate_and_detect_output() -> None:
+    p = Progress(cameras=2)
+    p.feed("  gating 00:07:30.00 / 00:15:00.00  ( 75.0x realtime)")
+    assert p.stage == "gate" and p.overall() == pytest.approx(2.5)
+    p.feed("  CN-1: derotated detector, 0 static objects ignored")
+    p.feed("    tracking  50.0% of active time ( 1.5x realtime)")
+    assert p.camera == "CN-1" and p.overall() == pytest.approx(5 + 47.5 * 0.5)
+    p.feed("  CN-2: derotated detector, 1 static objects ignored")
+    assert p.camera == "CN-2" and p.overall() == pytest.approx(5 + 47.5)
+    p.feed("objc[42]: Class AVFFrameReceiver is implemented in both ...")
+    assert not any(line.startswith("objc") for line in p.log)
+
+
+def test_one_person_on_two_cameras_is_flagged() -> None:
+    items: list[dict[str, Any]] = [
+        {"id": "a", "kind": "counted", "picture": 0, "camera": "A", "direction": "in", "t": 10.0},
+        {"id": "b", "kind": "counted", "picture": 1, "camera": "B", "direction": "in", "t": 11.2},
+        {"id": "c", "kind": "counted", "picture": 1, "camera": "B", "direction": "out", "t": 11.0},
+        {"id": "d", "kind": "possible", "picture": 0, "camera": "A", "direction": "in", "t": 9.0},
+    ]
+    mark_twins(items)
+    assert "twin" not in items[0] and items[1]["twin"]["id"] == "a"
+    assert "twin" not in items[2] and items[3]["twin"]["id"] == "a"
+
+
+def test_count_check_and_report(two_tile_video: dict[str, Any], review_run_dir: Path,
+                                tmp_path: Path) -> None:
+    w = Wizard(two_tile_video["video"], two_tile_video["dir"], tmp_path,
+               copy_outputs(review_run_dir))
+    s = Setup(w.video, two_tile_video["dir"])
+    w.set_cameras(s.existing(), [t.as_dict() for t in s.tiles])
+    assert [c["sensor"] for c in w.state["cameras"]] == ["CAM-A", "CAM-B"]
+    assert w.state["store"]["code"] == "SYN"
+    with pytest.raises(WizardError):
+        w.start()  # no direction chosen yet
+    w.set_direction("in")
+    w.set_sensor({"in": 3})
+    w.start()
+    wait(w)
+    assert w.job_status()["status"] == "done"
+    items = w.check_items()
+    counted = [i for i in items if i["kind"] == "counted"]
+    assert counted and all(i["direction"] == "in" for i in items)
+    for i in items:
+        w.answer(i["id"], "yes" if i is counted[0] else "no")
+    w.set_watch("skipped")
+    c = w.counts()
+    assert c["verified"]["in"] == 1 and c["confirmed"] == 1 and c["checked"]
+    assert c["accuracy"]["in"]["error"] == 2  # RetailNext 3 against 1 verified
+    with pytest.raises(WizardError, match="store name"):
+        w.make_report()
+    w.set_store(name="Lismore", code="SYN-1", report_date="25/08/2026")
+    pages = texts(w.make_report())
+    assert "Lismore SYN-1 Traffic System" in pages[0] and "VERIFIED COUNT" in pages[0]
+    assert "SYSTEM COUNT" in pages[0] and "ACCURACY" in pages[0] and "25/08/2026" in pages[0]
+    assert f"Page 1 of {len(pages)}" in pages[0] and "Crossing details" in pages[1]
+    assert "Detected, confirmed" in pages[1]
+    again = Wizard(two_tile_video["video"], two_tile_video["dir"], tmp_path)  # resumes
+    assert again.counts()["verified"]["in"] == 1 and again.state["report"]
+
+
+def test_report_layout(tmp_path: Path) -> None:
+    img = np.full((480, 640, 3), 90, np.uint8)
+    cv2.imwrite(str(tmp_path / "frame.jpg"), img)
+    cv2.imwrite(str(tmp_path / "logo.png"), np.full((124, 302, 3), 255, np.uint8))
+    thumbs = []
+    for n in range(13):
+        p = tmp_path / f"t{n}.jpg"
+        cv2.imwrite(str(p), img[:400, :400])
+        thumbs.append({"path": str(p), "label": f"{n + 1} · IN"})
+    data = {
+        "store_name": "Lismore", "store_code": "RW-128", "location": "Entrance",
+        "report_date": "25/08/2026", "captured_date": "22/08/2026", "time_range": "11:15-11:30",
+        "directions": [{"key": "in", "label": "Traffic In", "verified": 11, "system": 10,
+                        "accuracy": 90.9},
+                       {"key": "out", "label": "Traffic Out", "verified": 8, "system": 8,
+                        "accuracy": 100.0}],
+        "frame": str(tmp_path / "frame.jpg"), "frame_caption": "RW-128-PB1 · 11:22:10",
+        "crossings": [{"n": n, "time": "11:16:00", "camera": "RW-128-PB1",
+                       "direction": "Traffic In", "found": "Detected, confirmed"}
+                      for n in range(1, 60)],
+        "thumbs": thumbs, "method": ["Footage: x.mp4", "Checked by a person"],
+    }
+    out = build_report(data, tmp_path / "r.pptx", tmp_path / "logo.png")
+    prs = Presentation(str(out))
+    assert (prs.slide_width, prs.slide_height) == (A4_W, A4_H)  # A4 portrait
+    pages = texts(out)
+    assert len(pages) == 6  # cover, 3 of details (59 rows), 2 of snapshots (13)
+    assert "ACCURACY IN" in pages[0] and "90.9%" in pages[0] and "100%" in pages[0]
+    assert "Crossing details (continued)" in pages[2] and "Crossing snapshots" in pages[4]
+    assert "Page 6 of 6" in pages[5]
+
+
+def test_wizard_page_api(two_tile_video: dict[str, Any], review_run_dir: Path,
+                         tmp_path: Path) -> None:
+    client = TestClient(create_wizard_app(two_tile_video["dir"], tmp_path,
+                                          [two_tile_video["dir"]], None,
+                                          copy_outputs(review_run_dir)))
+    assert "Count wizard" in client.get("/").text
+    assert client.get("/api/state").status_code == 409
+    names = [v["name"] for v in client.get("/api/videos").json()["videos"]]
+    assert names == ["two_cameras.mp4"]
+    st = client.post("/api/open", json={"path": str(two_tile_video["video"])}).json()
+    assert len(client.get(st["draw_url"] + "api/info").json()["pictures"]) == 2
+    assert client.get("/api/drawn").json()["pictures"][0]["configs"][0]["sensor"] == "CAM-A"
+    client.post("/api/cameras")
+    client.post("/api/direction", json={"direction": "in"})
+    client.post("/api/sensor", json={"values": {"in": 2}})
+    assert client.post("/api/run").status_code == 200
+    for _ in range(400):
+        if client.get("/api/job").json()["status"] != "running":
+            break
+        time.sleep(0.05)
+    assert client.get("/api/preview.jpg", params={"picture": 0, "t": 5}).status_code == 200
+    check = client.get("/api/check").json()
+    for it in check["items"]:
+        client.post("/api/answer", json={"id": it["id"], "answer": "yes"})
+    client.post("/api/watch", json={"mode": "skipped"})
+    client.post("/api/store", json={"name": "Lismore", "code": "SYN-1"})
+    made = client.post("/api/report")
+    assert made.status_code == 200, made.text
+    r = client.get("/api/report.pptx")
+    assert r.status_code == 200 and r.headers["content-type"] == PPTX
+    assert client.get("/video", headers={"Range": "bytes=0-9"}).status_code == 206

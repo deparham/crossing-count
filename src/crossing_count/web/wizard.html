@@ -1,0 +1,805 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Count wizard · crossing-count</title>
+<style>
+  :root {
+    --bg: #101317; --panel: #181d23; --panel2: #20262e; --border: #2b333d;
+    --text: #e7eaee; --muted: #97a1ad; --accent: #4da3ff; --ok: #3ecf8e; --warn: #f5b942; --err: #ff6b6b;
+    --in: #3ecf8e; --out: #ff7a59;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 16px;
+           background: var(--panel); border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 15px; margin: 0; }
+  #steps { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+  #steps button { background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 14px; padding: 3px 12px; cursor: pointer; font: inherit; }
+  #steps button.on { color: var(--text); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  #steps button.done { color: var(--ok); }
+  #steps button:disabled { opacity: .35; cursor: default; }
+  main { padding: 16px; max-width: 1320px; margin: 0 auto; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; }
+  .big { font-size: 19px; font-weight: 600; margin-bottom: 4px; }
+  .muted { color: var(--muted); } .warn { color: var(--warn); } .ok { color: var(--ok); } .err { color: var(--err); }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; cursor: pointer; font: inherit; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #1d4f86; border-color: #2d6cb3; }
+  button.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  input[type=text], input[type=number], select { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; font: inherit; }
+  table.list { width: 100%; border-collapse: collapse; }
+  table.list td, table.list th { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  table.list th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  table.list tr.pick { cursor: pointer; } table.list tr.pick:hover { background: var(--panel2); }
+  .choice { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
+  .choice button { font-size: 18px; padding: 18px 30px; min-width: 190px; }
+  .choice button b { display: block; font-size: 19px; } .choice button span { display: block; font-size: 13px; color: var(--muted); max-width: 300px; }
+  .pics { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin: 12px 0; }
+  .pics figure { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+  .pics img { width: 100%; border-radius: 6px; background: #000; }
+  .pics label { display: flex; flex-direction: column; gap: 3px; }
+  #draw { width: 100%; height: 80vh; border: 1px solid var(--border); border-radius: 8px; background: #000; }
+  .bar { height: 12px; background: var(--panel2); border-radius: 6px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .6s; }
+  #log { max-height: 240px; overflow: auto; font: 12px/1.45 ui-monospace, Menlo, monospace; white-space: pre-wrap; color: var(--muted); }
+  .checkgrid { display: grid; grid-template-columns: minmax(0, 1fr) 370px; gap: 16px; align-items: start; }
+  @media (max-width: 960px) { .checkgrid { grid-template-columns: minmax(0, 1fr); } }
+  canvas.player { display: block; background: #000; border-radius: 6px; max-width: 100%; }
+  #timeline { display: block; width: 100%; height: 26px; margin-top: 8px; cursor: pointer; border-radius: 3px; }
+  .controls { display: flex; gap: 6px 10px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .controls button { padding: 3px 10px; }
+  kbd { background: #11151a; border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; font-size: 12px; }
+  .answer { display: flex; gap: 10px; margin: 14px 0; }
+  .answer button { flex: 1; font-size: 16px; padding: 12px; }
+  .pill { display: inline-block; padding: 0 8px; border-radius: 10px; font-size: 12px; font-weight: 600; border: 1px solid; }
+  .pill.in { color: var(--in); } .pill.out { color: var(--out); }
+  .nums { display: flex; gap: 12px; flex-wrap: wrap; margin: 10px 0; }
+  .nums div { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; min-width: 140px; }
+  .nums b { display: block; font-size: 26px; }
+  .nums .in b { color: var(--in); } .nums .out b { color: var(--out); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 16px; margin: 10px 0; }
+  .grid2 label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
+  #hlist { max-height: 220px; overflow: auto; }
+  #hlist div { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+  a[data-t], a[data-hdel], a[data-seek], a[data-rm] { color: var(--accent); cursor: pointer; text-decoration: none; }
+  #msg { position: sticky; bottom: 0; padding: 8px 0; min-height: 1.5em; }
+</style>
+</head>
+<body>
+<header><h1>Count wizard</h1><span id="vname" class="muted">No footage chosen yet</span></header>
+<nav id="steps" aria-label="Steps"></nav>
+<main>
+
+<section id="s-footage">
+  <div class="card">
+    <div class="big">Where is the footage?</div>
+    <div class="muted">Pick the RetailNext export, with or without the sensor's marks. Videos in Downloads, Desktop, Movies and Videos are listed, newest first.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <input type="text" id="folder" placeholder="Somewhere else? Type a folder, e.g. ~/Documents/Footage" style="flex:1;min-width:280px">
+      <button id="look">Look there</button>
+    </div>
+  </div>
+  <div class="card"><table class="list" id="videos"></table></div>
+</section>
+
+<section id="s-mode" hidden>
+  <div class="card">
+    <div class="big">How do you want to count?</div>
+    <div class="choice">
+      <button data-mode="auto"><b>Automatic</b><span>The tool counts while you do other work; then you check each crossing it found with Y or N.</span></button>
+      <button data-mode="manual"><b>Manual</b><span>You count every person yourself, at up to 16× speed. Your clicks are saved to teach the automatic counter.</span></button>
+    </div>
+  </div>
+</section>
+
+<section id="s-draw" hidden>
+  <div class="card" id="marksCard" hidden>
+    <div class="big">Does the video show RetailNext's light-blue counting line?</div>
+    <div class="muted" id="marksHint"></div>
+    <div id="marksPics" class="pics"></div>
+    <div class="choice" style="margin-top:0">
+      <button data-marks="1">Yes, the line is on the video</button>
+      <button data-marks="0">No, it's clean: I'll draw it</button>
+    </div>
+  </div>
+  <div class="card" id="namesCard" hidden>
+    <div class="big">Which cameras will you count?</div>
+    <div class="muted">Name each camera as it is in RetailNext, and untick any you don't want to count.</div>
+    <div id="names" class="pics"></div>
+    <button id="namesDone" class="primary">Next →</button>
+  </div>
+  <div id="drawWrap" hidden>
+    <div class="card">
+      <div class="big">Draw each camera</div>
+      <div class="muted">For each camera picture: type the site and camera name, draw the counting line (click along it, Enter to finish), click the inside of the store, draw the mask zone if the camera has one, then press Save. Cameras drawn before are found by themselves.</div>
+      <div id="drawn" style="margin-top:8px"></div>
+      <div style="margin-top:10px"><button id="drawDone" class="primary">Done drawing →</button></div>
+    </div>
+    <iframe id="draw" title="Draw the cameras"></iframe>
+  </div>
+</section>
+
+<section id="s-traffic" hidden>
+  <div class="card">
+    <div class="big">Which traffic are you validating?</div>
+    <div class="choice">
+      <button data-dir="in">Traffic In</button>
+      <button data-dir="out">Traffic Out</button>
+      <button data-dir="both" style="font-size:15px;min-width:120px">Both</button>
+    </div>
+  </div>
+</section>
+
+<section id="s-retail" hidden>
+  <div class="card">
+    <div class="big">What did RetailNext count?</div>
+    <div class="muted" id="sensorHint"></div>
+    <div id="sensorInputs" class="grid2"></div>
+    <button id="sensorNext" class="primary">Next →</button>
+  </div>
+</section>
+
+<section id="s-count" hidden>
+  <div class="card">
+    <div class="big">Count</div>
+    <div class="muted" id="runWhat"></div>
+    <label class="muted" style="display:inline-block;margin-top:8px">Detector
+      <select id="model"><option value="yolo11m.pt">Accurate (slower)</option><option value="yolo11s.pt">Fast (misses more people)</option></select></label>
+    <div style="margin-top:12px;display:flex;gap:8px"><button id="start" class="primary">Start counting</button><button id="stop" hidden>Stop</button></div>
+  </div>
+  <div class="card" id="runCard" hidden>
+    <div id="runMsg" style="font-size:16px;font-weight:600"></div>
+    <div class="bar" style="margin:10px 0"><i id="runBar"></i></div>
+    <div id="runEta" class="muted"></div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:12px">
+      <div style="flex:0 1 480px"><img id="preview" alt="The camera being processed" style="width:100%;border-radius:6px;background:#000;min-height:120px"><div class="muted" id="previewCap"></div></div>
+      <div style="flex:1;min-width:260px"><div class="muted" style="margin-bottom:4px">What it is doing</div><div id="log"></div></div>
+    </div>
+    <div id="results" style="margin-top:12px"></div>
+    <button id="toCheck" class="primary" hidden style="margin-top:12px">Check the crossings →</button>
+  </div>
+</section>
+
+<section id="s-check" hidden>
+  <div class="checkgrid">
+    <div>
+      <canvas id="canvas" class="player" width="960" height="720" aria-label="The crossing being checked"></canvas>
+      <div class="muted" style="margin-top:6px"><kbd>Space</kbd> play/pause · <kbd>R</kbd> replay · <kbd>←</kbd>/<kbd>→</kbd> 1 s · <kbd>↑</kbd>/<kbd>↓</kbd> speed · <kbd>Z</kbd> back · <span id="clock"></span></div>
+    </div>
+    <div class="card" id="panel"></div>
+  </div>
+</section>
+
+<section id="s-hand" hidden>
+  <div class="checkgrid">
+    <div>
+      <div id="handCams" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"></div>
+      <canvas id="hcanvas" class="player" width="960" height="720" aria-label="The camera being counted"></canvas>
+      <canvas id="timeline" height="26" aria-label="Watched stretches and your counts; click to jump"></canvas>
+      <div class="controls"><button id="hplay">Play</button><span class="muted">Speed</span><span id="speeds"></span><span id="hclock" class="muted"></span></div>
+      <div class="muted" id="hkeys" style="margin-top:6px"></div>
+    </div>
+    <div class="card">
+      <div class="nums" id="hnums"></div>
+      <div id="hwatched" class="muted"></div>
+      <div id="hmsg" style="margin:8px 0;min-height:1.4em"></div>
+      <div class="muted" style="margin-top:8px">Your counts on this camera (click a time to replay it)</div>
+      <div id="hlist"></div>
+      <button id="handDone" class="primary" style="margin-top:12px">I've finished counting →</button>
+    </div>
+  </div>
+</section>
+
+<section id="s-report" hidden>
+  <div class="card">
+    <div class="big">Report</div>
+    <div class="grid2">
+      <label>Store name <input type="text" id="storeName" placeholder="e.g. Lismore"></label>
+      <label>Store code <input type="text" id="storeCode" placeholder="e.g. RW-128"></label>
+      <label>Cameras at <input type="text" id="storeLoc" placeholder="Entrance"></label>
+      <label>Report date <input type="text" id="repDate" placeholder="dd/mm/yyyy"></label>
+      <label>Your name <input type="text" id="operator" placeholder="who counted"></label>
+    </div>
+    <div id="numbers"></div>
+    <div class="grid2" style="grid-template-columns:1fr">
+      <label>Learning examples folder (a shared folder; every crossing is saved there to improve the automatic counter)
+        <input type="text" id="exDir" placeholder="e.g. \\server\share\crossing-count-examples or /Volumes/Shared/examples"></label>
+    </div>
+    <div id="exStatus"></div>
+    <div id="logoInfo" class="muted" style="margin-top:6px"></div>
+    <div style="margin-top:12px"><button id="make" class="primary">Make PowerPoint</button></div>
+    <div id="made" style="margin-top:12px"></div>
+  </div>
+</section>
+
+<video id="video" preload="auto" muted playsinline style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"></video>
+<div id="msg"></div>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const FLOW = {
+  auto: ["footage", "mode", "draw", "traffic", "retail", "count", "check", "report"],
+  manual: ["footage", "mode", "draw", "traffic", "hand", "retail", "report"],
+};
+const NAMES = { footage: "Footage", mode: "How", draw: "Cameras", traffic: "Traffic", retail: "RetailNext",
+                count: "Count", check: "Check", hand: "Count by hand", report: "Report" };
+const LABEL = { in: "Traffic In", out: "Traffic Out" };
+const RATES = [0.5, 1, 1.5, 2, 3, 4];
+const HR = [0.5, 1, 2, 4, 8, 16];
+const V = $("video"), C = $("canvas"), ctx = C.getContext("2d");
+const HC = $("hcanvas"), hctx = HC.getContext("2d"), TL = $("timeline"), tctx = TL.getContext("2d");
+const W = { st: null, key: "footage", timer: null, ch: null, cur: null, mode: null, back: [], polls: 0,
+            videoKey: null, drawn: null, h: null, hcam: null, hseg: null, flash: null, hrate: 1, settings: null };
+
+function esc(x) { return String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function msg(text, cls) { $("msg").innerHTML = text ? `<span class="${cls || "muted"}">${esc(text)}</span>` : ""; }
+function hmsg(html, cls) { $("hmsg").innerHTML = html ? `<span class="${cls || "muted"}">${html}</span>` : ""; }
+function fmtDur(s) { s = Math.max(0, Math.round(s || 0)); const m = Math.floor(s / 60); return m ? `${m} min ${s % 60} s` : `${s} s`; }
+function fmtHms(t) { t = Math.max(0, Math.floor(t)); const m = Math.floor(t / 60), s = t % 60; return `${m}:${String(s).padStart(2, "0")}`; }
+function clock(t) {
+  const s = W.st;
+  if (s && s.clock_start) return new Date(Date.parse(s.clock_start) + t * 1000).toTimeString().slice(0, 8);
+  const m = Math.floor(t / 60); return `${m}:${(t - 60 * m).toFixed(1).padStart(4, "0")}`;
+}
+function period() {
+  const s = W.st; if (!s || !s.clock_start) return "";
+  const a = new Date(Date.parse(s.clock_start)), b = new Date(Date.parse(s.clock_end || s.clock_start) + (s.clock_end ? 0 : s.duration_s * 1000));
+  return `${a.toLocaleDateString("en-AU")} ${a.toTimeString().slice(0, 5)}–${b.toTimeString().slice(0, 5)}`;
+}
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+  return j;
+}
+function setState(s) {
+  W.st = s;
+  $("vname").textContent = s ? s.filename : "No footage chosen yet";
+  if (s && W.videoKey !== s.fingerprint) { W.videoKey = s.fingerprint; V.src = `/video?v=${s.fingerprint}`; }
+  renderSteps();
+}
+
+// ---------- steps ----------
+function flow() { return FLOW[(W.st && W.st.mode) || "auto"]; }
+function nextKey() {
+  const s = W.st;
+  if (!s) return "footage";
+  if (!s.mode) return "mode";
+  if (!s.cameras.length) return "draw";
+  if (!s.direction) return "traffic";
+  const missing = s.dirs.some((d) => s.sensor[d] === undefined || s.sensor[d] === null);
+  if (s.mode === "manual") return !s.manual.done ? "hand" : missing ? "retail" : "report";
+  if (missing) return "retail";
+  if (s.job.status !== "done") return "count";
+  if (!s.counts.checked) return "check";
+  return "report";
+}
+function renderSteps() {
+  const f = flow(), max = Math.max(0, f.indexOf(nextKey()));
+  $("steps").innerHTML = "";
+  f.forEach((key, k) => {
+    const b = document.createElement("button");
+    b.textContent = `${k + 1}. ${NAMES[key]}`;
+    b.disabled = k > max;
+    if (key === W.key) b.className = "on"; else if (k < max) b.className = "done";
+    b.addEventListener("click", () => go(key));
+    $("steps").appendChild(b);
+  });
+}
+const ENTER = {};
+function go(key) {
+  clearInterval(W.timer); W.timer = null;
+  if (W.key === "hand" && key !== "hand") hflush();
+  if (key !== "check" && key !== "hand") V.pause();
+  W.key = key;
+  document.querySelectorAll("main > section").forEach((s) => (s.hidden = s.id !== `s-${key}`));
+  renderSteps(); msg("");
+  ENTER[key]();
+}
+
+// ---------- footage ----------
+ENTER.footage = async (folder) => {
+  const r = await api(`/api/videos${folder ? "?folder=" + encodeURIComponent(folder) : ""}`);
+  $("videos").innerHTML = r.videos.length
+    ? `<tr><th>Video</th><th>Changed</th><th>Size</th></tr>` + r.videos.map((v) =>
+        `<tr class="pick" data-path="${esc(v.path)}"><td>${esc(v.name)}<div class="muted" style="font-size:12px">${esc(v.folder)}</div></td>` +
+        `<td>${esc(v.modified.replace("T", " ").slice(0, 16))}</td><td>${v.size_mb} MB</td></tr>`).join("")
+    : `<tr><td class="muted">No videos in ${esc(r.folders.join(", "))}.</td></tr>`;
+  $("videos").querySelectorAll("tr.pick").forEach((tr) => tr.addEventListener("click", () => openVideo(tr.dataset.path)));
+};
+async function openVideo(path) {
+  msg("Opening the video and finding its cameras…");
+  try { setState(await api("/api/open", { path })); msg(""); W.hcam = null; go(nextKey()); }
+  catch (e) { msg(e.message, "err"); }
+}
+$("look").addEventListener("click", () => ENTER.footage($("folder").value.trim()));
+$("folder").addEventListener("keydown", (e) => { if (e.key === "Enter") ENTER.footage($("folder").value.trim()); });
+
+// ---------- mode ----------
+ENTER.mode = () => document.querySelectorAll("#s-mode [data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === W.st.mode));
+document.querySelectorAll("#s-mode [data-mode]").forEach((b) => b.addEventListener("click", async () => {
+  try { setState(await api("/api/mode", { mode: b.dataset.mode })); go("draw"); } catch (e) { msg(e.message, "err"); }
+}));
+
+// ---------- cameras: names, or drawing ----------
+const pic = (i) => `${W.st.draw_url}api/picture/${i}.jpg`;
+ENTER.draw = async () => {
+  const manual = W.st.mode === "manual";
+  W.drawn = await api("/api/drawn").catch(() => null);
+  $("marksCard").hidden = !manual;
+  if (!manual) return showDraw();
+  $("marksPics").innerHTML = W.st.pictures.map((p, i) => `<figure><img src="${pic(i)}" alt="Picture ${i + 1}"><span class="muted">Picture ${i + 1}</span></figure>`).join("");
+  $("marksHint").textContent = W.drawn && W.drawn.marks_guess
+    ? "It looks like it does: a camera drawn before matches the line on this video."
+    : "Look at the pictures: RetailNext's counting line is light blue with small triangles.";
+  document.querySelectorAll("#marksCard [data-marks]").forEach((b) => b.classList.toggle("on", W.st.marks !== null && String(+W.st.marks) === b.dataset.marks));
+  if (W.st.marks === true) showNames(); else if (W.st.marks === false) showDraw();
+  else { $("namesCard").hidden = true; $("drawWrap").hidden = true; }
+};
+function showDraw() {
+  $("namesCard").hidden = true; $("drawWrap").hidden = false;
+  if ($("draw").dataset.src !== W.st.draw_url) { $("draw").src = W.st.draw_url; $("draw").dataset.src = W.st.draw_url; }
+  refreshDrawn(); clearInterval(W.timer); W.timer = setInterval(refreshDrawn, 3000);
+}
+function showNames() {
+  $("drawWrap").hidden = true; $("namesCard").hidden = false;
+  const current = Object.fromEntries(W.st.cameras.map((c) => [c.picture, c.sensor]));
+  $("names").innerHTML = W.st.pictures.map((p, i) => {
+    const drawn = W.drawn && W.drawn.pictures[i] && W.drawn.pictures[i].configs[0];
+    const name = current[i] || (drawn ? drawn.sensor : "");
+    const include = W.st.cameras.length ? i in current : true;
+    return `<figure><img src="${pic(i)}" alt="Picture ${i + 1}"><label>Camera name <input type="text" data-pic="${i}" value="${esc(name)}" placeholder="e.g. RW-128-PB1"></label>` +
+      `<label style="flex-direction:row;align-items:center;gap:6px" class="muted"><input type="checkbox" data-inc="${i}" ${include ? "checked" : ""}> Count this camera</label></figure>`;
+  }).join("");
+}
+document.querySelectorAll("#marksCard [data-marks]").forEach((b) => b.addEventListener("click", async () => {
+  try { setState(await api("/api/marks", { marks: b.dataset.marks === "1" })); ENTER.draw(); } catch (e) { msg(e.message, "err"); }
+}));
+$("namesDone").addEventListener("click", async () => {
+  const cameras = [...$("names").querySelectorAll("input[data-pic]")].map((el) => ({
+    picture: +el.dataset.pic, name: el.value, include: $("names").querySelector(`input[data-inc="${el.dataset.pic}"]`).checked }));
+  try { setState(await api("/api/named-cameras", { cameras })); go("traffic"); } catch (e) { msg(e.message, "err"); }
+});
+async function refreshDrawn() {
+  const r = await api("/api/drawn").catch(() => null);
+  if (!r) return;
+  $("drawn").innerHTML = r.pictures.map((p) => p.configs.length
+    ? `<div class="ok">Picture ${p.picture + 1}: ${p.configs.map((c) => `${esc(c.sensor)} <span class="muted">(${esc(c.file)})</span>`).join(", ")} ✓</div>`
+    : `<div class="muted">Picture ${p.picture + 1}: no drawing yet (skip it if you don't want this camera counted)</div>`).join("");
+}
+$("drawDone").addEventListener("click", async () => {
+  try { setState(await api("/api/cameras", {})); go("traffic"); } catch (e) { msg(e.message, "err"); }
+});
+
+// ---------- traffic ----------
+ENTER.traffic = () => document.querySelectorAll("#s-traffic [data-dir]").forEach((b) => b.classList.toggle("on", b.dataset.dir === W.st.direction));
+document.querySelectorAll("#s-traffic [data-dir]").forEach((b) => b.addEventListener("click", async () => {
+  try { setState(await api("/api/direction", { direction: b.dataset.dir })); go(nextKey()); } catch (e) { msg(e.message, "err"); }
+}));
+
+// ---------- RetailNext ----------
+ENTER.retail = () => {
+  const s = W.st, c = s.counts;
+  const yours = s.mode === "manual" ? ` You counted ${s.dirs.map((d) => `${c.verified[d]} ${LABEL[d].toLowerCase()}`).join(" and ")}.` : "";
+  $("sensorHint").textContent = `RetailNext's number for ${s.cameras.map((x) => x.sensor).join(" + ")} together, ${period()}.${yours}`;
+  $("sensorInputs").innerHTML = s.dirs.map((d) =>
+    `<label>${LABEL[d]} <input type="number" min="0" step="1" data-dir="${d}" value="${s.sensor[d] ?? ""}" placeholder="e.g. 8"></label>`).join("");
+  const first = $("sensorInputs").querySelector("input"); if (first) first.focus();
+  $("sensorInputs").querySelectorAll("input").forEach((el) => el.addEventListener("keydown", (e) => { if (e.key === "Enter") $("sensorNext").click(); }));
+};
+$("sensorNext").addEventListener("click", async () => {
+  const values = {};
+  for (const el of $("sensorInputs").querySelectorAll("input")) {
+    if (el.value.trim() === "") { msg(`Enter RetailNext's ${LABEL[el.dataset.dir]}.`, "warn"); el.focus(); return; }
+    values[el.dataset.dir] = Math.max(0, Math.round(+el.value));
+  }
+  try { setState(await api("/api/sensor", { values })); go(nextKey()); } catch (e) { msg(e.message, "err"); }
+});
+
+// ---------- automatic count ----------
+ENTER.count = () => {
+  const s = W.st;
+  $("runWhat").textContent = `${s.cameras.map((c) => c.sensor).join(" and ")} · ${s.dirs.map((d) => LABEL[d]).join(" and ")} · ${period()}. ` +
+    "It finds the moments with movement near the line, then detects and tracks people there. You can do other work meanwhile.";
+  $("model").value = s.model;
+  if (s.job.status !== "idle") { $("runCard").hidden = false; pollJob(); }
+  if (s.job.status === "running") W.timer = setInterval(pollJob, 1000);
+};
+$("model").addEventListener("change", async () => { try { setState(await api("/api/model", { model: $("model").value })); } catch (e) { msg(e.message, "err"); } });
+$("start").addEventListener("click", async () => {
+  try { setState(await api("/api/run", {})); $("runCard").hidden = false; $("toCheck").hidden = true; $("results").innerHTML = ""; clearInterval(W.timer); W.timer = setInterval(pollJob, 1000); pollJob(); }
+  catch (e) { msg(e.message, "err"); }
+});
+$("stop").addEventListener("click", async () => { try { await api("/api/stop", {}); } catch (e) { msg(e.message, "err"); } });
+$("toCheck").addEventListener("click", () => go("check"));
+async function pollJob() {
+  let j;
+  try { j = await api("/api/job"); } catch (e) { return; }
+  const running = j.status === "running";
+  $("runMsg").textContent = running ? j.message : j.status === "done" ? "Finished counting." : j.status === "failed" ? "The count failed." : j.status === "stopped" ? "Stopped." : "";
+  $("runBar").style.width = `${j.pct || 0}%`;
+  $("runEta").innerHTML = running ? `${Math.round(j.pct)}% · ${fmtDur(j.elapsed_s)} so far · ${j.eta_s != null ? `about ${fmtDur(j.eta_s)} to go` : "working out the time left"}`
+    : j.error ? `<span class="err">${esc(j.error)}</span>` : "";
+  $("log").textContent = (j.log || []).join("\n"); $("log").scrollTop = 1e9;
+  $("start").hidden = running; $("stop").hidden = !running;
+  $("start").textContent = W.st.job.status === "idle" ? "Start counting" : "Count again";
+  if (running && W.polls++ % 3 === 0) {
+    const cam = W.st.cameras.find((c) => c.sensor === j.camera) || W.st.cameras[0];
+    const t = Math.min(W.st.duration_s - 0.5, (j.stage_pct || 0) / 100 * W.st.duration_s);
+    $("preview").src = `/api/preview.jpg?picture=${cam.picture}&t=${t.toFixed(1)}&k=${Date.now()}`;
+    $("previewCap").textContent = `${cam.sensor}, around ${clock(t)}`;
+  }
+  if (!running) {
+    clearInterval(W.timer); W.timer = null;
+    setState(await api("/api/state"));
+    if (j.status === "done") {
+      const dirs = W.st.dirs;
+      $("results").innerHTML = (j.results || []).map((r) =>
+        `<div><b>${esc(r.sensor)}</b>: ${dirs.map((d) => `${r[d]} ${LABEL[d].toLowerCase()}`).join(", ")} found` +
+        (r.likely_missed ? `, plus ${r.likely_missed} possible miss(es) to look at` : "") + "</div>").join("") +
+        `<div class="muted" style="margin-top:6px">Next, you look at each one for a second or two and press Y or N.</div>`;
+      $("toCheck").hidden = false;
+    }
+  }
+}
+
+// ---------- check (automatic count) ----------
+ENTER.check = async () => {
+  try { W.ch = await api("/api/check"); } catch (e) { msg(e.message, "err"); return; }
+  W.back = [];
+  nextThing();
+};
+function nextThing() {
+  const ch = W.ch;
+  const i = ch.items.findIndex((it) => !(it.id in ch.answers));
+  if (i >= 0) return showItem(i);
+  if (!ch.watch.length) return showDone();
+  if (!ch.watch_mode) return showWatchPrompt();
+  if (ch.watch_mode === "doing") {
+    const r = ch.watch.find((r) => !ch.watched.includes(r.id));
+    if (r) return showRange(r);
+    api("/api/watch", { mode: "done" }).then((s) => { setState(s); ch.watch_mode = "done"; showDone(); });
+    return;
+  }
+  showDone();
+}
+function play(clip, rate) { V.playbackRate = rate; V.currentTime = clip[0]; V.play().catch(() => {}); }
+function counts() {
+  const c = W.st.counts;
+  return `<div class="nums">${W.st.dirs.map((d) => `<div>${LABEL[d]} verified<b>${c.verified[d]}</b><span class="muted">the tool found ${c.detected[d]}</span></div>`).join("")}</div>`;
+}
+function showItem(i) {
+  const ch = W.ch, it = ch.items[i], dir = it.direction.toUpperCase();
+  W.mode = "item"; W.cur = it;
+  const counted = ch.items.filter((x) => x.kind === "counted"), possible = ch.items.filter((x) => x.kind === "possible");
+  const list = it.kind === "counted" ? counted : possible, k = list.indexOf(it) + 1;
+  play(it.clip, 1);
+  let head, q;
+  if (it.kind === "counted") { head = `Crossing ${k} of ${counted.length}`; q = `The tool counted someone going <span class="pill ${it.direction}">${dir}</span> at ${clock(it.t)} on ${esc(it.camera)}.<br>Is that a real person going ${dir}?`; }
+  else if (it.why === "lost") { head = `Possible miss ${k} of ${possible.length}`; q = `The tool lost a person right at the line at ${clock(it.t)} on ${esc(it.camera)}.<br>Did someone go <span class="pill ${it.direction}">${dir}</span> here?`; }
+  else { head = `Possible miss ${k} of ${possible.length}`; q = `The counting rule rejected this <span class="pill ${it.direction}">${dir}</span> at ${clock(it.t)} on ${esc(it.camera)} (they did not reach the mask zone the way the rule expects).<br>Did someone really go ${dir}?`; }
+  const twin = it.twin ? `<div class="warn" style="margin-top:8px">At the same moment ${esc(it.twin.camera)} already has a crossing (${clock(it.twin.t)}). If it is the same person, press <kbd>N</kbd> so they are counted once.</div>` : "";
+  $("panel").innerHTML = `<div class="muted">${head}</div><div style="font-size:16px;margin-top:6px">${q}</div>${twin}
+    <div class="answer"><button id="yes"><kbd>Y</kbd> Yes</button><button id="no"><kbd>N</kbd> No</button></div>
+    <div class="muted">It loops; press <kbd>R</kbd> to replay from the start.</div>${counts()}`;
+  $("yes").addEventListener("click", () => answer("yes"));
+  $("no").addEventListener("click", () => answer("no"));
+}
+async function answer(a) {
+  const it = W.cur;
+  // One answer at a time, and not within 0.3 s of the last: a double press never
+  // answers the next crossing unseen.
+  if (!it || W.mode !== "item" || W.busy || performance.now() - (W.lastAnswer || 0) < 300) return;
+  W.busy = true;
+  try {
+    setState(await api("/api/answer", { id: it.id, answer: a }));
+    W.ch.answers[it.id] = a; W.back.push(it.id); nextThing();
+  } catch (e) { msg(e.message, "err"); }
+  finally { W.busy = false; W.lastAnswer = performance.now(); }
+}
+async function goBack() {
+  const id = W.back.pop(); if (!id) return;
+  try { setState(await api("/api/answer", { id, answer: null })); delete W.ch.answers[id]; showItem(W.ch.items.findIndex((x) => x.id === id)); }
+  catch (e) { msg(e.message, "err"); }
+}
+function showWatchPrompt() {
+  W.mode = null; V.pause();
+  const c = W.st.counts, mins = fmtDur(c.watch_s / 2);
+  $("panel").innerHTML = `<div style="font-size:16px">All crossings checked.</div>
+    <p>The tool also saw movement near the line that it could not explain: <b>${c.watch_ranges}</b> stretches, about <b>${mins}</b> at 2× speed.
+    People the tool never detected can only be found by watching these. On a busy entrance, watch them.</p>
+    <div class="answer"><button id="wyes" class="primary">Watch them</button><button id="wno">Skip</button></div>${counts()}`;
+  $("wyes").addEventListener("click", async () => { setState(await api("/api/watch", { mode: "doing" })); W.ch.watch_mode = "doing"; nextThing(); });
+  $("wno").addEventListener("click", async () => { setState(await api("/api/watch", { mode: "skipped" })); W.ch.watch_mode = "skipped"; nextThing(); });
+}
+function showRange(r) {
+  W.mode = "range"; W.cur = r;
+  const ch = W.ch, k = ch.watched.length + 1, dirs = W.st.dirs;
+  play([r.start, r.end], 2);
+  const mine = W.st.added.map((a, i) => [a, i]).filter(([a]) => a.range === r.id);
+  $("panel").innerHTML = `<div class="muted">Stretch ${k} of ${ch.watch.length} · ${esc(r.camera)} · ${clock(r.start)}–${clock(r.end)}</div>
+    <div style="font-size:16px;margin-top:6px">Press ${dirs.map((d) => `<kbd>${d === "in" ? "I" : "O"}</kbd> when someone goes ${d.toUpperCase()}`).join(", ")}. Press <kbd>Enter</kbd> when this stretch is done.</div>
+    <div style="margin:10px 0">${mine.length ? mine.map(([a, i]) => `<div><span class="pill ${a.direction}">${a.direction.toUpperCase()}</span> ${clock(a.t)} <a data-rm="${i}">remove</a></div>`).join("") : '<span class="muted">Nobody added in this stretch yet.</span>'}</div>
+    <button id="rdone" class="primary">Done with this stretch ↵</button>${counts()}`;
+  $("rdone").addEventListener("click", rangeDone);
+  $("panel").querySelectorAll("[data-rm]").forEach((el) => el.addEventListener("click", async (e) => {
+    e.preventDefault(); setState(await api("/api/remove-added", { index: +el.dataset.rm })); showRange(r);
+  }));
+}
+async function addCrossing(direction) {
+  const r = W.cur; if (W.mode !== "range" || !W.st.dirs.includes(direction)) return;
+  try {
+    setState(await api("/api/add", { camera: r.camera, t: +V.currentTime.toFixed(2), direction, range: r.id }));
+    msg(`${direction.toUpperCase()} at ${clock(V.currentTime)} added.`, "ok");
+    const t = V.currentTime, playing = !V.paused; showRange(r); V.currentTime = t; if (!playing) V.pause();
+  } catch (e) { msg(e.message, "err"); }
+}
+async function rangeDone() {
+  const r = W.cur;
+  try { setState(await api("/api/watched", { range: r.id, done: true })); W.ch.watched.push(r.id); nextThing(); } catch (e) { msg(e.message, "err"); }
+}
+function showDone() {
+  W.mode = null; V.pause();
+  $("panel").innerHTML = `<div style="font-size:16px">Checking finished.</div>${counts()}
+    <button id="toReport" class="primary">Make the report →</button>`;
+  $("toReport").addEventListener("click", () => go("report"));
+}
+function drawCheck() {
+  const it = W.cur, g = it && W.ch && W.ch.cameras[it.camera];
+  if (!g) return;
+  const t = g.tile, w = t.x1 - t.x0, h = t.y1 - t.y0;
+  const sc = Math.max(0.5, Math.min(2.2, (C.parentElement.clientWidth - 4) / w, (window.innerHeight - 190) / h));
+  if (C.width !== Math.round(w * sc)) { C.width = Math.round(w * sc); C.height = Math.round(h * sc); }
+  if (V.readyState >= 2) ctx.drawImage(V, t.x0, t.y0, w, h, 0, 0, C.width, C.height);
+  overlay(ctx, g, sc);
+  if (W.mode === "item") {
+    const color = it.direction === "in" ? "#3ecf8e" : "#ff7a59";
+    if (it.path && it.path.length) poly(ctx, g, sc, it.path.map((q) => [q[1], q[2]]), color, false, 2);
+    if (it.point) { const [x, y] = [(it.point[0] - t.x0) * sc, (it.point[1] - t.y0) * sc]; ctx.beginPath(); ctx.arc(x, y, 12, 0, 2 * Math.PI); ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.stroke(); }
+    if (V.currentTime >= it.clip[1]) V.currentTime = it.clip[0];
+  } else if (W.mode === "range" && V.currentTime >= it.end && !V.paused) {
+    V.pause(); msg("End of this stretch. Press Enter for the next one, or R to watch it again.", "ok");
+  }
+  $("clock").textContent = `${clock(V.currentTime)} · ${V.playbackRate}×`;
+}
+function poly(c2, g, sc, pts, color, close, width) {
+  if (!pts || pts.length < 2) return;
+  const t = g.tile;
+  c2.beginPath(); pts.forEach(([x, y], k) => { const px = (x - t.x0) * sc, py = (y - t.y0) * sc; k ? c2.lineTo(px, py) : c2.moveTo(px, py); });
+  if (close) c2.closePath(); c2.strokeStyle = color; c2.lineWidth = width; c2.stroke();
+}
+function overlay(c2, g, sc) { poly(c2, g, sc, g.mask, "rgba(200,200,200,.8)", true, 1.5); poly(c2, g, sc, g.line, "#1ec8e8", false, 2.5); }
+
+// ---------- count by hand ----------
+ENTER.hand = async () => {
+  let r;
+  try { r = await api("/api/hand"); } catch (e) { msg(e.message, "err"); return; }
+  setState(r); W.h = { geometry: r.geometry, sum: r.hand };
+  if (!W.hcam || !W.h.geometry[W.hcam]) W.hcam = W.st.cameras[0].sensor;
+  const pos = W.h.sum.positions[W.hcam] || 0;
+  if (V.readyState >= 1) V.currentTime = pos; else V.addEventListener("loadedmetadata", () => (V.currentTime = pos), { once: true });
+  setRate(W.hrate);
+  renderHand();
+  hmsg(`Press <kbd>Space</kbd> to play, and ${keysText()} as each person crosses the line.`);
+};
+function keysText() { return W.st.dirs.map((d) => `<kbd>${d === "in" ? "I" : "O"}</kbd> for ${d.toUpperCase()}`).join(" and "); }
+function camSum() { return W.h.sum.cameras.find((c) => c.sensor === W.hcam); }
+function applyHand(r) { if (W.st && r.version < W.st.version) return; setState(r); W.h.sum = r.hand; renderHand(); }
+function renderHand() {
+  if (!W.h) return;
+  const dirs = W.st.dirs, cs = camSum();
+  $("handCams").innerHTML = "";
+  W.h.sum.cameras.forEach((c, i) => {
+    const b = document.createElement("button");
+    if (c.sensor === W.hcam) b.className = "on";
+    b.innerHTML = `<kbd>${i + 1}</kbd> ${esc(c.sensor)} · ${dirs.map((d) => `${c[d]} ${d}`).join(" / ")} · watched ${c.watched_pct}%`;
+    b.addEventListener("click", () => hswitch(c.sensor));
+    $("handCams").appendChild(b);
+  });
+  $("hnums").innerHTML = dirs.map((d) => `<div class="${d}">${LABEL[d]}<b>${cs[d]}</b></div>`).join("");
+  const gaps = cs.unwatched.slice(0, 5).map(([a, b]) => `<a data-seek="${a}">${clock(a)}–${clock(b)}</a>`).join(", ");
+  $("hwatched").innerHTML = `Watched ${cs.watched_pct}% of this camera` + (cs.unwatched.length ? `. Not watched yet: ${gaps}${cs.unwatched.length > 5 ? " …" : ""}` : ": all of it.");
+  const mine = W.h.sum.counts.filter((c) => c.camera === W.hcam).sort((a, b) => b.t - a.t || b.id - a.id);
+  $("hlist").innerHTML = mine.length ? mine.map((c) =>
+    `<div><span class="pill ${c.direction}">${c.direction.toUpperCase()}</span><a data-t="${c.t}">${clock(c.t)}</a><span style="flex:1"></span><a data-hdel="${c.id}">remove</a></div>`).join("")
+    : '<span class="muted">none yet</span>';
+  $("speeds").innerHTML = HR.map((r) => `<button data-rate="${r}" class="${V.playbackRate === r ? "on" : ""}">${r}×</button>`).join("");
+  $("hkeys").innerHTML = `${keysText()} · <kbd>Z</kbd> undo · <kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> 2 s (<kbd>⇧</kbd> 0.1 s) · <kbd>↑</kbd>/<kbd>↓</kbd> speed` + (W.st.cameras.length > 1 ? ` · <kbd>1</kbd>–<kbd>${W.st.cameras.length}</kbd> camera` : "");
+}
+function setRate(r) { W.hrate = r; V.playbackRate = r; V.defaultPlaybackRate = r; document.querySelectorAll("#speeds [data-rate]").forEach((b) => b.classList.toggle("on", +b.dataset.rate === r)); }
+async function hcount(direction) {
+  if (!W.st.dirs.includes(direction)) return;
+  const t = +V.currentTime.toFixed(2), cam = W.hcam;
+  const twin = W.h.sum.counts.some((c) => c.camera === cam && c.direction === direction && Math.abs(c.t - t) < 0.3);
+  W.flash = { text: `${direction.toUpperCase()} +1`, dir: direction, until: performance.now() + 700 };
+  try {
+    applyHand(await api("/api/hand/add", { camera: cam, t, direction }));
+    if (twin) hmsg(`That is a second ${direction.toUpperCase()} at the same moment. Two people together? Keep it. A double press? Press <kbd>Z</kbd>.`, "warn");
+    else hmsg(`${direction.toUpperCase()} at ${clock(t)} saved.`, "ok");
+  } catch (e) { hmsg(esc(e.message), "err"); }
+}
+async function hundo() {
+  try {
+    const r = await api("/api/hand/undo", { camera: W.hcam }); applyHand(r);
+    hmsg(r.removed ? `Removed the ${r.removed.direction.toUpperCase()} at ${clock(r.removed.t)}.` : "Nothing to undo on this camera.", r.removed ? "ok" : "muted");
+  } catch (e) { hmsg(esc(e.message), "err"); }
+}
+function htrack() {
+  if (V.paused || !W.h) return;
+  const now = V.currentTime, g = W.hseg, rate = V.playbackRate;
+  if (!g || g.cam !== W.hcam || now < g.last - 0.05 || now - g.last > Math.max(3, 2 * rate)) { hflush(); W.hseg = { cam: W.hcam, from: now, last: now }; return; }
+  g.last = now;
+  if (g.last - g.from >= Math.max(5, 5 * rate)) hflush(true);
+}
+function hflush(keep) {
+  const g = W.hseg;
+  if (!g) return;
+  if (g.last - g.from > 0.2) api("/api/hand/watched", { camera: g.cam, start: g.from, end: g.last }).then(applyHand).catch(() => {});
+  W.hseg = keep ? { cam: g.cam, from: g.last, last: g.last } : null;
+}
+function hswitch(sensor) {
+  if (sensor === W.hcam) return;
+  hflush(); api("/api/hand/position", { camera: W.hcam, t: V.currentTime }).catch(() => {});
+  W.hcam = sensor; V.currentTime = W.h.sum.positions[sensor] || 0; renderHand();
+  hmsg(`Now counting ${esc(sensor)}.`, "ok");
+}
+// Watched time starts the moment playback starts or lands after a jump, and runs to the
+// moment it stops: at 16x the page hears about playback only every few seconds.
+function hstart() { if (W.key === "hand" && W.h && !V.paused) W.hseg = { cam: W.hcam, from: V.currentTime, last: V.currentTime }; }
+V.addEventListener("play", hstart);
+V.addEventListener("seeked", hstart);
+V.addEventListener("timeupdate", () => { if (W.key === "hand") htrack(); });
+V.addEventListener("seeking", () => { if (W.key === "hand") hflush(); });
+V.addEventListener("pause", () => {
+  if (W.key !== "hand" || !W.h) return;
+  if (W.hseg && !V.seeking && V.currentTime >= W.hseg.last) W.hseg.last = V.currentTime;
+  hflush(); api("/api/hand/position", { camera: W.hcam, t: V.currentTime }).then(applyHand).catch(() => {});
+});
+V.addEventListener("ended", () => { if (W.key === "hand") hmsg("End of the video for this camera. Check the watched share, then switch camera or finish.", "ok"); });
+window.addEventListener("pagehide", () => {
+  const g = W.hseg;
+  if (W.key === "hand" && g && g.last - g.from > 0.2)
+    navigator.sendBeacon("/api/hand/watched", new Blob([JSON.stringify({ camera: g.cam, start: g.from, end: g.last })], { type: "application/json" }));
+});
+$("hplay").addEventListener("click", () => (V.paused ? V.play().catch(() => {}) : V.pause()));
+$("speeds").addEventListener("click", (e) => { const b = e.target.closest("[data-rate]"); if (b) setRate(+b.dataset.rate); });
+TL.addEventListener("click", (e) => { const r = TL.getBoundingClientRect(); V.currentTime = (e.clientX - r.left) / r.width * W.st.duration_s; });
+$("handDone").addEventListener("click", async () => {
+  hflush();
+  const low = W.h.sum.cameras.filter((c) => c.watched_pct < 99);
+  if (low.length && !confirm(`Not fully watched: ${low.map((c) => `${c.sensor} ${c.watched_pct}%`).join(", ")}.\nCrossings in the unwatched parts will be missing from the count. Finish anyway?`)) return;
+  try { applyHand(await api("/api/hand/done", { done: true })); go(nextKey()); } catch (e) { hmsg(esc(e.message), "err"); }
+});
+function drawHand() {
+  const g = W.h && W.h.geometry[W.hcam]; if (!g) return;
+  const t = g.tile, w = t.x1 - t.x0, h = t.y1 - t.y0;
+  const sc = Math.max(0.5, Math.min(2.2, (HC.parentElement.clientWidth - 4) / w, (window.innerHeight - 280) / h));
+  if (HC.width !== Math.round(w * sc)) { HC.width = Math.round(w * sc); HC.height = Math.round(h * sc); }
+  if (V.readyState >= 2) hctx.drawImage(V, t.x0, t.y0, w, h, 0, 0, HC.width, HC.height);
+  overlay(hctx, g, sc);
+  const f = W.flash;
+  if (f && performance.now() < f.until) {
+    hctx.font = "bold 46px system-ui, sans-serif"; hctx.lineWidth = 6; hctx.strokeStyle = "rgba(0,0,0,.7)";
+    hctx.strokeText(f.text, 18, HC.height - 22);
+    hctx.fillStyle = f.dir === "in" ? "#3ecf8e" : "#ff7a59"; hctx.fillText(f.text, 18, HC.height - 22);
+  }
+  $("hclock").textContent = `${clock(V.currentTime)}${W.st.tz ? " " + W.st.tz : ""} (${fmtHms(V.currentTime)} of ${fmtHms(W.st.duration_s)})`;
+  $("hplay").textContent = V.paused ? "Play" : "Pause";
+  const cs = camSum(), d = Math.max(1, W.st.duration_s), tw = TL.clientWidth, th = TL.height;
+  if (TL.width !== tw) TL.width = tw;
+  tctx.fillStyle = "#2b333d"; tctx.fillRect(0, 0, tw, th);
+  tctx.fillStyle = "rgba(77,163,255,.55)";
+  for (const [a, b] of cs.watched) tctx.fillRect(a / d * tw, 7, Math.max(1, (b - a) / d * tw), th - 14);
+  if (W.hseg && W.hseg.cam === W.hcam) tctx.fillRect(W.hseg.from / d * tw, 7, Math.max(1, (W.hseg.last - W.hseg.from) / d * tw), th - 14);
+  for (const c of W.h.sum.counts) {
+    if (c.camera !== W.hcam) continue;
+    tctx.fillStyle = c.direction === "in" ? "#3ecf8e" : "#ff7a59"; tctx.fillRect(c.t / d * tw - 1, 0, 2, th);
+  }
+  tctx.fillStyle = "#ffffff"; tctx.fillRect(V.currentTime / d * tw - 1, 0, 3, th);
+}
+async function hdelete(id) { try { applyHand(await api("/api/hand/delete", { id })); hmsg("Count removed.", "ok"); } catch (e) { hmsg(esc(e.message), "err"); } }
+
+function draw() {
+  if (W.key === "check") drawCheck();
+  else if (W.key === "hand") drawHand();
+  requestAnimationFrame(draw);
+}
+
+// ---------- keys and clicks ----------
+window.addEventListener("keydown", (e) => {
+  const a = document.activeElement; if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA")) return;
+  if (W.key !== "check" && W.key !== "hand") return;
+  if (e.repeat && !e.key.startsWith("Arrow")) { e.preventDefault(); return; }  // a held key acts once
+  const k = e.key.toLowerCase(), go_ = (fn) => { e.preventDefault(); fn(); };
+  if (k === " " || e.code === "Space") go_(() => (V.paused ? V.play().catch(() => {}) : V.pause()));
+  else if (W.key === "hand") {
+    if (k === "i") go_(() => hcount("in"));
+    else if (k === "o") go_(() => hcount("out"));
+    else if (k === "z" || k === "backspace") go_(hundo);
+    else if (k === "arrowleft") go_(() => (V.currentTime = Math.max(0, V.currentTime - (e.shiftKey ? 0.1 : 2))));
+    else if (k === "arrowright") go_(() => (V.currentTime = Math.min(W.st.duration_s, V.currentTime + (e.shiftKey ? 0.1 : 2))));
+    else if (k === "arrowup") go_(() => setRate(HR[Math.min(HR.length - 1, HR.indexOf(V.playbackRate) + 1)] ?? 1));
+    else if (k === "arrowdown") go_(() => setRate(HR[Math.max(0, HR.indexOf(V.playbackRate) - 1)] ?? 1));
+    else if (/^[1-9]$/.test(k) && +k <= W.st.cameras.length) go_(() => hswitch(W.st.cameras[+k - 1].sensor));
+  } else {
+    if (k === "y") go_(() => answer("yes"));
+    else if (k === "n") go_(() => answer("no"));
+    else if (k === "z" || k === "backspace") go_(goBack);
+    else if (k === "r") go_(() => { if (W.cur) { V.currentTime = W.mode === "item" ? W.cur.clip[0] : W.cur.start; V.play().catch(() => {}); } });
+    else if (k === "arrowleft") go_(() => (V.currentTime = Math.max(0, V.currentTime - 1)));
+    else if (k === "arrowright") go_(() => (V.currentTime += 1));
+    else if (k === "arrowup") go_(() => (V.playbackRate = RATES[Math.min(RATES.length - 1, RATES.indexOf(V.playbackRate) + 1)] || 2));
+    else if (k === "arrowdown") go_(() => (V.playbackRate = RATES[Math.max(0, RATES.indexOf(V.playbackRate) - 1)] || 1));
+    else if (k === "i") go_(() => addCrossing("in"));
+    else if (k === "o") go_(() => addCrossing("out"));
+    else if ((k === "enter" || k === "return") && W.mode === "range") go_(rangeDone);
+  }
+});
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-t],[data-hdel],[data-seek],#reveal");
+  if (!el) return;
+  e.preventDefault();
+  if (el.id === "reveal") api("/api/reveal", {}).catch(() => {});
+  else if (el.dataset.hdel) hdelete(+el.dataset.hdel);
+  else if (el.dataset.seek) V.currentTime = +el.dataset.seek;
+  else { V.currentTime = Math.max(0, +el.dataset.t - 3); V.play().catch(() => {}); }
+});
+
+// ---------- report ----------
+ENTER.report = async () => {
+  const s = W.st, st = s.store, c = s.counts, manual = s.mode === "manual";
+  $("storeName").value = st.name; $("storeCode").value = st.code; $("storeLoc").value = st.location;
+  $("repDate").value = st.report_date || new Date().toLocaleDateString("en-GB"); $("operator").value = st.operator || "";
+  $("numbers").innerHTML = `<div class="nums">${s.dirs.map((d) => {
+    const acc = c.accuracy[d];
+    return `<div>${LABEL[d]}<b>${c.verified[d]} ${manual ? "counted" : "verified"}</b>RetailNext ${s.sensor[d]} · accuracy ${acc.accuracy_pct == null ? "–" : acc.accuracy_pct + "%"}</div>`;
+  }).join("")}</div>`;
+  $("logoInfo").textContent = s.logo ? `Logo: ${s.logo}` : "No logo file found (assets/logo.png): the report header will show the company name as text.";
+  W.settings = await api("/api/settings").catch(() => ({ examples_dir: "" }));
+  $("exDir").value = W.settings.examples_dir || "";
+  showExamples(s.examples);
+  $("made").innerHTML = s.report ? madeHtml(s.report.path) : "";
+};
+function showExamples(ex) {
+  $("exStatus").innerHTML = !ex ? ($("exDir").value.trim() ? "" : '<span class="muted">No examples folder set: learning examples will not be saved.</span>')
+    : ex.status === "saving" ? '<span class="muted">Saving learning examples…</span>'
+    : ex.status === "saved" ? `<span class="ok">Saved ${ex.count} learning examples (${ex.positives} crossings, ${ex.negatives} without) to ${esc(ex.folder)}.</span>`
+    : `<span class="err">Learning examples not saved: ${esc(ex.error)}</span>`;
+}
+function madeHtml(path) {
+  const name = path.split(/[\\/]/).pop();
+  return `<div class="ok">Report saved.</div><div><a href="/api/report.pptx?k=${Date.now()}" download style="color:var(--accent)">Download ${esc(name)}</a></div>
+    <div class="muted" style="font-size:12px;margin-top:4px">${esc(path)}</div><button id="reveal" style="margin-top:8px">Show the file</button>`;
+}
+$("make").addEventListener("click", async () => {
+  msg("Making the report: picking the busiest moment, taking snapshots of each crossing…");
+  $("make").disabled = true;
+  try {
+    const dir = $("exDir").value.trim();
+    if (dir !== (W.settings.examples_dir || "")) W.settings = await api("/api/settings", { examples_dir: dir });
+    setState(await api("/api/store", { name: $("storeName").value, code: $("storeCode").value, location: $("storeLoc").value,
+                                         report_date: $("repDate").value, operator: $("operator").value }));
+    const r = await api("/api/report", {});
+    setState(r); $("made").innerHTML = madeHtml(r.path); msg(""); showExamples(r.examples);
+    while (W.st.examples && W.st.examples.status === "saving") {
+      await new Promise((ok) => setTimeout(ok, 2000));
+      const ex = (await api("/api/examples")).examples; W.st.examples = ex; showExamples(ex);
+    }
+  } catch (e) { msg(e.message, "err"); }
+  finally { $("make").disabled = false; }
+});
+
+(async function init() {
+  try { setState(await api("/api/state")); } catch (e) { /* no footage chosen yet */ }
+  go(W.st ? nextKey() : "footage");  // a reload carries on where the count is
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>

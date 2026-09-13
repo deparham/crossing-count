@@ -1,0 +1,30 @@
+# Footage never enters the repo. It is a retailer's CCTV.
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.MOV
+*.MP4
+*.h264
+*.h265
+*.dav
+
+# Pipeline outputs (derived from footage)
+runs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Model weights (downloaded once, kept local)
+models/
+*.pt
+
+# App settings and packaging output
+settings.json
+build/
+dist/
