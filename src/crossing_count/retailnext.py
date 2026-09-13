@@ -22,9 +22,10 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import keyring
 import keyring.errors
@@ -185,21 +186,81 @@ def locations(conn: Connection, types: list[str] | None = None) -> list[dict[str
     return [n for g in groups for n in (g if isinstance(g, list) else [g]) if isinstance(n, dict)]
 
 
+def _utc(at: datetime) -> str:
+    return at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def traffic_request(location_uuids: list[str], day: date, start: str, until: str,
-                    minutes: int = 15) -> dict[str, Any]:
-    """Traffic in and out for part of one day, per `minutes`: the documented full-day
-    request with its time range narrowed to the footage's (store time, "HH:MM")."""
-    return {"metrics": ["traffic_in", "traffic_out"],
-            "date_ranges": [{"from": {"gregorian": f"{day.isoformat()}T00:00:00Z"},
-                             "to": {"gregorian": f"{(day + timedelta(days=1)).isoformat()}T00:00:00Z"}}],
-            "time_ranges": [{"from": start, "until": until}],
-            "group_bys": [{"group": "time", "unit": "minutes", "value": minutes}],
-            "locations": location_uuids}
+                    minutes: int = 15, time_zone: str | None = None) -> dict[str, Any]:
+    """Traffic in and out for part of one day, per `minutes` ("HH:MM" from and until).
+
+    With the store's time zone (IANA, from v2/location), the day is that store's local
+    day, given in UTC as the API's gregorian dates are, and the answer's times are the
+    store's own, as the API documents.
+    """
+    if time_zone:
+        tz = ZoneInfo(time_zone)
+        frm = _utc(datetime.combine(day, datetime.min.time(), tz))
+        to = _utc(datetime.combine(day + timedelta(days=1), datetime.min.time(), tz))
+    else:
+        frm, to = f"{day.isoformat()}T00:00:00Z", f"{(day + timedelta(days=1)).isoformat()}T00:00:00Z"
+    body: dict[str, Any] = {
+        "metrics": ["traffic_in", "traffic_out"],
+        "date_ranges": [{"from": {"gregorian": frm}, "to": {"gregorian": to}}],
+        "time_ranges": [{"from": start, "until": until}],
+        "group_bys": [{"group": "time", "unit": "minutes", "value": minutes}],
+        "locations": location_uuids}
+    if time_zone:
+        body["time_zone"] = time_zone
+    return body
 
 
 def traffic(conn: Connection, location_uuids: list[str], day: date, start: str, until: str,
-            minutes: int = 15) -> Any:
-    return request(conn, "v2/datamine", traffic_request(location_uuids, day, start, until, minutes))
+            minutes: int = 15, time_zone: str | None = None) -> Any:
+    return request(conn, "v2/datamine",
+                   traffic_request(location_uuids, day, start, until, minutes, time_zone))
+
+
+def _when(x: Any) -> str | None:
+    if x is None:
+        return None
+    if isinstance(x, dict):
+        return str(x.get("gregorian") or x.get("time") or json.dumps(x, sort_keys=True))
+    return str(x)
+
+
+def traffic_table(answer: Any) -> list[dict[str, Any]]:
+    """A datamine answer grouped by time, as rows: start, finish, in, out, validity.
+
+    Validity is "complete" unless RetailNext marked a value incomplete or imputed (a
+    sensor down, say): such an interval is not a fair comparison. A metric RetailNext
+    could not serve (ok false: usually a location the key does not cover) is an error.
+    """
+    if not isinstance(answer, dict):
+        raise RetailNextError("RetailNext's answer was not what the API documents.")
+    if answer.get("ok") is False:
+        raise RetailNextError(f"RetailNext could not serve the data: "
+                              f"{answer.get('error_detail') or answer.get('error') or 'no reason given'}")
+    names = {"traffic_in": "in", "traffic_out": "out"}
+    rows: dict[str, dict[str, Any]] = {}
+    for metric in answer.get("metrics", []):
+        key = names.get(str(metric.get("name")))
+        if key is None:
+            continue
+        if metric.get("ok") is False:
+            raise RetailNextError(f"RetailNext could not serve {metric.get('name')}: "
+                                  f"{metric.get('error_detail') or metric.get('error') or 'no reason given'} "
+                                  f"(the key's location profile may not include this location)")
+        for point in metric.get("data", []):
+            group = point.get("group") or {}
+            start = _when(group.get("start") or group.get("from"))
+            finish = _when(group.get("finish") or group.get("through") or group.get("until"))
+            row = rows.setdefault(start or f"#{point.get('index')}", {
+                "start": start, "finish": finish, "in": None, "out": None, "validity": "complete"})
+            row[key] = point.get("value")
+            if point.get("validity") not in (None, "complete"):
+                row["validity"] = str(point["validity"])
+    return sorted(rows.values(), key=lambda r: str(r["start"]))
 
 
 def period_of(start: datetime, end: datetime, minutes: int = 15) -> tuple[date, str, str]:

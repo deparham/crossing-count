@@ -38,6 +38,7 @@ from crossing_count.retailnext import (
     save_connection,
     save_raw,
     traffic,
+    traffic_table,
 )
 
 
@@ -91,6 +92,8 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("video", type=Path)
     t.add_argument("--location", help="a location's uuid, from 'locations'")
     t.add_argument("--minutes", type=int, default=15)
+    t.add_argument("--time-zone", help="the store's IANA time zone, e.g. Australia/Brisbane "
+                                       "(found by itself for a store)")
     sub.add_parser("check")
     sub.add_parser("forget")
     args = ap.parse_args(argv)
@@ -136,14 +139,22 @@ def main(argv: list[str] | None = None) -> int:
                 raise RetailNextError("The video's name has no start and end time.")
             day, start, until = period_of(datetime.fromisoformat(span.start),
                                           datetime.fromisoformat(span.end), args.minutes)
+            tz = args.time_zone
             if args.location:
                 where, label = args.location, args.location
             else:
                 store = store_for(conn, args.video)
                 where, label = str(store["uuid"]), str(store.get("name"))
-            print(f"{label}: {day} {start}-{until}, per {args.minutes} minutes")
-            answer = traffic(conn, [where], day, start, until, args.minutes)
-            print(f"Saved {save_raw('traffic', {'query': {'location': where, 'day': str(day), 'from': start, 'until': until, 'minutes': args.minutes}, 'answer': answer})}")
+                tz = tz or store.get("time_zone")
+            print(f"{label}: {day} {start}-{until} ({tz or 'no time zone given'}), per "
+                  f"{args.minutes} minutes")
+            answer = traffic(conn, [where], day, start, until, args.minutes, tz)
+            query = {"location": where, "day": str(day), "from": start, "until": until,
+                     "minutes": args.minutes, "time_zone": tz}
+            print(f"Saved {save_raw('traffic', {'query': query, 'answer': answer})}")
+            for row in traffic_table(answer):
+                flag = "" if row["validity"] == "complete" else f"  ({row['validity']})"
+                print(f"  {row['start']} - {row['finish']}   in {row['in']}   out {row['out']}{flag}")
         elif args.cmd == "forget":
             forget_connection()
             print("The RetailNext key is no longer on this computer.")

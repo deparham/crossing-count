@@ -14,7 +14,7 @@ SCRIPTS = ["gate", "detect", "count", "review", "export", "setup_ui", "proposed"
 # keyring finds the credential store (Credential Manager, Keychain) through its
 # package metadata, so that goes in too.
 datas = (collect_data_files("crossing_count") + collect_data_files("ultralytics")
-         + copy_metadata("keyring"))
+         + copy_metadata("keyring") + collect_data_files("tzdata"))  # tzdata: time zones on Windows
 for folder in ("models", "assets", "sites"):
     if (ROOT / folder).is_dir():
         datas.append((str(ROOT / folder), folder))

@@ -110,6 +110,31 @@ def test_the_traffic_query_follows_the_documented_shape() -> None:
     assert body["group_bys"] == [{"group": "time", "unit": "minutes", "value": 15}]
 
 
+def test_a_store_time_zone_makes_the_day_the_stores_own() -> None:
+    body = rn.traffic_request(["u1"], date(2026, 9, 12), "11:30", "11:45",
+                              time_zone="Australia/Brisbane")
+    assert body["time_zone"] == "Australia/Brisbane"
+    assert body["date_ranges"] == [{"from": {"gregorian": "2026-09-11T14:00:00Z"},
+                                    "to": {"gregorian": "2026-09-12T14:00:00Z"}}]
+
+
+def test_the_answer_as_rows_with_validity() -> None:
+    def point(start: str, finish: str, value: int, validity: str = "complete") -> dict[str, Any]:
+        return {"value": value, "validity": validity, "index": 0,
+                "group": {"type": "time", "start": start, "finish": finish}}
+
+    answer = {"ok": True, "metrics": [
+        {"name": "traffic_in", "ok": True, "data": [point("11:30", "11:45", 20),
+                                                     point("11:45", "12:00", 7, "imputed")]},
+        {"name": "traffic_out", "ok": True, "data": [point("11:30", "11:45", 23),
+                                                      point("11:45", "12:00", 9)]}]}
+    rows = rn.traffic_table(answer)
+    assert [(r["start"], r["in"], r["out"], r["validity"]) for r in rows] == [
+        ("11:30", 20, 23, "complete"), ("11:45", 7, 9, "imputed")]
+    with pytest.raises(rn.RetailNextError, match="location profile"):
+        rn.traffic_table({"ok": True, "metrics": [{"name": "traffic_in", "ok": False}]})
+
+
 def test_the_footage_period_in_whole_intervals() -> None:
     at = datetime.fromisoformat
     assert rn.period_of(at("2026-09-12T11:30:00"), at("2026-09-12T11:45:00")) == (

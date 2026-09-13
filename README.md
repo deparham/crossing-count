@@ -194,6 +194,13 @@ a file, a report, a log or git; only the subscription name goes in
 queries: nothing about the footage is sent. Answers are kept as they came in
 `retailnext/` in the data folder.
 
+`traffic` asks in the store's own time zone (from RetailNext's location list)
+and shows each 15-minute interval's in, out and validity. RetailNext marks an
+interval incomplete or imputed when its data had a problem (a sensor without
+power, say); such an interval is not a fair comparison. The API can also
+export video for chosen channels and times, with or without RetailNext's
+overlay; using that to fetch clean footage is a possible next step.
+
 ## Windows app
 
 The app installs on Windows as a normal program, with a Start-menu and a
