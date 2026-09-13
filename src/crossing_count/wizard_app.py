@@ -137,6 +137,9 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     sites = sites_dir or paths.sites_dir()
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     cur = _Current()
+    from .heads_app import create_label_app  # the head-marking page, at /label/
+
+    app.mount("/label", create_label_app(folders=folders, runs_root=runs_root))
 
     def wiz() -> Wizard:
         if cur.wizard is None:

@@ -19,7 +19,7 @@ from .paths import FROZEN, SOURCE_ROOT, models_dirs, prepare_data_root
 COMMANDS = {
     "gate": "gate", "detect": "detect", "count": "count", "review": "review",
     "export": "export", "setup": "setup_ui", "proposed": "proposed", "trace": "trace_line",
-    "wizard": "wizard",
+    "wizard": "wizard", "label": "label", "train-heads": "train_heads",
 }
 
 

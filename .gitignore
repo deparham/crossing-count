@@ -24,6 +24,10 @@ __pycache__/
 models/
 *.pt
 
+# Marked frames and training runs (camera pictures of people)
+labels/
+training/
+
 # App settings and packaging output
 settings.json
 build/

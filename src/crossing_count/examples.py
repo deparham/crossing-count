@@ -140,13 +140,13 @@ def export_examples(w: Wizard, root: Path) -> dict[str, Any]:
                                  if det["path"] else None}
         write_json_atomic(folder / "meta.json", meta)
         lines.append(json.dumps({
-            "path": str(folder.relative_to(root)), "label": mo["label"],
+            "path": folder.relative_to(root).as_posix(), "label": mo["label"],
             "direction": mo["direction"], "source": mo["source"], "camera": mo["camera"],
             "video": st["filename"], "t_seconds": round(mo["t"], 3), "export_id": export_id},
             ensure_ascii=False))
     # The index keeps one entry per example: this video's earlier entries are replaced.
     index = root / "index.jsonl"
-    prefix = str(video_dir.relative_to(root))
+    prefix = video_dir.relative_to(root).as_posix()  # one form on Mac and Windows alike
     try:
         kept = [line for line in index.read_text(encoding="utf-8").splitlines()
                 if line.strip() and not _in_folder(line, prefix)]

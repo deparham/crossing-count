@@ -9,7 +9,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).parent
 SCRIPTS = ["gate", "detect", "count", "review", "export", "setup_ui", "proposed",
-           "trace_line", "wizard"]
+           "trace_line", "wizard", "label", "train_heads"]
 
 datas = collect_data_files("crossing_count") + collect_data_files("ultralytics")
 for folder in ("models", "assets", "sites"):

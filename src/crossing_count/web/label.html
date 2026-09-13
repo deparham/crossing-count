@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mark heads · crossing-count</title>
+<style>
+  :root { --bg: #101317; --panel: #181d23; --panel2: #20262e; --border: #2b333d; --text: #e7eaee;
+          --muted: #97a1ad; --accent: #4da3ff; --ok: #3ecf8e; --warn: #f5b942; --err: #ff6b6b; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 15px; margin: 0; }
+  .muted { color: var(--muted); } .ok { color: var(--ok); } .warn { color: var(--warn); } .err { color: var(--err); }
+  .bar { width: 220px; height: 10px; background: var(--panel2); border-radius: 5px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--ok); }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit; }
+  button:hover { border-color: var(--accent); } button.primary { background: #1d4f86; border-color: #2d6cb3; }
+  kbd { background: #11151a; border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; font-size: 12px; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; padding: 16px; }
+  @media (max-width: 960px) { main { grid-template-columns: minmax(0, 1fr); } }
+  #c { display: block; background: #000; border-radius: 6px; max-width: 100%; cursor: crosshair; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+  .big { font-size: 22px; font-weight: 600; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+  details { margin-top: 12px; } details li { margin: 4px 0; }
+  #modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; }
+  #modal .card { width: min(900px, 94vw); max-height: 80vh; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; } td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  tr.pick { cursor: pointer; } tr.pick:hover { background: var(--panel2); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mark heads</h1>
+  <div class="bar"><i id="bar"></i></div><span id="prog" class="muted">loading…</span>
+  <button id="addBtn">Add frames from a video</button>
+</header>
+<main>
+  <section>
+    <canvas id="c" width="960" height="720" aria-label="Camera picture to mark"></canvas>
+    <div id="info" class="muted" style="margin-top:6px"></div>
+  </section>
+  <aside class="card">
+    <div class="big" id="count">–</div>
+    <div class="row"><button id="save" class="primary"><kbd>Enter</kbd> Save and next</button></div>
+    <div class="row"><button id="skip"><kbd>S</kbd> Skip picture</button><button id="prev"><kbd>P</kbd> Back</button></div>
+    <div class="row"><button id="smaller"><kbd>[</kbd> Smaller</button><button id="bigger"><kbd>]</kbd> Bigger</button><button id="hide"><kbd>H</kbd> Hide marks</button></div>
+    <div id="msg" style="min-height:1.5em"></div>
+    <details open><summary>How to mark</summary>
+      <ul>
+        <li>Put a circle on <b>every head</b> in the picture: near the door or not, adults, children, staff.</li>
+        <li><span class="warn">Yellow</span> circles are the current detector's guesses. Drag them onto the head, delete wrong ones (right-click, or select and press <kbd>Delete</kbd>), and click to add the heads it missed.</li>
+        <li>Make each circle about the size of the head: mouse wheel over a circle, or <kbd>[</kbd> and <kbd>]</kbd>.</li>
+        <li>Nobody in the picture? Press <kbd>Enter</kbd> anyway: empty pictures teach it too. Blurred or broken picture: <kbd>S</kbd>.</li>
+        <li><kbd>Z</kbd> undoes the last change on this picture.</li>
+      </ul>
+    </details>
+  </aside>
+</main>
+<div id="modal" hidden>
+  <div class="card">
+    <div class="row" style="justify-content:space-between"><b>Add frames from a video</b><button id="closeModal">Close</button></div>
+    <div class="muted">About 30 moments per camera are picked, mostly the busiest. Videos already counted with the wizard come with the detector's guesses.</div>
+    <table id="videos"></table>
+  </div>
+</div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const C = $("c"), ctx = C.getContext("2d");
+const L = { list: [], i: -1, f: null, heads: [], sel: -1, drag: null, r: 14, img: new Image(), scale: 1, hide: false, undo: [], stats: null };
+
+function esc(x) { return String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function msg(t, cls) { $("msg").innerHTML = t ? `<span class="${cls || "muted"}">${esc(t)}</span>` : ""; }
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+  return j;
+}
+function progress(s) {
+  L.stats = s;
+  $("bar").style.width = `${Math.min(100, 100 * s.heads / s.target)}%`;
+  $("prog").textContent = `${s.heads} of ${s.target} heads marked · ${s.done} of ${s.frames} pictures done`;
+}
+async function refresh(keep) {
+  const s = await api("api/state");
+  progress(s); L.list = s.frames_list;
+  if (s.adding.busy) { msg(`Adding frames from ${s.adding.video}…`); setTimeout(() => refresh(true), 2000); }
+  else if (s.adding.error) msg(s.adding.error, "err");
+  if (!keep || L.i < 0) {
+    const next = L.list.findIndex((f) => !f.done && !f.skipped);
+    if (next >= 0) load(next);
+    else if (!L.list.length) { $("info").textContent = "No pictures yet: press “Add frames from a video”."; $("count").textContent = "–"; }
+    else msg("All pictures are marked. Add frames from another video, or train with train_heads.", "ok");
+  }
+}
+async function load(i) {
+  if (i < 0 || i >= L.list.length) return;
+  L.i = i; L.f = await api(`api/frame/${L.list[i].id}`);
+  L.heads = L.f.heads.map(([x, y, r]) => ({ x, y, r, guess: !L.f.done && L.f.prefilled }));
+  if (L.heads.length) L.r = L.heads[0].r;
+  L.sel = -1; L.undo = [];
+  L.img = new Image(); L.img.onload = draw; L.img.src = `api/image/${L.f.id}`;
+  $("info").textContent = `${L.f.camera} · ${L.f.video} · ${L.f.t.toFixed(1)} s · picture ${i + 1} of ${L.list.length}${L.f.done ? " · done" : L.f.skipped ? " · skipped" : ""}`;
+}
+function draw() {
+  if (!L.img.naturalWidth) return;
+  const w = L.img.naturalWidth, h = L.img.naturalHeight;
+  L.scale = Math.max(0.5, Math.min(2.2, (C.parentElement.clientWidth - 4) / w, (window.innerHeight - 120) / h));
+  C.width = Math.round(w * L.scale); C.height = Math.round(h * L.scale);
+  ctx.drawImage(L.img, 0, 0, C.width, C.height);
+  if (!L.hide) L.heads.forEach((p, k) => {
+    ctx.beginPath(); ctx.arc(p.x * L.scale, p.y * L.scale, p.r * L.scale, 0, 2 * Math.PI);
+    ctx.setLineDash(p.guess ? [5, 4] : []); ctx.lineWidth = k === L.sel ? 3 : 2;
+    ctx.strokeStyle = k === L.sel ? "#ffffff" : p.guess ? "#f5b942" : "#3ecf8e"; ctx.stroke();
+  });
+  ctx.setLineDash([]);
+  $("count").textContent = `${L.heads.length} head${L.heads.length === 1 ? "" : "s"} on this picture`;
+}
+function at(e) { const r = C.getBoundingClientRect(); return { x: (e.clientX - r.left) / L.scale, y: (e.clientY - r.top) / L.scale }; }
+function hit(p) {
+  let best = -1, d = Infinity;
+  L.heads.forEach((q, k) => { const dd = Math.hypot(q.x - p.x, q.y - p.y); if (dd <= q.r + 4 && dd < d) { best = k; d = dd; } });
+  return best;
+}
+function snapshot() { L.undo.push(JSON.stringify(L.heads)); if (L.undo.length > 100) L.undo.shift(); }
+C.addEventListener("contextmenu", (e) => e.preventDefault());
+C.addEventListener("mousedown", (e) => {
+  if (!L.f) return;
+  const p = at(e), k = hit(p);
+  if (e.button === 2) { if (k >= 0) { snapshot(); L.heads.splice(k, 1); L.sel = -1; draw(); } return; }
+  snapshot();
+  if (k >= 0) { L.sel = k; L.drag = { dx: L.heads[k].x - p.x, dy: L.heads[k].y - p.y }; }
+  else { L.heads.push({ x: p.x, y: p.y, r: L.r, guess: false }); L.sel = L.heads.length - 1; L.drag = { dx: 0, dy: 0 }; }
+  draw();
+});
+C.addEventListener("mousemove", (e) => {
+  if (!L.drag || L.sel < 0) return;
+  const p = at(e), q = L.heads[L.sel];
+  q.x = Math.max(0, Math.min(L.img.naturalWidth, p.x + L.drag.dx)); q.y = Math.max(0, Math.min(L.img.naturalHeight, p.y + L.drag.dy)); q.guess = false; draw();
+});
+window.addEventListener("mouseup", () => { L.drag = null; });
+C.addEventListener("wheel", (e) => {
+  const k = hit(at(e)); if (k < 0) return;
+  e.preventDefault(); snapshot();
+  const q = L.heads[k]; q.r = Math.max(4, Math.min(60, q.r + (e.deltaY < 0 ? 1 : -1))); q.guess = false; L.r = q.r; L.sel = k; draw();
+}, { passive: false });
+function resize(d) {
+  L.r = Math.max(4, Math.min(60, L.r + d));
+  if (L.sel >= 0) { snapshot(); L.heads[L.sel].r = L.r; L.heads[L.sel].guess = false; }
+  draw(); msg(`New circles: ${L.r} px`);
+}
+async function save(skipped) {
+  if (!L.f) return;
+  try {
+    progress(await api(`api/frame/${L.f.id}`, { heads: L.heads.map((p) => [p.x, p.y, p.r]), done: !skipped, skipped }));
+    L.list[L.i].done = !skipped; L.list[L.i].skipped = skipped; L.list[L.i].heads = L.heads.length;
+    msg(skipped ? "Picture skipped." : `Saved ${L.heads.length} head${L.heads.length === 1 ? "" : "s"}.`, "ok");
+    const next = L.list.findIndex((f, k) => k > L.i && !f.done && !f.skipped);
+    const any = next >= 0 ? next : L.list.findIndex((f) => !f.done && !f.skipped);
+    if (any >= 0) load(any); else { msg("All pictures are marked. Add more, or train with train_heads.", "ok"); load(L.i); }
+  } catch (e) { msg(e.message, "err"); }
+}
+window.addEventListener("keydown", (e) => {
+  if (!$("modal").hidden) { if (e.key === "Escape") $("modal").hidden = true; return; }
+  const k = e.key, go = (fn) => { e.preventDefault(); fn(); };
+  if (e.repeat && k !== "[" && k !== "]") return;
+  if (k === "Enter" || k === "n" || k === "N") go(() => save(false));
+  else if (k === "s" || k === "S") go(() => save(true));
+  else if (k === "p" || k === "P") go(() => load(Math.max(0, L.i - 1)));
+  else if (k === "z" || k === "Z") go(() => { if (L.undo.length) { L.heads = JSON.parse(L.undo.pop()); L.sel = -1; draw(); } });
+  else if ((k === "Delete" || k === "Backspace") && L.sel >= 0) go(() => { snapshot(); L.heads.splice(L.sel, 1); L.sel = -1; draw(); });
+  else if (k === "[") go(() => resize(-1));
+  else if (k === "]") go(() => resize(1));
+  else if (k === "h" || k === "H") go(() => { L.hide = !L.hide; draw(); });
+});
+$("save").addEventListener("click", () => save(false));
+$("skip").addEventListener("click", () => save(true));
+$("prev").addEventListener("click", () => load(Math.max(0, L.i - 1)));
+$("smaller").addEventListener("click", () => resize(-1));
+$("bigger").addEventListener("click", () => resize(1));
+$("hide").addEventListener("click", () => { L.hide = !L.hide; draw(); });
+window.addEventListener("resize", draw);
+$("addBtn").addEventListener("click", async () => {
+  $("modal").hidden = false;
+  const r = await api("api/videos");
+  $("videos").innerHTML = r.videos.map((v) => `<tr class="pick" data-path="${esc(v.path)}"><td>${esc(v.name)}</td><td class="muted">${v.size_mb} MB</td></tr>`).join("") || `<tr><td class="muted">No videos found.</td></tr>`;
+  $("videos").querySelectorAll("tr.pick").forEach((tr) => tr.addEventListener("click", async () => {
+    $("modal").hidden = true;
+    try { await api("api/add", { path: tr.dataset.path, per_camera: 30 }); msg("Adding frames… this takes about a minute."); setTimeout(() => refresh(L.i >= 0), 2000); }
+    catch (e) { msg(e.message, "err"); }
+  }));
+});
+$("closeModal").addEventListener("click", () => ($("modal").hidden = true));
+refresh(false);
+</script>
+</body>
+</html>
