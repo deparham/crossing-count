@@ -81,6 +81,20 @@
 <main>
 
 <section id="s-footage">
+  <div class="card" id="rnCard" hidden>
+    <div class="big">Get footage from RetailNext</div>
+    <div class="muted">Pick the store and the day: the tool finds the busiest stretch for the traffic you validate, then downloads it, clean for an automatic count, with RetailNext's marks for a count by hand.</div>
+    <div class="grid2" style="margin-top:10px">
+      <label>Store <input id="rnStore" list="rnStores" placeholder="e.g. CN-123" autocomplete="off"></label>
+      <label>Day <input type="date" id="rnDay"></label>
+      <label>Length <select id="rnMinutes"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">1 hour</option></select></label>
+      <label>Traffic <select id="rnDir"><option value="out">Out</option><option value="in">In</option><option value="both">In and out</option></select></label>
+      <label>Count <select id="rnMode"><option value="auto">Automatic (clean footage)</option><option value="manual">By hand (with RetailNext's marks)</option></select></label>
+    </div>
+    <datalist id="rnStores"></datalist>
+    <button id="rnFind" class="primary" style="margin-top:10px">Find the busiest time</button>
+    <div id="rnWindows"></div>
+  </div>
   <div class="card">
     <div class="big">Where is the footage?</div>
     <div class="muted">Pick the RetailNext export, with or without the sensor's marks. Videos in Downloads, Desktop, Movies and Videos are listed, newest first.</div>
@@ -313,6 +327,7 @@ function go(key) {
 
 // ---------- footage ----------
 ENTER.footage = async (folder) => {
+  rnSetup();
   const r = await api(`/api/videos${folder ? "?folder=" + encodeURIComponent(folder) : ""}`);
   $("videos").innerHTML = r.videos.length
     ? `<tr><th>Video</th><th>Changed</th><th>Size</th></tr>` + r.videos.map((v) =>
@@ -326,6 +341,58 @@ async function openVideo(path) {
   try { setState(await api("/api/open", { path })); msg(""); W.hcam = null; go(nextKey()); }
   catch (e) { msg(e.message, "err"); }
 }
+// ---------- footage from RetailNext ----------
+const RN_DIR = { in: "traffic in", out: "traffic out", both: "traffic in and out" };
+async function rnSetup() {
+  let st;
+  try { st = await api("/api/retailnext"); } catch (e) { return; }
+  $("rnCard").hidden = !st.connected;
+  if (!st.connected) return;
+  if (!$("rnDay").value) $("rnDay").value = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+  if (W.rnStores) return;
+  try {
+    W.rnStores = (await api("/api/retailnext/stores")).stores;
+    $("rnStores").innerHTML = W.rnStores.map((s) => `<option value="${esc(s.code)}">${esc(s.name)}</option>`).join("");
+  } catch (e) { msg(e.message, "err"); }
+}
+$("rnFind").addEventListener("click", async () => {
+  const pick = { code: $("rnStore").value.trim(), date: $("rnDay").value, minutes: +$("rnMinutes").value, direction: $("rnDir").value };
+  if (!pick.code || !pick.date) { msg("Pick the store and the day.", "warn"); return; }
+  $("rnWindows").innerHTML = '<div class="muted" style="margin-top:8px">Asking RetailNext…</div>';
+  try {
+    const r = await api("/api/retailnext/busiest", pick);
+    W.rnPick = { ...pick, windows: r.windows };
+    $("rnWindows").innerHTML = !r.windows.length ? '<div class="muted" style="margin-top:8px">RetailNext has no traffic for that day.</div>'
+      : `<div class="muted" style="margin-top:8px">${esc(r.store)}: the busiest ${pick.minutes} minutes for ${RN_DIR[pick.direction]} on ${esc(pick.date)}</div>` +
+        r.windows.map((w, i) => `<div style="display:flex;gap:12px;align-items:center;margin-top:6px"><b>${esc(w.start)}–${esc(w.until)}</b>` +
+          `<span>${w.in} in · ${w.out} out${w.validity !== "complete" ? ` <span class="warn">(RetailNext: ${esc(w.validity)})</span>` : ""}</span>` +
+          `<button data-win="${i}">${i ? "Download" : "Download the busiest"}</button></div>`).join("");
+  } catch (e) { $("rnWindows").innerHTML = ""; msg(e.message, "err"); }
+});
+$("rnWindows").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-win]");
+  if (!b || !W.rnPick) return;
+  const p = W.rnPick, w = p.windows[+b.dataset.win], mode = $("rnMode").value;
+  try { await api("/api/retailnext/download", { code: p.code, date: p.date, start: w.start, until: w.until, marks: mode === "manual" }); }
+  catch (err) { msg(err.message, "err"); return; }
+  $("rnWindows").innerHTML = '<div id="rnJob" class="muted" style="margin-top:8px">RetailNext is preparing the video…</div>';
+  const poll = async () => {
+    let j;
+    try { j = await api("/api/retailnext/download"); } catch (err) { setTimeout(poll, 3000); return; }
+    if (j.state === "failed") { $("rnJob").innerHTML = `<span class="err">${esc(j.message)}</span>`; return; }
+    if (j.state === "done") {  // open it with the choices already made above
+      $("rnJob").textContent = "Downloaded. Opening…";
+      await openVideo(j.path);
+      try { setState(await api("/api/mode", { mode })); setState(await api("/api/direction", { direction: p.direction })); go(nextKey()); }
+      catch (err) { msg(err.message, "err"); }
+      return;
+    }
+    $("rnJob").textContent = j.state === "downloading"
+      ? `Downloading… ${j.total ? Math.round(100 * j.done / j.total) + "%" : (j.done / 1e6).toFixed(0) + " MB"}` : j.message;
+    setTimeout(poll, 3000);
+  };
+  poll();
+});
 $("look").addEventListener("click", () => ENTER.footage($("folder").value.trim()));
 $("folder").addEventListener("keydown", (e) => { if (e.key === "Enter") ENTER.footage($("folder").value.trim()); });
 

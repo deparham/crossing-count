@@ -7,6 +7,7 @@ import io
 import json
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import date, datetime
 from pathlib import Path
@@ -14,13 +15,18 @@ from typing import Any, Self
 
 import keyring
 import pytest
+from fastapi.testclient import TestClient
 
 from crossing_count import retailnext as rn
+from crossing_count import video as vid
+from crossing_count.wizard_app import create_wizard_app
 
 
 class Reply:
-    def __init__(self, body: Any) -> None:
-        self.body = json.dumps(body).encode()
+    def __init__(self, body: Any, status: int = 200, headers: dict[str, str] | None = None) -> None:
+        self.buf = io.BytesIO(body if isinstance(body, bytes) else json.dumps(body).encode())
+        self.status = status
+        self.headers = headers or {}
 
     def __enter__(self) -> Self:
         return self
@@ -28,12 +34,14 @@ class Reply:
     def __exit__(self, *exc: object) -> None:
         return None
 
-    def read(self) -> bytes:
-        return self.body
+    def read(self, n: int = -1) -> bytes:
+        return self.buf.read(n)
 
 
-def http_error(code: int, text: str = "") -> urllib.error.HTTPError:
-    return urllib.error.HTTPError("https://x", code, "err", None, io.BytesIO(text.encode()))  # type: ignore[arg-type]
+def http_error(code: int, text: str = "", headers: dict[str, str] | None = None
+               ) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError("https://x", code, "err", headers or {},  # type: ignore[arg-type]
+                                  io.BytesIO(text.encode()))
 
 
 @pytest.fixture
@@ -47,7 +55,7 @@ def server(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
         a = answers.pop(0)
         if isinstance(a, BaseException):
             raise a
-        return Reply(a)
+        return a if isinstance(a, Reply) else Reply(a)
 
     monkeypatch.setattr(rn, "_open", fake_open)
     monkeypatch.setattr(time, "sleep", lambda s: None)
@@ -141,7 +149,108 @@ NODES: list[dict[str, Any]] = [
     {"uuid": "e1", "location_type": "entrance", "parent_uuid": "s1", "name": "CN-123-PB1"},
     {"uuid": "e2", "location_type": "entrance", "parent_uuid": "s1", "name": "CN-123-R2"},
     {"uuid": "t1", "type": "traffic", "parent_uuid": "e1", "name": "CN-123-PB1 Traffic 1"},
+    {"uuid": "v1", "type": "video", "parent_uuid": "e1", "name": "CN-123-PB1"},
+    {"uuid": "v2", "type": "video", "parent_uuid": "e2", "name": "CN-123-R2"},
 ]
+
+
+def test_the_busiest_window_for_the_traffic_validated() -> None:
+    def row(start: str, finish: str, i: int, o: int, validity: str = "complete") -> dict[str, Any]:
+        return {"start": start, "finish": finish, "in": i, "out": o, "validity": validity}
+
+    rows = [row("10:00", "10:15", 5, 1), row("10:15", "10:30", 9, 2), row("10:30", "10:45", 1, 9),
+            row("10:45", "11:00", 2, 8, "imputed"), row("11:30", "11:45", 3, 3)]  # a gap at 11:00
+    assert [w["start"] for w in rn.busiest(rows, 15, "out")] == ["10:30", "10:45", "11:30"]
+    top = rn.busiest(rows, 30, "out")
+    assert (top[0]["start"], top[0]["until"], top[0]["out"], top[0]["validity"]) == (
+        "10:30", "11:00", 17, "imputed")
+    assert [w["start"] for w in top] == ["10:30", "10:00"]  # no overlap; none across the gap
+    assert [(w["start"], w["in"]) for w in rn.busiest(rows, 30, "in", top=1)] == [("10:00", 14)]
+    assert [w["start"] for w in rn.busiest(rows, 30, "both")] == ["10:15"]
+    with pytest.raises(rn.RetailNextError, match="multiple of 15"):
+        rn.busiest(rows, 20, "out")
+
+
+def test_footage_is_exported_then_downloaded_without_the_key(
+        server: list[Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    seen = server.pop(0)
+    start, end = rn.local_period(date(2026, 9, 12), "11:30", "11:45", "Australia/Sydney")
+    server.append(Reply({"ok": True}, 201, {"Location": "/v1/video/export/task/abc123"}))
+    assert rn.start_export(CONN, ["v1", "v2"], start, end, marks=False) == "abc123"
+    q = urllib.parse.parse_qs(urllib.parse.urlsplit(seen[0].full_url).query)
+    assert seen[0].get_method() == "POST" and q["channel"] == ["v1", "v2"]
+    assert (q["start"], q["end"]) == (["2026-09-12T01:30:00Z"], ["2026-09-12T01:45:00Z"])
+    assert q["analytics_overlay"] == ["0"] and q["info_overlay"] == ["1"]
+    server.extend([Reply({"status": "NotDone"}, 202),
+                   http_error(302, headers={"Location": "https://storage.example/f.mp4?sig=1"}),
+                   http_error(424, '{"status": "Failed", "failure_reason": "No recorded video"}')])
+    assert rn.export_status(CONN, "abc123") == ("working", "")
+    assert rn.export_status(CONN, "abc123") == ("ready", "https://storage.example/f.mp4?sig=1")
+    assert rn.export_status(CONN, "abc123") == ("failed", "No recorded video")
+
+    fetched: list[urllib.request.Request] = []
+
+    def fake_download(req: urllib.request.Request, timeout: float, context: Any) -> Reply:
+        fetched.append(req)
+        return Reply(b"video-bytes", 200, {"Content-Length": "11"})
+
+    monkeypatch.setattr(rn, "_download_open", fake_download)
+    name = rn.footage_name("CN-123", start, end, marks=False)
+    assert name == "Export - CN-123 - 2026-09-12-113000 AEST to 2026-09-12-114500 AEST.mp4"
+    (tmp_path / name).write_bytes(b"footage already there")
+    dest = rn.free_path(tmp_path, name)
+    assert dest.name.endswith("AEST (2).mp4")  # never overwritten
+    rn.download("https://storage.example/f.mp4?sig=1", dest)
+    assert dest.read_bytes() == b"video-bytes" and not fetched[0].has_header("Authorization")
+    span = vid.parse_filename_interval(dest.name)
+    assert span is not None and span.start == "2026-09-12T11:30:00" and span.tz == "AEST"
+
+
+def test_the_app_finds_the_busiest_time_and_downloads_it(monkeypatch: pytest.MonkeyPatch,
+                                                         tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "settings.json").write_text('{"retailnext_subscription": "acme"}')
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(home))
+    monkeypatch.setattr(rn, "load_connection", lambda: CONN)
+    monkeypatch.setattr(rn, "locations", lambda conn, types=None: NODES)
+    rows = [{"start": f"11:{m:02d}", "finish": f"11:{m + 15:02d}", "in": 5, "out": o,
+             "validity": "complete"} for m, o in ((0, 2), (15, 9), (30, 4))]
+    monkeypatch.setattr(rn, "day_traffic", lambda conn, uuid, day, tz, minutes=15: rows)
+    exports: list[tuple[list[str], bool]] = []
+
+    def fake_start(conn: Any, channels: list[str], start: Any, end: Any, marks: bool) -> str:
+        exports.append((channels, marks))
+        return "x1"
+
+    def fake_download(url: str, dest: Path, progress: Any = None) -> Path:
+        dest.write_bytes(b"v")
+        return dest
+
+    monkeypatch.setattr(rn, "start_export", fake_start)
+    monkeypatch.setattr(rn, "export_status", lambda conn, export_id: ("ready", "https://s/f.mp4"))
+    monkeypatch.setattr(rn, "download", fake_download)
+    footage = tmp_path / "footage"
+    footage.mkdir()
+    client = TestClient(create_wizard_app(tmp_path, tmp_path / "runs", [footage]))
+    assert client.get("/api/retailnext").json() == {"connected": True}
+    assert client.get("/api/retailnext/stores").json()["stores"] == [
+        {"code": "CN-123", "name": "Tweed Heads CN-123"}]
+    found = client.post("/api/retailnext/busiest", json={
+        "code": "CN-123", "date": "2026-09-12", "minutes": 15, "direction": "out"}).json()
+    assert (found["windows"][0]["start"], found["windows"][0]["out"]) == ("11:15", 9)
+    client.post("/api/retailnext/download", json={"code": "CN-123", "date": "2026-09-12",
+                                                  "start": "11:15", "until": "11:30", "marks": True})
+    job: dict[str, Any] = {}
+    for _ in range(200):
+        job = client.get("/api/retailnext/download").json()
+        if job["state"] in ("done", "failed"):
+            break
+        time.sleep(0.02)
+    assert job["state"] == "done", job
+    assert Path(job["path"]).name == (
+        "Export - CN-123 marked - 2026-09-12-111500 AEST to 2026-09-12-113000 AEST.mp4")
+    assert exports == [(["v1", "v2"], True)]  # every camera; RetailNext's marks for a hand count
 
 
 def test_each_camera_is_asked_at_its_own_entrance(server: list[Any]) -> None:

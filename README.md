@@ -198,6 +198,19 @@ a file, a report, a log or git; only the subscription name goes in
 queries: nothing about the footage is sent. Answers are kept as they came in
 `retailnext/` in the data folder.
 
+**Getting footage.** Once connected, the wizard's first page has *Get footage
+from RetailNext*: pick the store, the day, the length (15 minutes to an hour),
+the traffic you validate and how you will count. It asks RetailNext for that
+day's 15-minute traffic over opening hours and shows the busiest windows for
+that traffic (most out for an out validation, most in for an in one), on
+RetailNext's own 15-minute boundaries so the comparison is exact. Pick one and
+it exports every camera of the store for that window, clean for an automatic
+count and with RetailNext's marks for a count by hand, downloads it next to
+your other footage (named like RetailNext's own exports, never over another
+file), and opens it with those choices made. Exports are jobs on your
+RetailNext account, which it deletes after 7 days. The key goes only to
+RetailNext: redirects are never followed, and the download link gets no key.
+
 `traffic` asks in the store's own time zone (from RetailNext's location list)
 and shows each 15-minute interval's in, out and validity. RetailNext marks an
 interval incomplete or imputed when its data had a problem (a sensor without

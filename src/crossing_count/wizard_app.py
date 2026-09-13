@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +40,25 @@ class OpenIn(BaseModel):
 
 class RunIn(BaseModel):
     confirm: bool = False  # run a count that was already checked (the check is kept)
+
+
+EXPORT_POLL_S = 5.0  # how often to ask RetailNext whether an export is ready
+EXPORT_WAIT_S = 1800.0  # and for how long, before giving up
+
+
+class BusiestIn(BaseModel):
+    code: str  # the store's code, e.g. CN-123
+    date: str  # YYYY-MM-DD
+    minutes: int = 15
+    direction: str = "out"  # in, out or both: the busiest for the traffic validated
+
+
+class DownloadIn(BaseModel):
+    code: str
+    date: str
+    start: str  # HH:MM, the store's own time
+    until: str
+    marks: bool = False  # with RetailNext's own marks (for a count by hand)
 
 
 class DirectionIn(BaseModel):
@@ -138,6 +160,7 @@ class _Current:
     setup: Setup | None = None
     draw: str | None = None
     rn_nodes: list[dict[str, Any]] | None = None  # RetailNext's locations, fetched once
+    rn_job: dict[str, Any] | None = None  # the footage being exported and downloaded
 
 
 def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = None,
@@ -206,23 +229,127 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     def state() -> dict[str, Any]:
         return public()
 
-    @app.post("/api/retailnext/fetch")
-    def retailnext_fetch() -> dict[str, Any]:
-        """RetailNext's own numbers for these cameras and this period, from its API."""
-        w = wiz()
+    def rn_connection() -> rn.Connection:
         conn = rn.load_connection()
         if conn is None:
             raise HTTPException(400, "Not connected to RetailNext yet: run 'retailnext.py "
                                      "connect' once (in the Windows app: CrossingCount "
                                      "retailnext connect).")
+        return conn
+
+    def rn_locations(conn: rn.Connection) -> list[dict[str, Any]]:
+        if cur.rn_nodes is None:
+            cur.rn_nodes = rn.locations(conn)
+        return cur.rn_nodes
+
+    def rn_day(text: str) -> date:
+        try:
+            return date.fromisoformat(text)
+        except ValueError as exc:
+            raise HTTPException(400, f"{text!r} is not a day (YYYY-MM-DD).") from exc
+
+    @app.get("/api/retailnext")
+    def retailnext_status() -> dict[str, Any]:
+        return {"connected": bool(paths.load_settings().get("retailnext_subscription"))}
+
+    @app.get("/api/retailnext/stores")
+    def retailnext_stores() -> dict[str, Any]:
+        try:
+            nodes = rn_locations(rn_connection())
+        except rn.RetailNextError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        stores = [{"code": str(n["store_id"]), "name": str(n.get("name") or "")} for n in nodes
+                  if n.get("location_type") == "store" and n.get("store_id")
+                  and not n.get("archive_date")]
+        return {"stores": sorted(stores, key=lambda s: s["code"])}
+
+    @app.post("/api/retailnext/busiest")
+    def retailnext_busiest(b: BusiestIn) -> dict[str, Any]:
+        """The busiest windows of the day for the traffic validated, from RetailNext."""
+        conn = rn_connection()
+        day = rn_day(b.date)
+        try:
+            store = rn.find_store(rn_locations(conn), b.code)
+            rows = rn.day_traffic(conn, str(store["uuid"]), day, store.get("time_zone"))
+            windows = rn.busiest(rows, b.minutes, b.direction)
+        except rn.RetailNextError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"store": store.get("name"), "code": store.get("store_id"),
+                "time_zone": store.get("time_zone"), "windows": windows}
+
+    @app.post("/api/retailnext/download")
+    def retailnext_download(b: DownloadIn) -> dict[str, Any]:
+        """Export the store's cameras for that window from RetailNext and download the video
+        (in the background: GET this to follow it)."""
+        if cur.rn_job and cur.rn_job.get("state") in ("exporting", "downloading"):
+            raise HTTPException(409, "A download is already under way.")
+        conn = rn_connection()
+        day = rn_day(b.date)
+        try:
+            nodes = rn_locations(conn)
+            store = rn.find_store(nodes, b.code)
+            tz = store.get("time_zone")
+            if not tz:
+                raise rn.RetailNextError(f"RetailNext gives no time zone for {store.get('name')}.")
+            channels = rn.video_channels(nodes, str(store["uuid"]))
+            if not channels:
+                raise rn.RetailNextError(f"RetailNext lists no video channels for {store.get('name')}.")
+            start, end = rn.local_period(day, b.start, b.until, str(tz))
+        except rn.RetailNextError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        target = next((f for f in (folders or default_folders()) if f.is_dir()),
+                      paths.data_root() / "footage")
+        target.mkdir(parents=True, exist_ok=True)
+        dest = rn.free_path(target, rn.footage_name(str(store.get("store_id") or b.code),
+                                                    start, end, b.marks))
+        job: dict[str, Any] = {"state": "exporting", "message": "RetailNext is preparing the video…",
+                               "done": 0, "total": None, "path": None, "cameras": sorted(channels)}
+        cur.rn_job = job
+
+        def work() -> None:
+            try:
+                export_id = rn.start_export(conn, list(channels.values()), start, end, b.marks)
+                waited = 0.0
+                while True:
+                    state, info = rn.export_status(conn, export_id)
+                    if state == "ready":
+                        break
+                    if state == "failed":
+                        raise rn.RetailNextError(f"RetailNext could not export the video: {info}")
+                    if state == "expired":
+                        raise rn.RetailNextError("RetailNext no longer has this export: try again.")
+                    if waited >= EXPORT_WAIT_S:
+                        raise rn.RetailNextError("RetailNext has not finished the export after "
+                                                 "30 minutes: try again later.")
+                    time.sleep(EXPORT_POLL_S)
+                    waited += EXPORT_POLL_S
+                    job["message"] = f"RetailNext is preparing the video… ({int(waited)} s)"
+                job.update(state="downloading", message="Downloading…")
+                rn.download(info, dest, lambda done, total: job.update(done=done, total=total))
+                job.update(state="done", message="Downloaded.", path=str(dest))
+            except rn.RetailNextError as exc:
+                job.update(state="failed", message=str(exc))
+            except OSError as exc:
+                job.update(state="failed", message=f"Could not save the video: {exc}")
+
+        threading.Thread(target=work, daemon=True).start()
+        return job
+
+    @app.get("/api/retailnext/download")
+    def retailnext_download_status() -> dict[str, Any]:
+        return cur.rn_job or {"state": "idle"}
+
+    @app.post("/api/retailnext/fetch")
+    def retailnext_fetch() -> dict[str, Any]:
+        """RetailNext's own numbers for these cameras and this period, from its API."""
+        w = wiz()
+        conn = rn_connection()
         start, end = w.period()
         if start is None or end is None:
             raise HTTPException(400, "The video's name has no clock time, so RetailNext's "
                                      "numbers cannot be looked up.")
         try:
-            if cur.rn_nodes is None:
-                cur.rn_nodes = rn.locations(conn)
-            got = rn.camera_counts(conn, cur.rn_nodes, w.state["store"]["code"],
+            got = rn.camera_counts(conn, rn_locations(conn), w.state["store"]["code"],
                                    [c["sensor"] for c in w.state["cameras"]], start, end)
         except rn.RetailNextError as exc:
             raise HTTPException(400, str(exc)) from exc
