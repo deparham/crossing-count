@@ -82,6 +82,7 @@ def moments(w: Wizard) -> list[dict[str, Any]]:
         out.append({"label": "crossing" if a == "yes" else "no_crossing",
                     "source": f"{'confirmed' if a == 'yes' else 'rejected'}_{what}",
                     "camera": it["camera"], "t": float(it["t"]), "direction": it["direction"],
+                    "people": int(st.get("people", {}).get(it["id"], 1)) if a == "yes" else 0,
                     "detection": {"id": it["id"], "why": it["why"], "point": it["point"],
                                   "path": it["path"]}})
     for a in st["added"]:
@@ -133,6 +134,8 @@ def export_examples(w: Wizard, root: Path) -> dict[str, Any]:
             "line": local(g["line"]), "mask": local(g["mask"]), "frames": frames,
             "export_id": export_id,
         }
+        if "people" in mo:  # how many crossed together at this moment
+            meta["people"] = mo["people"]
         if "detection" in mo:
             det = mo["detection"]
             meta["detection"] = {**det, "point": local([det["point"]])[0] if det["point"] else None,

@@ -55,6 +55,8 @@
   kbd { background: #11151a; border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; font-size: 12px; }
   .answer { display: flex; gap: 10px; margin: 14px 0; }
   .answer button { flex: 1; font-size: 16px; padding: 12px; }
+  .answer.group { align-items: center; margin-top: -4px; }
+  .answer.group button { font-size: 14px; padding: 8px; }
   .pill { display: inline-block; padding: 0 8px; border-radius: 10px; font-size: 12px; font-weight: 600; border: 1px solid; }
   .pill.in { color: var(--in); } .pill.out { color: var(--out); }
   .nums { display: flex; gap: 12px; flex-wrap: wrap; margin: 10px 0; }
@@ -484,31 +486,33 @@ function showItem(i) {
   const list = it.kind === "counted" ? counted : possible, k = list.indexOf(it) + 1;
   play(it.clip, 1);
   let head, q;
-  if (it.kind === "counted") { head = `Crossing ${k} of ${counted.length}`; q = `The tool counted someone going <span class="pill ${it.direction}">${dir}</span> at ${clock(it.t)} on ${esc(it.camera)}.<br>Is that a real person going ${dir}?`; }
-  else if (it.why === "lost") { head = `Possible miss ${k} of ${possible.length}`; q = `The tool lost a person right at the line at ${clock(it.t)} on ${esc(it.camera)}. These are usually false alarms (about 1 in 10 is real), so a quick look is enough.<br>Did someone go <span class="pill ${it.direction}">${dir}</span> here?`; }
+  if (it.kind === "counted") { head = `Crossing ${k} of ${counted.length}`; q = `The tool counted someone going <span class="pill ${it.direction}">${dir}</span> at ${clock(it.t)} on ${esc(it.camera)}.<br>How many people went ${dir} in this loop?`; }
+  else if (it.why === "lost") { head = `Possible miss ${k} of ${possible.length}`; q = `The tool lost a person right at the line at ${clock(it.t)} on ${esc(it.camera)}. These are usually false alarms (about 1 in 10 is real), so a quick look is enough.<br>How many people went <span class="pill ${it.direction}">${dir}</span> here?`; }
   else {
     const why = { no_filter: "the track never touched the filter zone", returned_same_track: "it looked like one person going out and coming back, but it may be two people",
                   outward_no_mask: "they were not seen in the mask zone before leaving", pending_expired: "they were not seen reaching the mask zone" }[it.why] || "the counting rule rejected it";
     head = `Possible miss ${k} of ${possible.length}`;
-    q = `The tool did not count this <span class="pill ${it.direction}">${dir}</span> at ${clock(it.t)} on ${esc(it.camera)}: ${why}.<br>Did someone really go ${dir}?`;
+    q = `The tool did not count this <span class="pill ${it.direction}">${dir}</span> at ${clock(it.t)} on ${esc(it.camera)}: ${why}.<br>How many people really went ${dir}?`;
   }
   const where = it.twin && it.twin.camera === it.camera ? "on this camera" : `on ${esc(it.twin && it.twin.camera)}`;
   const twin = it.twin ? `<div class="warn" style="margin-top:8px">A ${dir} already counted ${where} at ${clock(it.twin.t)} may be this same person. Same person: press <kbd>N</kbd>, so they are counted once. Someone else (for example in a group): press <kbd>Y</kbd>.</div>` : "";
   $("panel").innerHTML = `<div class="muted">${head}</div><div style="font-size:16px;margin-top:6px">${q}</div>${twin}
-    <div class="answer"><button id="yes"><kbd>Y</kbd> Yes</button><button id="no"><kbd>N</kbd> No</button><button id="unsure"><kbd>U</kbd> Unsure</button></div>
-    <div class="muted">It loops; press <kbd>R</kbd> to replay from the start. Unsure is never counted: the report lists it and gives the count both ways.</div>${counts()}`;
+    <div class="answer"><button id="yes"><kbd>Y</kbd> One</button><button id="no"><kbd>N</kbd> Nobody</button><button id="unsure"><kbd>U</kbd> Unsure</button></div>
+    <div class="answer group"><span class="muted">A group together?</span>${[2, 3, 4, 5].map((n) => `<button data-people="${n}"><kbd>${n}</kbd> people</button>`).join("")}</div>
+    <div class="muted">Count everyone who crosses in the loop. It loops; press <kbd>R</kbd> to replay from the start. Unsure is never counted: the report lists it and gives the count both ways.</div>${counts()}`;
   $("yes").addEventListener("click", () => answer("yes"));
   $("no").addEventListener("click", () => answer("no"));
   $("unsure").addEventListener("click", () => answer("unsure"));
+  $("panel").querySelectorAll("[data-people]").forEach((b) => b.addEventListener("click", () => answer("yes", +b.dataset.people)));
 }
-async function answer(a) {
+async function answer(a, people = 1) {
   const it = W.cur;
   // One answer at a time, and not within 0.3 s of the last: a double press never
   // answers the next crossing unseen.
   if (!it || W.mode !== "item" || W.busy || performance.now() - (W.lastAnswer || 0) < 300) return;
   W.busy = true;
   try {
-    setState(await api("/api/answer", { id: it.id, answer: a }));
+    setState(await api("/api/answer", { id: it.id, answer: a, people }));
     W.ch.answers[it.id] = a; W.back.push(it.id); nextThing();
   } catch (e) { msg(e.message, "err"); }
   finally { W.busy = false; W.lastAnswer = performance.now(); }
@@ -742,6 +746,7 @@ window.addEventListener("keydown", (e) => {
     if (k === "y") go_(() => answer("yes"));
     else if (k === "n") go_(() => answer("no"));
     else if (k === "u") go_(() => answer("unsure"));
+    else if (/^[2-5]$/.test(k)) go_(() => answer("yes", +k));
     else if (k === "z" || k === "backspace") go_(goBack);
     else if (k === "r") go_(() => { if (W.cur) { V.currentTime = W.mode === "item" ? W.cur.clip[0] : W.cur.start; V.play().catch(() => {}); } });
     else if (k === "arrowleft") go_(() => (V.currentTime = Math.max(0, V.currentTime - 1)));

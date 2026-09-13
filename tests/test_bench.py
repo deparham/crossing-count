@@ -38,6 +38,14 @@ def test_each_verified_crossing_is_put_where_the_checker_would_meet_it() -> None
     assert totals([{**clip, "truth": {"independent": False}}], independent_only=True)["clips"] == 0
 
 
+def test_people_crossing_inside_a_questions_loop_can_be_counted_there() -> None:
+    real = [(10.0, "out"), (11.2, "out"), (12.0, "out"), (30.0, "out")]
+    items = [{"kind": "counted", "direction": "out", "t": 10.5, "clip": [8.0, 12.0]}]
+    s = score_camera(real, items, [], ["out"])["out"]
+    assert (s["counted_real"], s["in_loop"], s["never_shown"]) == (1, 2, 1)
+    assert s["in_loop_at"] == [11.2, 12.0] and s["never_shown_at"] == [30.0]
+
+
 @pytest.fixture
 def recorded(two_tile_video: dict[str, Any], review_run_dir: Path, tmp_path: Path) -> Path:
     """A run folder like the wizard leaves: gate and detect outputs, detections recorded."""

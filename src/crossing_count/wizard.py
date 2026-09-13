@@ -59,6 +59,7 @@ def prompt_priority(why: str) -> int:
 CLIP_BEFORE_S = 2.5
 CLIP_AFTER_S = 1.5
 MIN_WATCHED_PCT = 99.0  # a hand count that watched less of a camera's footage is incomplete
+MAX_GROUP = 9  # people one answer can count, when a group crosses together
 FOUND = {  # how each verified crossing came to be counted, for the report
     "detected": "Detected, confirmed",
     "lost": "Track lost at line, confirmed",
@@ -119,6 +120,21 @@ def accuracy_range(sensor: int | None, verified: int, unsure: int) -> list[float
     vals = [a for v in range(verified, verified + unsure + 1)
             if (a := sensor_accuracy(sensor, v)["accuracy_pct"]) is not None]
     return [min(vals), max(vals)] if vals else None
+
+
+def row_numbers(rows: list[dict[str, Any]]) -> list[str]:
+    """The report's numbering, one number per person: a group of 3 after two people is "3–5"."""
+    out, k = [], 1
+    for r in rows:
+        n = int(r.get("people", 1))
+        out.append(str(k) if n == 1 else f"{k}–{k + n - 1}")
+        k += n
+    return out
+
+
+def _found(why: str, people: int) -> str:
+    text = FOUND.get(why, "Rejected by rule, restored")
+    return f"{text} (group of {people})" if people > 1 else text
 
 
 def review_items(camera: str, picture: int, candidates: dict[str, Any], discarded: dict[str, Any],
@@ -402,7 +418,7 @@ class Wizard:
                 "version": 0, "created_at": _now(),
             }
             self._save()
-        for key, value in (("mode", None), ("marks", None), ("examples", None),
+        for key, value in (("mode", None), ("marks", None), ("examples", None), ("people", {}),
                            ("manual", {"counts": [], "watched": {}, "positions": {},
                                        "done": False, "next_id": 1})):
             self.state.setdefault(key, value)
@@ -680,7 +696,7 @@ class Wizard:
             commands = self._commands(self)
             self.state["job"] = {"status": "running", "started_at": _now(), "finished_at": None,
                                  "error": None, "log": []}
-            self.state.update(answers={}, added=[], watched=[], watch=None, report=None)
+            self.state.update(answers={}, people={}, added=[], watched=[], watch=None, report=None)
             self._save()
             self._job = _Job(commands, Progress(cameras=len(self.state["cameras"])),
                              self._finished)
@@ -765,16 +781,23 @@ class Wizard:
         out.sort(key=lambda r: (r["start"], r["picture"]))
         return out
 
-    def answer(self, item_id: str, answer: str | None) -> None:
+    def answer(self, item_id: str, answer: str | None, people: int = 1) -> None:
+        """The checker's answer. A question is about a moment, not one person: "yes" with
+        people above 1 means a group crossed together there, each of them counted."""
         if answer not in ("yes", "no", "unsure", None):
             raise WizardError("answer yes, no or unsure")
+        if not 1 <= people <= MAX_GROUP:
+            raise WizardError(f"a group is 1 to {MAX_GROUP} people")
         if item_id not in {i["id"] for i in self.check_items()}:
             raise WizardError(f"there is no crossing {item_id} to check")
         with self._lock:
+            self.state["people"].pop(item_id, None)
             if answer is None:
                 self.state["answers"].pop(item_id, None)
             else:
                 self.state["answers"][item_id] = answer
+                if answer == "yes" and people > 1:
+                    self.state["people"][item_id] = people
             self._save()
 
     def add(self, sensor: str, t: float, direction: str, range_id: str | None = None) -> None:
@@ -827,7 +850,7 @@ class Wizard:
             c = {"manual": True, "detected": dict.fromkeys(dirs, 0), "verified": verified,
                  "unsure": dict.fromkeys(dirs, 0), "confirmed": 0, "rejected": 0, "found": 0,
                  "not_found": 0, "added": 0, "unanswered": 0, "items": 0, "watch_ranges": 0,
-                 "watch_s": 0.0, "watch_done": 0,
+                 "watch_s": 0.0, "watch_done": 0, "groups": 0, "group_people": 0,
                  "watched_pct": {cam["sensor"]: cam["watched_pct"] for cam in cams},
                  "unwatched_s": round(sum(b - a for cam in cams for a, b in cam["unwatched"]), 1),
                  "checked": bool(m["done"])}
@@ -838,7 +861,8 @@ class Wizard:
         answers = self.state["answers"]
         c = {"detected": dict.fromkeys(dirs, 0), "verified": dict.fromkeys(dirs, 0),
              "unsure": dict.fromkeys(dirs, 0), "confirmed": 0, "rejected": 0, "found": 0,
-             "not_found": 0, "added": 0, "unanswered": 0}
+             "not_found": 0, "added": 0, "unanswered": 0, "groups": 0, "group_people": 0}
+        people = self.state["people"]
         items = self.check_items()
         for it in items:
             if it["kind"] == "counted":
@@ -851,7 +875,11 @@ class Wizard:
                 c["unsure"][it["direction"]] += 1
                 continue
             if a == "yes":
-                c["verified"][it["direction"]] += 1
+                n = int(people.get(it["id"], 1))
+                c["verified"][it["direction"]] += n
+                if n > 1:
+                    c["groups"] += 1
+                    c["group_people"] += n
             if it["kind"] == "counted":
                 c["confirmed" if a == "yes" else "rejected"] += 1
             else:
@@ -907,10 +935,11 @@ class Wizard:
                     for c in self.state["manual"]["counts"] if c["direction"] in self.dirs()]
             rows.sort(key=lambda r: (r["t"], r["picture"]))
             return rows
-        answers = self.state["answers"]
+        answers, people = self.state["answers"], self.state["people"]
         rows = [{"t": it["t"], "camera": it["camera"], "picture": it["picture"],
                  "direction": it["direction"], "point": it["point"],
-                 "found": FOUND.get(it["why"], "Rejected by rule, restored")}
+                 "people": int(people.get(it["id"], 1)),
+                 "found": _found(it["why"], int(people.get(it["id"], 1)))}
                 for it in self.check_items() if answers.get(it["id"]) == "yes"]
         for a in self.state["added"]:
             if a["direction"] in self.dirs():
@@ -1043,6 +1072,7 @@ class Wizard:
         frames = {t: f.image for t, f in zip(times, vid.grab_frames_at(self.video, times),
                                              strict=False)}
         thumbs: list[dict[str, str]] = []
+        numbers = row_numbers(rows)  # the same numbers as the report's table
         for n, r in enumerate(rows, 1):
             frame = frames.get(round(float(r["t"]), 2))
             if frame is None:
@@ -1067,7 +1097,7 @@ class Wizard:
                                   interpolation=cv2.INTER_CUBIC)
             p = out_dir / f"{n:03d}.jpg"
             cv2.imwrite(str(p), crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
-            thumbs.append({"path": str(p), "label": f"{n} · {r['direction'].upper()} "
+            thumbs.append({"path": str(p), "label": f"{numbers[n - 1]} · {r['direction'].upper()} "
                                                     f"{self.clock(r['t'])} · {r['camera']}"})
         return thumbs
 
@@ -1118,6 +1148,9 @@ class Wizard:
                 f"Share of the footage watched: {shares}.",
                 method[-1],
             ]
+        if c.get("groups"):
+            method.insert(3, f"{c['groups']} of the confirmed crossings were groups crossing "
+                             f"together: {c['group_people']} people, each counted.")
         unsure = unsure or []
         if unsure:
             method.insert(3, f"{len(unsure)} crossing(s) were unclear to the checker. They are "
@@ -1143,7 +1176,7 @@ class Wizard:
             "frame": str(frame), "frame_caption": caption,
             "crossings": [{"n": n, "time": self.clock(r["t"]), "camera": r["camera"],
                            "direction": LABELS[r["direction"]], "found": r["found"]}
-                          for n, r in [*enumerate(rows, 1), *(("?", u) for u in unsure)]],
+                          for n, r in [*zip(row_numbers(rows), rows), *(("?", u) for u in unsure)]],
             "thumbs": thumbs, "method": method,
         }
 

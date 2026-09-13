@@ -169,6 +169,37 @@ def test_unwatched_movement_and_unsure_answers(two_tile_video: dict[str, Any],
     assert w.counts()["status"] == "complete" and w.counts()["incomplete"] == []
 
 
+def test_a_group_is_counted_as_its_people(two_tile_video: dict[str, Any], review_run_dir: Path,
+                                          tmp_path: Path) -> None:
+    w = Wizard(two_tile_video["video"], two_tile_video["dir"], tmp_path,
+               copy_outputs(review_run_dir))
+    s = Setup(w.video, two_tile_video["dir"])
+    w.set_cameras(s.existing(), [t.as_dict() for t in s.tiles])
+    w.set_direction("in")
+    w.set_sensor({"in": 3})
+    w.start()
+    wait(w)
+    items = w.check_items()
+    first = next(i for i in items if i["kind"] == "counted")
+    for i in items:
+        w.answer(i["id"], "no")
+    with pytest.raises(WizardError, match="1 to 9"):
+        w.answer(first["id"], "yes", people=0)
+    w.answer(first["id"], "yes", people=3)
+    c = w.counts()
+    assert c["verified"]["in"] == 3 and c["confirmed"] == 1
+    assert (c["groups"], c["group_people"]) == (1, 3)
+    assert c["accuracy"]["in"]["accuracy_pct"] == 100.0  # RetailNext 3 against 3 people
+    w.answer(first["id"], None)
+    assert w.state["people"] == {} and w.counts()["verified"]["in"] == 0
+    w.answer(first["id"], "yes", people=3)
+    w.set_watch("skipped")
+    w.set_store(name="Lismore", code="SYN-1")
+    pages = texts(w.make_report())
+    assert "1–3" in pages[1] and "group of 3" in pages[1]
+    assert "groups crossing together: 3 people" in pages[1]
+
+
 def test_report_layout(tmp_path: Path) -> None:
     img = np.full((480, 640, 3), 90, np.uint8)
     cv2.imwrite(str(tmp_path / "frame.jpg"), img)

@@ -50,9 +50,10 @@ Videos are listed), with or without the sensor's marks, then choose how to count
 3. **RetailNext.** Enter the sensor's number for the same cameras and period.
 4. **Count.** `gate.py` and `detect.py` run in the background. The page shows
    what they are doing: a live picture, the progress and the time left.
-5. **Check.** Each crossing the tool found plays as a short loop; press `Y`
-   or `N`, or `U` when you cannot tell. The likely misses it listed come next,
-   answered the same way.
+5. **Check.** Each crossing the tool found plays as a short loop. Count
+   everyone who crosses in it: `Y` for one person, `2`–`5` when a group
+   crosses together, `N` for nobody, `U` when you cannot tell. The likely
+   misses it listed come next, answered the same way.
    Finally, you can watch the movement it could not explain, at 2× speed, and
    press `I` or `O` for anyone it never detected. Do this on busy entrances.
    If two cameras see the same person at the same moment, the second crossing
@@ -85,10 +86,10 @@ footage was watched (manual). Anyone in that footage may be missing from the
 count. Crossings answered Unsure are never counted: the report lists them,
 and gives the count and the accuracy both ways they could go.
 
-A Y/N question is about one person. When a group crosses and the tool counts
-only one of them, the others are not asked about: on one busy clip that halved
-the count. Until the check can take a number of people, watch group crossings
-by hand.
+A question is about a moment, not one person. When a group crosses and the
+tool counts only one of them, the others are not asked about separately, and
+their movement is not among the stretches to watch: answer with how many
+crossed (`2`–`5`). On one busy clip, answering `Y` alone halved the count.
 
 **Learning examples.** Set a shared folder on the report step. Every counted
 crossing is then saved there, as the camera's frames from 1.5 s before to
@@ -143,6 +144,8 @@ every crossing the person verified where the checker would meet it:
 
 - **counted**: the tool counted it (a Y/N question);
 - **on the list**: offered as a possible miss (a Y/N question);
+- **in a loop**: not asked about, but crossing inside a question's loop, so
+  counted when the checker answers with the number of people;
 - **by watching**: only inside movement the tool could not explain;
 - **never shown**: nowhere the tool pointed.
 

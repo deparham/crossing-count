@@ -50,14 +50,14 @@ def show_clip(c: dict[str, Any]) -> None:
     for note in [*t["notes"], *c["notes"]]:
         print(f"  note: {note}")
     print(f"  {'camera':<14}{'dir':<5}{'verified':>9}{'counted':>9}{'real':>6}{'dup':>5}"
-          f"{'wrong way':>10}{'false':>7}{'on list':>9}{'real':>6}{'by watching':>13}"
-          f"{'never shown':>13}")
+          f"{'wrong way':>10}{'false':>7}{'on list':>9}{'real':>6}{'in loop':>9}"
+          f"{'by watching':>13}{'never shown':>13}")
     for cam, r in c["cameras"].items():
         for d, n in r["by_direction"].items():
             print(f"  {cam:<14}{d:<5}{n['verified']:>9}{n['counted']:>9}{n['counted_real']:>6}"
                   f"{n['duplicates']:>5}{n['wrong_direction']:>10}{n['false']:>7}"
-                  f"{n['check_list']:>9}{n['check_list_real']:>6}{n['watching']:>13}"
-                  f"{n['never_shown']:>13}")
+                  f"{n['check_list']:>9}{n['check_list_real']:>6}{n['in_loop']:>9}"
+                  f"{n['watching']:>13}{n['never_shown']:>13}")
             if n["never_shown_at"]:
                 print(f"  {'':<19}never shown at (s): {', '.join(map(str, n['never_shown_at']))}")
 
@@ -67,9 +67,10 @@ def show_totals(title: str, tot: dict[str, Any]) -> None:
     for d, n in tot["by_direction"].items():
         print(f"  {d.upper():<4} {n['verified']} verified. Counted by the tool "
               f"{n['counted_real']} ({_pct(n['recall_counted'])}); with the possible-miss list "
-              f"{n['counted_real'] + n['check_list_real']} ({_pct(n['recall_checked'])}); "
-              f"with watching {n['counted_real'] + n['check_list_real'] + n['watching']} "
-              f"({_pct(n['recall_shown'])}); never shown {n['never_shown']}.")
+              f"and everyone in each loop {n['counted_real'] + n['check_list_real'] + n['in_loop']}"
+              f" ({_pct(n['recall_checked'])}); with watching "
+              f"{n['verified'] - n['never_shown']} ({_pct(n['recall_shown'])}); "
+              f"never shown {n['never_shown']}.")
         print(f"       Counts: {n['counted']}, real {n['counted_real']} "
               f"({_pct(n['precision_counted'])}); same person twice {n['duplicates']}, "
               f"wrong direction {n['wrong_direction']}, nobody {n['false']}.")

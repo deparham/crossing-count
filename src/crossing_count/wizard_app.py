@@ -49,6 +49,7 @@ class ModelIn(BaseModel):
 class AnswerIn(BaseModel):
     id: str
     answer: str | None = None
+    people: int = 1  # a "yes" for a group crossing together
 
 
 class AddIn(BaseModel):
@@ -326,7 +327,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     @app.post("/api/answer")
     def answer(a: AnswerIn) -> dict[str, Any]:
-        return run(lambda: wiz().answer(a.id, a.answer))
+        return run(lambda: wiz().answer(a.id, a.answer, a.people))
 
     @app.post("/api/add")
     def add(a: AddIn) -> dict[str, Any]:

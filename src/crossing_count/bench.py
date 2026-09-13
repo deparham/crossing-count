@@ -6,6 +6,8 @@ would meet it:
 
     counted       counted by the tool (a Y/N question)
     check list    not counted, but listed as a possible miss (a Y/N question)
+    in a loop     not asked about, but crossing inside a question's loop: counted when the
+                  checker answers with the number of people who crossed there
     watching      only inside movement the tool could not explain: found only if watched
     never shown   nowhere the tool pointed: only counting the footage by hand finds these
 
@@ -34,6 +36,8 @@ from .gating import camera_dir
 from .manual import merge_ranges
 from .wizard import (
     CHOICES,
+    CLIP_AFTER_S,
+    CLIP_BEFORE_S,
     DIRECTIONS,
     MIN_WATCHED_PCT,
     POSSIBLE_REASONS,
@@ -47,7 +51,7 @@ WATCH_MARGIN_S = 1.0  # a crossing this close to a stretch of movement is seen w
 HAND = "hand count"
 CHECKED = "checked"
 FIELDS = ("verified", "counted", "counted_real", "duplicates", "wrong_direction", "false",
-          "check_list", "check_list_real", "watching", "never_shown")
+          "check_list", "check_list_real", "in_loop", "watching", "never_shown")
 
 
 class BenchError(Exception):
@@ -262,6 +266,10 @@ def score_camera(real: list[tuple[float, str]], items: list[dict[str, Any]],
         hit_list = _pairs(listed, [truth[j] for j in left])
         on_list = {left[j] for _, j in hit_list}
         rest = [j for j in left if j not in on_list]
+        loops = [i.get("clip") or [float(i["t"]) - CLIP_BEFORE_S, float(i["t"]) + CLIP_AFTER_S]
+                 for i in items if i["direction"] == d]
+        in_loop = [j for j in rest if any(a <= truth[j] <= b for a, b in loops)]
+        rest = [j for j in rest if j not in in_loop]
         seen = [j for j in rest if any(s["start"] - WATCH_MARGIN_S <= truth[j]
                                        <= s["end"] + WATCH_MARGIN_S for s in stretches)]
         never = [j for j in rest if j not in seen]
@@ -274,7 +282,8 @@ def score_camera(real: list[tuple[float, str]], items: list[dict[str, Any]],
                   "duplicates": len(dup), "wrong_direction": len(wrong_way),
                   "false": len(other_wrong) - len(wrong_way),
                   "check_list": len(listed), "check_list_real": len(hit_list),
-                  "watching": len(seen), "never_shown": len(never),
+                  "in_loop": len(in_loop), "watching": len(seen), "never_shown": len(never),
+                  "in_loop_at": [round(truth[j], 2) for j in in_loop],
                   "watching_at": [round(truth[j], 2) for j in seen],
                   "never_shown_at": [round(truth[j], 2) for j in never]}
     return out
@@ -286,9 +295,10 @@ def rates(n: dict[str, Any]) -> dict[str, float | None]:
         return round(100.0 * x / of, 1) if of else None
 
     v, found = n["verified"], n["counted_real"]
+    asked = found + n["check_list_real"] + n["in_loop"]
     return {"recall_counted": pct(found, v),
-            "recall_checked": pct(found + n["check_list_real"], v),
-            "recall_shown": pct(found + n["check_list_real"] + n["watching"], v),
+            "recall_checked": pct(asked, v),
+            "recall_shown": pct(asked + n["watching"], v),
             "precision_counted": pct(found, n["counted"])}
 
 
