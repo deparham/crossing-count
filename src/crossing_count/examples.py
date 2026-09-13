@@ -50,7 +50,7 @@ def _in_folder(line: str, prefix: str) -> bool:
         path = str(json.loads(line).get("path", ""))
     except ValueError:
         return False
-    return path == prefix or path.startswith(prefix + "/") or path.startswith(prefix + "\\")
+    return path == prefix or path.startswith((prefix + "/", prefix + "\\"))
 
 
 def moments(w: Wizard) -> list[dict[str, Any]]:
