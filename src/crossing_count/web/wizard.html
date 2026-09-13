@@ -57,6 +57,9 @@
   .answer button { flex: 1; font-size: 16px; padding: 12px; }
   .answer.group { align-items: center; margin-top: -4px; }
   .answer.group button { font-size: 14px; padding: 8px; }
+  table.ivs { grid-column: 1 / -1; border-collapse: collapse; margin: 6px 0; }
+  table.ivs th, table.ivs td { padding: 3px 12px 3px 0; text-align: left; font-weight: normal; }
+  table.ivs input { width: 6em; }
   .pill { display: inline-block; padding: 0 8px; border-radius: 10px; font-size: 12px; font-weight: 600; border: 1px solid; }
   .pill.in { color: var(--in); } .pill.out { color: var(--out); }
   .nums { display: flex; gap: 12px; flex-wrap: wrap; margin: 10px 0; }
@@ -391,21 +394,49 @@ document.querySelectorAll("#s-traffic [data-dir]").forEach((b) => b.addEventList
 
 // ---------- RetailNext ----------
 ENTER.retail = () => {
-  const s = W.st, c = s.counts;
+  const s = W.st, c = s.counts, ivs = s.intervals || [], cams = s.cameras.map((x) => x.sensor).join(" + ");
   const yours = s.mode === "manual" ? ` You counted ${s.dirs.map((d) => `${c.verified[d]} ${LABEL[d].toLowerCase()}`).join(" and ")}.` : "";
-  $("sensorHint").textContent = `RetailNext's number for ${s.cameras.map((x) => x.sensor).join(" + ")} together, ${period()}.${yours}`;
-  $("sensorInputs").innerHTML = s.dirs.map((d) =>
-    `<label>${LABEL[d]} <input type="number" min="0" step="1" data-dir="${d}" value="${s.sensor[d] ?? ""}" placeholder="e.g. 8"></label>`).join("");
+  const num = (attrs, v, hint = 'placeholder="e.g. 8"') => `<input type="number" min="0" step="1" ${attrs} value="${v ?? ""}" ${hint}>`;
+  const head = (first) => `<tr><th>${first}</th>${s.dirs.map((d) => `<th>${LABEL[d]}</th>`).join("")}</tr>`;
+  let html;
+  if (ivs.length > 1) {  // footage longer than one of RetailNext's 15-minute intervals
+    $("sensorHint").textContent = `RetailNext's 15-minute numbers for ${cams} together, as in its table.${yours}`;
+    html = `<table class="ivs">${head("Time")}` + ivs.map((i) => `<tr><td>${esc(i.label)}${i.full === false ? ' <span class="muted">(partly in this footage)</span>' : ""}</td>` +
+      s.dirs.map((d) => `<td>${num(`data-iv="${esc(i.key)}" data-dir="${d}"`, ((s.sensor_intervals || {})[i.key] || {})[d])}</td>`).join("") + "</tr>").join("") + "</table>";
+  } else {
+    $("sensorHint").textContent = `RetailNext's number for ${cams} together, ${period()}.${yours}`;
+    html = s.dirs.map((d) => `<label>${LABEL[d]} ${num(`data-dir="${d}"`, s.sensor[d])}</label>`).join("");
+  }
+  if (s.cameras.length > 1) {
+    const sc = s.sensor_cameras || {};
+    html += `<details style="grid-column:1/-1;margin-top:8px"${Object.keys(sc).length ? " open" : ""}><summary class="muted">Each camera's own number (optional)</summary>` +
+      `<table class="ivs">${head("Camera")}` + s.cameras.map((x) => `<tr><td>${esc(x.sensor)}</td>` +
+      s.dirs.map((d) => `<td>${num(`data-cam="${esc(x.sensor)}" data-dir="${d}"`, (sc[x.sensor] || {})[d], "")}</td>`).join("") + "</tr>").join("") + "</table></details>";
+  }
+  $("sensorInputs").innerHTML = html;
   const first = $("sensorInputs").querySelector("input"); if (first) first.focus();
   $("sensorInputs").querySelectorAll("input").forEach((el) => el.addEventListener("keydown", (e) => { if (e.key === "Enter") $("sensorNext").click(); }));
 };
 $("sensorNext").addEventListener("click", async () => {
-  const values = {};
-  for (const el of $("sensorInputs").querySelectorAll("input")) {
-    if (el.value.trim() === "") { msg(`Enter RetailNext's ${LABEL[el.dataset.dir]}.`, "warn"); el.focus(); return; }
-    values[el.dataset.dir] = Math.max(0, Math.round(+el.value));
+  const box = $("sensorInputs"), body = {}, n = (el) => Math.max(0, Math.round(+el.value));
+  const need = (el, what) => { msg(`Enter RetailNext's ${what}.`, "warn"); el.focus(); };
+  const perInterval = [...box.querySelectorAll("input[data-iv]")];
+  if (perInterval.length) {
+    body.intervals = {};
+    for (const el of perInterval) {
+      if (el.value.trim() === "") return need(el, `${LABEL[el.dataset.dir]} for ${el.closest("tr").firstChild.textContent}`);
+      (body.intervals[el.dataset.iv] ||= {})[el.dataset.dir] = n(el);
+    }
+  } else {
+    body.values = {};
+    for (const el of box.querySelectorAll("input[data-dir]:not([data-cam])")) {
+      if (el.value.trim() === "") return need(el, LABEL[el.dataset.dir]);
+      body.values[el.dataset.dir] = n(el);
+    }
   }
-  try { setState(await api("/api/sensor", { values })); go(nextKey()); } catch (e) { msg(e.message, "err"); }
+  body.cameras = {};  // optional: only the numbers given
+  for (const el of box.querySelectorAll("input[data-cam]")) if (el.value.trim() !== "") (body.cameras[el.dataset.cam] ||= {})[el.dataset.dir] = n(el);
+  try { setState(await api("/api/sensor", body)); go(nextKey()); } catch (e) { msg(e.message, "err"); }
 });
 
 // ---------- automatic count ----------
@@ -790,6 +821,16 @@ ENTER.report = async () => {
     return `<div>${LABEL[d]}<b>${c.verified[d]}${u ? "–" + (c.verified[d] + u) : ""} ${manual ? "counted" : "verified"}</b>RetailNext ${s.sensor[d]} · ${accText}</div>`;
   }).join("")}</div>` + (c.incomplete.length
     ? `<div class="warn">Validation incomplete: ${c.incomplete.map(esc).join(" ")} The report will give no accuracy figure.</div>` : "");
+  const cmp = s.comparison;  // worked out once, on the server; the report shows the same
+  if (cmp && (cmp.intervals.length > 1 || cmp.cameras.length > 1)) {
+    const head = (first) => `<tr><th>${first}</th>${s.dirs.map((d) => `<th>${LABEL[d]}: verified / RetailNext</th>`).join("")}</tr>`;
+    const rows = (items, key) => items.map((it) => `<tr><td>${esc(it[key])}</td>` + s.dirs.map((d) => {
+      const a = it.accuracy && it.accuracy[d], sys = it.sensor && it.sensor[d] != null ? it.sensor[d] : "–";
+      return `<td>${it.verified[d]} / ${sys}${a && a.error != null ? ` (${a.error > 0 ? "+" : ""}${a.error})` : ""}</td>`;
+    }).join("") + "</tr>").join("");
+    $("numbers").innerHTML += (cmp.intervals.length > 1 ? `<table class="ivs">${head("Time")}${rows(cmp.intervals, "label")}</table>` : "") +
+      (cmp.cameras.length > 1 ? `<table class="ivs">${head("Camera")}${rows(cmp.cameras, "camera")}</table>` : "");
+  }
   $("logoInfo").textContent = s.logo ? `Logo: ${s.logo}` : "No logo file found (assets/logo.png): the report header will show the company name as text.";
   W.settings = await api("/api/settings").catch(() => ({ examples_dir: "" }));
   $("exDir").value = W.settings.examples_dir || "";

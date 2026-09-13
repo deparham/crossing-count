@@ -244,6 +244,40 @@ def test_a_check_is_logged_and_kept_when_the_count_runs_again(
     assert w.state["decisions"][0]["kept"] == h["file"]
 
 
+def test_retailnext_per_interval_and_per_camera(two_tile_video: dict[str, Any],
+                                                review_run_dir: Path, tmp_path: Path) -> None:
+    w = Wizard(two_tile_video["video"], two_tile_video["dir"], tmp_path,
+               copy_outputs(review_run_dir))
+    s = Setup(w.video, two_tile_video["dir"])
+    w.set_cameras(s.existing(), [t.as_dict() for t in s.tiles])
+    w.state["clock_start"] = "2026-09-12T11:59:40+10:00"  # the 60 s clip spans two intervals
+    w.set_direction("in")
+    assert [(i["key"], i["full"]) for i in w.intervals()] == [("11:45", False), ("12:00", False)]
+    with pytest.raises(WizardError, match="Enter RetailNext's number for 12:00"):
+        w.set_sensor(intervals={"11:45": {"in": 1}})
+    with pytest.raises(WizardError, match="not one of this footage's 15-minute intervals"):
+        w.set_sensor(intervals={"09:00": {"in": 1}})
+    w.set_sensor(intervals={"11:45": {"in": 1}, "12:00": {"in": 3}}, cameras={"CAM-A": {"in": 2}})
+    assert w.state["sensor"] == {"in": 4}  # the total is the intervals' sum
+    w.start()
+    wait(w)
+    for i in w.check_items():
+        w.answer(i["id"], "yes")
+    comp = w.comparison()
+    assert sum(i["verified"]["in"] for i in comp["intervals"]) == w.counts()["verified"]["in"]
+    cams = {c["camera"]: c for c in comp["cameras"]}
+    assert cams["CAM-A"]["accuracy"]["in"]["sensor"] == 2 and cams["CAM-B"]["accuracy"] is None
+    w.set_watch("skipped")
+    w.set_store(name="Lismore", code="SYN-1")
+    report = w.make_report()
+    page = texts(report)[1]
+    assert "Traffic by 15 minutes" in page and "Only partly in the footage" in page
+    assert "CAM-A" in page and "In verified" in page
+    assert any(sh.has_chart for sh in Presentation(str(report)).slides[1].shapes)
+    w.set_sensor({"in": 5})  # a plain total replaces the intervals
+    assert w.state["sensor_intervals"] == {} and w.state["sensor"]["in"] == 5
+
+
 def test_report_layout(tmp_path: Path) -> None:
     img = np.full((480, 640, 3), 90, np.uint8)
     cv2.imwrite(str(tmp_path / "frame.jpg"), img)
@@ -283,6 +317,20 @@ def test_report_layout(tmp_path: Path) -> None:
     data["complete"] = True  # everything watched, two crossings still unclear
     cover = texts(build_report(data, tmp_path / "r3.pptx", None))[0]
     assert "81.8–90.9%" in cover and "INCOMPLETE" not in cover
+
+    data["breakdown"] = {
+        "dirs": [{"key": "in", "label": "Traffic In"}],
+        "intervals": [{"label": f"11:{m:02d} - 11:{m + 15:02d}", "partial": m == 0,
+                       "verified": {"in": 4}, "sensor": {"in": 5},
+                       "accuracy": {"in": {"error": 1, "error_pct": 25.0}}} for m in (0, 15, 30)],
+        "cameras": [{"label": c, "partial": False, "verified": {"in": 6}, "sensor": None,
+                     "accuracy": None} for c in ("PB1", "R2")],
+        "notes": ["Largest difference: 11:00 - 11:15."]}
+    out = build_report(data, tmp_path / "r4.pptx", None)
+    page = texts(out)[1]
+    assert "Traffic by 15 minutes" in page and "+1 (+25%)" in page and "(part)" in page
+    assert "PB1" in page and "Largest difference" in page and len(texts(out)) == 7
+    assert any(sh.has_chart for sh in Presentation(str(out)).slides[1].shapes)
 
 
 def test_wizard_page_api(two_tile_video: dict[str, Any], review_run_dir: Path,

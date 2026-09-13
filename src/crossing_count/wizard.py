@@ -33,7 +33,7 @@ from .candidates import MISS_KIND
 from .config import bind, load_config
 from .export import sensor_accuracy
 from .gating import camera_dir
-from .manual import merge_ranges, unwatched_ranges
+from .manual import intervals_for, merge_ranges, unwatched_ranges
 from .report_pptx import build_report
 from .util import default_run_dir, fmt_hms, write_json_atomic
 from .version import app_version
@@ -421,7 +421,7 @@ class Wizard:
             }
             self._save()
         for key, value in (("mode", None), ("marks", None), ("examples", None), ("people", {}),
-                           ("decisions", []),
+                           ("decisions", []), ("sensor_intervals", {}), ("sensor_cameras", {}),
                            ("manual", {"counts": [], "watched": {}, "positions": {},
                                        "done": False, "next_id": 1})):
             self.state.setdefault(key, value)
@@ -496,19 +496,132 @@ class Wizard:
             self.state["direction"] = direction
             self._save()
 
-    def set_sensor(self, values: dict[str, int | None]) -> None:
-        for d, v in values.items():
-            if d not in DIRECTIONS:
-                raise WizardError(f"unknown direction {d!r}")
-            if v is not None and v < 0:
-                raise WizardError("A count cannot be negative.")
+    def set_sensor(self, values: dict[str, int | None] | None = None,
+                   intervals: dict[str, dict[str, int | None]] | None = None,
+                   cameras: dict[str, dict[str, int | None]] | None = None) -> None:
+        """RetailNext's numbers: a total per direction, or one per 15-minute interval (the
+        total is then their sum), and optionally each camera's own number."""
+        def check(per: dict[str, int | None]) -> dict[str, int]:
+            out: dict[str, int] = {}
+            for d, v in per.items():
+                if d not in DIRECTIONS:
+                    raise WizardError(f"unknown direction {d!r}")
+                if v is not None and v < 0:
+                    raise WizardError("A count cannot be negative.")
+                if v is not None:
+                    out[d] = int(v)
+            return out
+
+        known = {i["key"]: i["label"] for i in self.intervals()}
+        ivs: dict[str, dict[str, int]] = {}
+        for key, per in (intervals or {}).items():
+            if key not in known:
+                raise WizardError(f"{key} is not one of this footage's 15-minute intervals")
+            ivs[key] = check(per)
+        cams: dict[str, dict[str, int]] = {}
+        for cam, per in (cameras or {}).items():
+            self._camera(cam)
+            if got := check(per):
+                cams[cam] = got
+        totals = check(values or {})
         with self._lock:
-            for d, v in values.items():
+            if intervals is not None:
+                missing = [label for key, label in known.items()
+                           if any(d not in ivs.get(key, {}) for d in self.dirs())]
+                if missing:
+                    raise WizardError(f"Enter RetailNext's number for {missing[0]}.")
+                self.state["sensor_intervals"] = ivs
+                totals = {d: sum(per[d] for per in ivs.values()) for d in self.dirs()}
+            elif values is not None:
+                self.state["sensor_intervals"] = {}  # a plain total replaces the intervals
+            for d, v in (values or {}).items():
                 if v is None:
                     self.state["sensor"].pop(d, None)
-                else:
-                    self.state["sensor"][d] = int(v)
+            self.state["sensor"].update(totals)
+            if cameras is not None:
+                self.state["sensor_cameras"] = cams
             self._save()
+
+    def intervals(self) -> list[dict[str, Any]]:
+        """RetailNext's 15-minute intervals this footage overlaps, and how much of each."""
+        cs = self.state["clock_start"]
+        return intervals_for(datetime.fromisoformat(cs) if cs else None,
+                             float(self.state["duration_s"]))
+
+    def comparison(self) -> dict[str, Any]:
+        """Verified against RetailNext per 15-minute interval and per camera: the one place
+        these are worked out, for the page and the report alike."""
+        dirs = self.dirs()
+        ivs = self.intervals()
+        cs = self.state["clock_start"]
+        start = datetime.fromisoformat(cs) if cs else None
+
+        def key_of(t: float) -> str:
+            if start is None:
+                return str(ivs[0]["key"])
+            at = start + timedelta(seconds=t)
+            for i in reversed(ivs):
+                if datetime.fromisoformat(i["start"]) <= at:
+                    return str(i["key"])
+            return str(ivs[0]["key"])
+
+        by_iv = {i["key"]: dict.fromkeys(dirs, 0) for i in ivs}
+        by_cam = {c["sensor"]: dict.fromkeys(dirs, 0) for c in self.state["cameras"]}
+        for r in self.verified_rows():
+            if r["direction"] not in dirs:
+                continue
+            n = int(r.get("people", 1))
+            by_iv[key_of(float(r["t"]))][r["direction"]] += n
+            if r["camera"] in by_cam:
+                by_cam[r["camera"]][r["direction"]] += n
+
+        def against(sensor: dict[str, int] | None, verified: dict[str, int]
+                    ) -> dict[str, Any] | None:
+            return {d: sensor_accuracy(sensor.get(d), verified[d]) for d in dirs} if sensor else None
+
+        s_iv, s_cam = self.state["sensor_intervals"], self.state["sensor_cameras"]
+        intervals = [{**i, "verified": by_iv[i["key"]], "sensor": s_iv.get(i["key"]),
+                      "accuracy": against(s_iv.get(i["key"]), by_iv[i["key"]])} for i in ivs]
+        cameras = [{"camera": c, "verified": v, "sensor": s_cam.get(c),
+                    "accuracy": against(s_cam.get(c), v)} for c, v in by_cam.items()]
+        overlap = 0 if self.manual() else sum(
+            1 for it in self.check_items() if it.get("twin") and it["twin"]["camera"] != it["camera"])
+        diffs = [(abs(a[d]["error"]), i["label"], d, a[d]) for i in intervals
+                 if (a := i["accuracy"]) for d in dirs if a[d]["error"] is not None]
+        largest = None
+        if len(intervals) > 1 and diffs:
+            size, label, d, acc = max(diffs, key=lambda x: x[0])
+            if size > 0:
+                largest = {"interval": label, "direction": d, **acc}
+        return {"intervals": intervals, "cameras": cameras, "overlap": overlap, "largest": largest}
+
+    def _breakdown(self) -> dict[str, Any]:
+        """The report's page of 15-minute intervals and cameras, from comparison()."""
+        comp = self.comparison()
+        ivs = comp["intervals"] if len(comp["intervals"]) > 1 else []
+        # cameras only with something to set them against: their own RetailNext numbers,
+        # or the page of intervals they share
+        cams = (comp["cameras"] if len(comp["cameras"]) > 1
+                and (ivs or any(c["sensor"] for c in comp["cameras"])) else [])
+        notes = []
+        if part := [i["label"] for i in ivs if i["full"] is False]:
+            notes.append(f"Only partly in the footage: {', '.join(part)}. RetailNext's numbers "
+                         f"cover whole intervals, so these do not compare like for like.")
+        if (big := comp["largest"]) and ivs:
+            notes.append(f"Largest difference: {big['interval']}, {LABELS[big['direction']]}: "
+                         f"RetailNext {big['sensor']} against {big['verified']} verified.")
+        if cams and comp["overlap"]:
+            notes.append(f"{comp['overlap']} crossing(s) were seen on two cameras within "
+                         f"{TWIN_WINDOW_S:g} s: the cameras overlap, so each camera's number "
+                         f"can differ from RetailNext's even when the total agrees. Compare "
+                         f"the combined total.")
+        return {"dirs": [{"key": d, "label": LABELS[d]} for d in self.dirs()],
+                "intervals": [{"label": i["label"], "partial": i["full"] is False,
+                               "verified": i["verified"], "sensor": i["sensor"],
+                               "accuracy": i["accuracy"]} for i in ivs],
+                "cameras": [{"label": c["camera"], "partial": False, "verified": c["verified"],
+                             "sensor": c["sensor"], "accuracy": c["accuracy"]} for c in cams],
+                "notes": notes}
 
     def set_model(self, model: str) -> None:
         if model not in MODELS:
@@ -1064,7 +1177,8 @@ class Wizard:
     def public(self) -> dict[str, Any]:
         with self._lock:
             return {**self.state, "dirs": self.dirs(), "counts": self.counts(),
-                    "run_dir": str(self.run_dir), "history": self.history()}
+                    "run_dir": str(self.run_dir), "history": self.history(),
+                    "intervals": self.intervals(), "comparison": self.comparison()}
 
     # ---- pictures ----------------------------------------------------------------------
 
@@ -1288,6 +1402,7 @@ class Wizard:
                             "accuracy": c["accuracy"][d]["accuracy_pct"],
                             "accuracy_range": c["accuracy_range"][d]} for d in self.dirs()],
             "complete": not c["incomplete"], "incomplete": c["incomplete"],
+            "breakdown": self._breakdown(),
             "frame": str(frame), "frame_caption": caption,
             "crossings": [{"n": n, "time": self.clock(r["t"]), "camera": r["camera"],
                            "direction": LABELS[r["direction"]], "found": r["found"]}

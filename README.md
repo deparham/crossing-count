@@ -48,6 +48,11 @@ Videos are listed), with or without the sensor's marks, then choose how to count
    because they were drawn on the same video.
 2. **Traffic.** Choose In, Out or both.
 3. **RetailNext.** Enter the sensor's number for the same cameras and period.
+   For footage longer than one 15-minute interval, enter RetailNext's number
+   for each interval, as in its table; each camera's own number is optional.
+   The report then gets a page comparing them interval by interval (with a
+   chart) and camera by camera, noting partly covered intervals, the largest
+   difference, and cameras that overlap.
 4. **Count.** `gate.py` and `detect.py` run in the background. The page shows
    what they are doing: a live picture, the progress and the time left.
 5. **Check.** Each crossing the tool found plays as a short loop. Count

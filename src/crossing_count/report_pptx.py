@@ -15,7 +15,9 @@ from typing import Any
 from lxml import etree
 from PIL import Image as PILImage
 from pptx import Presentation
+from pptx.chart.data import CategoryChartData
 from pptx.dml.color import RGBColor
+from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.oxml.ns import qn
@@ -265,6 +267,107 @@ def _details(new_page: Any, data: dict[str, Any]) -> None:
             top = 1.95
 
 
+def _diff(acc: dict[str, Any] | None) -> str:
+    """The system minus the verified count, and as a share of it: "+2 (+10%)"."""
+    if not acc or acc.get("error") is None:
+        return "–"
+    err, pct = int(acc["error"]), acc.get("error_pct")
+    return f"{err:+d}" if pct is None else f"{err:+d} ({pct:+.0f}%)"
+
+
+def _grid(slide: Any, header: list[str], rows: list[list[str]], top: float,
+          widths: list[float]) -> float:
+    shape = slide.shapes.add_table(len(rows) + 1, len(header), Inches(0.53), Inches(top),
+                                   Inches(sum(widths)), Inches(0.3 + 0.26 * len(rows)))
+    tbl = shape.table
+    for j, (name, width) in enumerate(zip(header, widths, strict=True)):
+        tbl.columns[j].width = Inches(width)
+        _cell(tbl.cell(0, j), name, header=True)
+    tbl.rows[0].height = Inches(0.3)
+    for i, row in enumerate(rows, 1):
+        for j, value in enumerate(row):
+            _cell(tbl.cell(i, j), value or "–", shade=i % 2 == 0)
+        tbl.rows[i].height = Inches(0.26)
+    return top + 0.3 + 0.26 * len(rows)
+
+
+def _chart(slide: Any, top: float, title: str, labels: list[str], verified: list[int],
+           system: list[int | None]) -> float:
+    data = CategoryChartData()
+    data.categories = labels
+    data.add_series("Verified", verified)
+    data.add_series("System", system)
+    chart = slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(0.53), Inches(top),
+                                   Inches(7.2), Inches(2.35), data).chart
+    chart.font.size = Pt(9)
+    chart.font.name = SANS
+    chart.has_title = True
+    chart.chart_title.text_frame.text = title
+    chart.chart_title.text_frame.paragraphs[0].runs[0].font.size = Pt(11)
+    chart.has_legend = True
+    chart.legend.position = XL_LEGEND_POSITION.BOTTOM
+    chart.legend.include_in_layout = False
+    for series, colour in zip(chart.series, (TEAL, NAVY), strict=False):
+        series.format.fill.solid()
+        series.format.fill.fore_color.rgb = colour
+    return top + 2.5
+
+
+def _breakdown(new_page: Any, data: dict[str, Any]) -> None:
+    """Verified against the system per 15-minute interval and per camera, where there is
+    more than one; charts where the system's interval numbers are known."""
+    b = data.get("breakdown") or {}
+    ivs, cams, dirs = b.get("intervals") or [], b.get("cameras") or [], b.get("dirs") or []
+    if not ivs and not cams:
+        return
+    title = "Traffic by 15 minutes" if ivs else "Traffic by camera"
+    slide = new_page()
+    _write(_box(slide, 0.62, 1.27, 7.1, 0.5), title, 24, bold=True, font=SERIF)
+    top = 1.95
+
+    def room(height: float) -> None:
+        nonlocal slide, top
+        if top + height > TABLE_TOP_MAX:
+            slide = new_page()
+            _write(_box(slide, 0.62, 1.27, 7.1, 0.5), f"{title} (continued)", 24, bold=True,
+                   font=SERIF)
+            top = 1.95
+
+    cols = [f"{d['label'].split()[-1]} {k}" for d in dirs for k in ("verified", "system", "difference")]
+    first = 1.55
+    widths = [first, *[(7.2 - first) / len(cols)] * len(cols)]
+
+    def rows_of(items: list[dict[str, Any]]) -> list[list[str]]:
+        out = []
+        for it in items:
+            row = [it["label"] + (" (part)" if it.get("partial") else "")]
+            for d in dirs:
+                system = (it.get("sensor") or {}).get(d["key"])
+                row += [str(it["verified"][d["key"]]), "–" if system is None else str(system),
+                        _diff((it.get("accuracy") or {}).get(d["key"]))]
+            out.append(row)
+        return out
+
+    if ivs:
+        if any(it.get("sensor") for it in ivs):
+            for d in dirs:
+                room(2.5)
+                top = _chart(slide, top, d["label"], [it["label"].split(" - ")[0] for it in ivs],
+                             [it["verified"][d["key"]] for it in ivs],
+                             [(it.get("sensor") or {}).get(d["key"]) for it in ivs])
+        room(0.6 + 0.26 * len(ivs))
+        top = _grid(slide, ["Time", *cols], rows_of(ivs), top, widths) + 0.3
+    if cams:
+        room(0.6 + 0.26 * len(cams))
+        top = _grid(slide, ["Camera", *cols], rows_of(cams), top, widths) + 0.3
+    for note in b.get("notes") or []:
+        room(0.5)
+        box = _box(slide, 0.53, top, 7.2, 0.45)
+        box.text_frame.word_wrap = True
+        _write(box, note, 10, color=GREY)
+        top += 0.5
+
+
 def _snapshots(new_page: Any, data: dict[str, Any]) -> None:
     thumbs = data["thumbs"]
     per_page, cols, col_w, size = 12, 3, 2.33, 1.85
@@ -294,6 +397,7 @@ def build_report(data: dict[str, Any], out: Path, logo: Path | None = None) -> P
         return slide
 
     _cover(new_page(), data)
+    _breakdown(new_page, data)
     _details(new_page, data)
     _snapshots(new_page, data)
     for k, box in enumerate(page_boxes, 1):

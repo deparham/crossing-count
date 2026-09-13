@@ -43,7 +43,9 @@ class DirectionIn(BaseModel):
 
 
 class SensorIn(BaseModel):
-    values: dict[str, int | None]
+    values: dict[str, int | None] | None = None  # the total per direction
+    intervals: dict[str, dict[str, int | None]] | None = None  # or per 15-minute interval
+    cameras: dict[str, dict[str, int | None]] | None = None  # each camera's own, optional
 
 
 class ModelIn(BaseModel):
@@ -298,7 +300,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     @app.post("/api/sensor")
     def sensor(s: SensorIn) -> dict[str, Any]:
-        return run(lambda: wiz().set_sensor(s.values))
+        return run(lambda: wiz().set_sensor(s.values, s.intervals, s.cameras))
 
     @app.post("/api/model")
     def model(m: ModelIn) -> dict[str, Any]:
