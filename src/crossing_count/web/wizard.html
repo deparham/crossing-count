@@ -152,6 +152,7 @@
     <div class="muted" id="runWhat"></div>
     <label class="muted" style="display:inline-block;margin-top:8px">Detector
       <select id="model"><option value="yolo11m.pt">Accurate (slower)</option><option value="yolo11s.pt">Fast (misses more people)</option></select></label>
+    <div id="modelWarn" class="warn" hidden style="margin-top:6px">The fast detector merges people walking together: on one busy clip the check found half the exits it did with the accurate one. Use it only on quiet entrances.</div>
     <div style="margin-top:12px;display:flex;gap:8px"><button id="start" class="primary">Start counting</button><button id="stop" hidden>Stop</button></div>
   </div>
   <div class="card" id="runCard" hidden>
@@ -413,11 +414,11 @@ ENTER.count = () => {
   $("runWhat").textContent = `${s.cameras.map((c) => c.sensor).join(" and ")} · ${s.dirs.map((d) => LABEL[d]).join(" and ")} · ${period()}. ` +
     "It finds the moments with movement near the line, then detects and tracks people there. You can do other work meanwhile." +
     (s.history && s.history.length ? ` Earlier checks of this video are kept in its history (${s.history.length}).` : "");
-  $("model").value = s.model;
+  $("model").value = s.model; $("modelWarn").hidden = s.model !== "yolo11s.pt";
   if (s.job.status !== "idle") { $("runCard").hidden = false; pollJob(); }
   if (s.job.status === "running") W.timer = setInterval(pollJob, 1000);
 };
-$("model").addEventListener("change", async () => { try { setState(await api("/api/model", { model: $("model").value })); } catch (e) { msg(e.message, "err"); } });
+$("model").addEventListener("change", async () => { $("modelWarn").hidden = $("model").value !== "yolo11s.pt"; try { setState(await api("/api/model", { model: $("model").value })); } catch (e) { msg(e.message, "err"); } });
 $("start").addEventListener("click", async () => {
   const done = Object.keys(W.st.answers || {}).length + (W.st.added || []).length;
   if (done && !confirm(`This count has been checked (${done} answers). Running it again starts a new check: `

@@ -130,6 +130,9 @@ def test_count_check_and_report(two_tile_video: dict[str, Any], review_run_dir: 
     assert "SYSTEM COUNT" in pages[0] and "ACCURACY" in pages[0] and "25/08/2026" in pages[0]
     assert f"Page 1 of {len(pages)}" in pages[0] and "Crossing details" in pages[1]
     assert "Detected, confirmed" in pages[1]
+    stats = w.state["job"]["stats"]
+    assert stats["app_version"] and stats["video_s"] == pytest.approx(60.0, abs=1)
+    assert "Crossings proposed by the" in pages[1] and "Report made with CrossingCount" in pages[1]
     again = Wizard(two_tile_video["video"], two_tile_video["dir"], tmp_path)  # resumes
     assert again.counts()["verified"]["in"] == 1 and again.state["report"]
 

@@ -34,6 +34,7 @@ from .config import load_config
 from .export import CSV_COLUMNS
 from .gating import camera_dir
 from .manual import merge_ranges
+from .version import app_version
 from .wizard import (
     CHOICES,
     CLIP_AFTER_S,
@@ -357,6 +358,6 @@ def totals(clips: list[dict[str, Any]], independent_only: bool) -> dict[str, Any
 
 def settings() -> dict[str, Any]:
     """What the scores depend on, saved with them so runs can be compared."""
-    return {"window_s": WINDOW_S, "watch_margin_s": WATCH_MARGIN_S,
+    return {"app_version": app_version(), "window_s": WINDOW_S, "watch_margin_s": WATCH_MARGIN_S,
             "possible_reasons": list(POSSIBLE_REASONS),
             "detect_options": json.loads(json.dumps(asdict(DetectOptions()), default=str))}

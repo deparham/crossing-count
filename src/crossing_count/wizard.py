@@ -36,6 +36,7 @@ from .gating import camera_dir
 from .manual import merge_ranges, unwatched_ranges
 from .report_pptx import build_report
 from .util import default_run_dir, fmt_hms, write_json_atomic
+from .version import app_version
 
 ROOT = paths.SOURCE_ROOT  # the project folder, when running from source
 VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv", ".avi")
@@ -759,7 +760,7 @@ class Wizard:
                                  "error": None, "log": []}
             self.state.update(answers={}, people={}, added=[], watched=[], watch=None, report=None,
                               decisions=[])
-            self._decide("run", model=self.state["model"],
+            self._decide("run", model=self.state["model"], app_version=app_version(),
                          kept=str(archived) if archived else None)
             self._save()
             self._job = _Job(commands, Progress(cameras=len(self.state["cameras"])),
@@ -768,7 +769,44 @@ class Wizard:
     def _finished(self, status: str, error: str | None, log: list[str]) -> None:
         with self._lock:
             self.state["job"].update(status=status, error=error, finished_at=_now(), log=log)
+            self.state["job"]["stats"] = self._job_stats()
             self._save()
+
+    def _detector(self) -> dict[str, Any]:
+        """The detector settings that proposed the crossings, as detect.py recorded them."""
+        for cam in self.state["cameras"]:
+            if det := self._read(cam, "candidates").get("detector"):
+                return dict(det)
+        return {}
+
+    def _job_stats(self) -> dict[str, Any]:
+        """Kept with the count, on this computer: what ran, and how fast."""
+        job = self.state["job"]
+        try:
+            took: float | None = (datetime.fromisoformat(job["finished_at"])
+                                  - datetime.fromisoformat(job["started_at"])).total_seconds()
+        except (TypeError, ValueError):
+            took = None
+        video_s = float(self.state["duration_s"])
+        det = self._detector()
+        return {"app_version": app_version(), "model": det.get("model", self.state["model"]),
+                "detector": det, "video_s": round(video_s, 1),
+                "processing_s": round(took, 1) if took else None,
+                "realtime_x": round(video_s / took, 2) if took else None}
+
+    def _made_with(self) -> str:
+        """Which detector and build proposed the crossings, and how long that took."""
+        stats = self.state["job"].get("stats") or {}
+        model = stats.get("model") or self._detector().get("model") or self.state["model"]
+        text = f"Crossings proposed by the {model} detector"
+        if stats.get("app_version"):
+            text += f" (CrossingCount {stats['app_version']})"
+        if stats.get("processing_s"):
+            text += (f", in {_dur(stats['processing_s'])} for {_dur(stats['video_s'])} of "
+                     f"footage ({stats['realtime_x']:g}× real time)")
+        if "yolo11s" in str(model):
+            text += ". This fast detector merges more people walking together"
+        return text + "."
 
     def stop(self) -> None:
         if self._job is not None:
@@ -1213,6 +1251,7 @@ class Wizard:
             ("System count: RetailNext, same cameras and period. Accuracy = 100% minus the "
              "system's error as a share of the verified count."),
         ]
+        method.insert(2, self._made_with())
         if self.manual():
             summary = self.manual_summary()["cameras"]
             shares = ", ".join(f"{c['sensor']} {c['watched_pct']:.0f}%" for c in summary)
@@ -1234,6 +1273,7 @@ class Wizard:
         if c["incomplete"]:
             method.insert(0, "VALIDATION INCOMPLETE. " + " ".join(c["incomplete"]) + " No accuracy "
                           "is given: people in footage nobody watched may be missing from the count.")
+        method.append(f"Report made with CrossingCount {app_version()}.")
         return {
             "count_label": "MANUAL COUNT" if self.manual() else "VERIFIED COUNT",
             "frames_title": ("VALIDATION FRAMES — BUSIEST MOMENT" if self.manual()

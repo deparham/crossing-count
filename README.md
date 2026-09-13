@@ -104,6 +104,10 @@ inside the company.
 Everything is saved as you go, to `runs/<video>/wizard/state.json`. Open the
 same video again to carry on where you left off.
 
+Each count also records which detector (with its settings) and which version
+of CrossingCount proposed the crossings, and how long it took against the
+length of the footage; the report says so in its method section.
+
 Every answer, undo, added crossing and watching decision is logged there with
 the time and the checker's name (asked once, then remembered). Running a
 checked count again asks first: the check starts afresh, and the old one, with
