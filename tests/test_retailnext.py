@@ -66,6 +66,16 @@ def test_subscription_names() -> None:
         rn.subscription_name("not a name!")
 
 
+def test_pasting_marks_are_removed_and_odd_keys_flagged() -> None:
+    assert rn.clean_key("\x1b[200~Ab-9_x\x1b[201~\n") == "Ab-9_x"
+    ok = rn.Connection("acme", "fb38f55f-0000-11f1-997f-0000dea53117", "Abc123_-Abc123_-Abc123")
+    assert rn.key_problems(ok) == []
+    swapped = rn.Connection("acme", ok.secret_key, ok.access_key)
+    assert "swapped" in rn.key_problems(swapped)[0]
+    assert any("other than letters" in p for p in rn.key_problems(
+        rn.Connection("acme", ok.access_key, "Abc123!Abc123_-Abc123")))
+
+
 def test_a_query_is_a_basic_auth_post(server: list[Any]) -> None:
     seen = server.pop(0)
     server.append({"nodes": [[{"uuid": "u1", "location_type": "store", "name": "A"}],

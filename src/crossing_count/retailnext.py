@@ -63,8 +63,18 @@ def subscription_name(text: str) -> str:
     return s
 
 
+_PASTE_MARKS = re.compile(r"\x1b\[20[01]~|[\x00-\x1f\x7f]")  # bracketed paste, control keys
+
+
+def clean_key(text: str) -> str:
+    """A key as pasted: terminals can wrap a paste in invisible marks, which would make
+    RetailNext reject a correct key."""
+    return _PASTE_MARKS.sub("", text).strip()
+
+
 def save_connection(subscription: str, access_key: str, secret_key: str) -> Connection:
-    conn = Connection(subscription_name(subscription), access_key.strip(), secret_key.strip())
+    conn = Connection(subscription_name(subscription), clean_key(access_key),
+                      clean_key(secret_key))
     if not conn.access_key or not conn.secret_key:
         raise RetailNextError("Both the access key and the secret key are needed.")
     keyring.set_password(SERVICE, conn.subscription, json.dumps(
@@ -109,6 +119,9 @@ def key_problems(conn: Connection) -> list[str]:
                    f"key's shape (8-4-4-4-12 letters and digits, like the one on the token page).")
     if re.search(r"\s", conn.access_key + conn.secret_key):
         out.append("There is a space or line break inside a key.")
+    if odd := len(re.findall(r"[^A-Za-z0-9_-]", conn.secret_key)):
+        out.append(f"The secret key has {odd} character(s) other than letters, digits, - and _: "
+                   f"a secret key normally has none. Enter it again.")
     if not 16 <= len(conn.secret_key) <= 64:
         out.append(f"The secret key is {len(conn.secret_key)} characters long, which is unusual.")
     return out

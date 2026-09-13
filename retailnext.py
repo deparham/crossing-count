@@ -101,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
                                    input("Access key: "),
                                    input("Secret key: ") if args.show_secret
                                    else getpass.getpass("Secret key (hidden; paste with Cmd+V): "))
+            for problem in key_problems(conn):
+                print(f"Warning: {problem}")
             stores = locations(conn, ["store"])
             print(f"Connected to {conn.subscription}: the key sees {len(stores)} store(s). "
                   f"It is kept in this computer's credential store.")
