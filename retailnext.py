@@ -26,10 +26,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from crossing_count import video as vid
 from crossing_count.retailnext import (
     Connection,
     RetailNextError,
+    clean_key,
     forget_connection,
     key_problems,
     load_connection,
@@ -39,6 +39,23 @@ from crossing_count.retailnext import (
     save_raw,
     traffic,
 )
+
+
+def ask_secret(show: bool) -> str:
+    """The secret key, asked again while it holds a character RetailNext secrets never
+    have (a misread or mistyped one): the most common reason for "bad password"."""
+    while True:
+        secret = clean_key(input("Secret key: ") if show
+                           else getpass.getpass("Secret key (hidden; paste with Cmd+V): "))
+        odd = [(i + 1, ch) for i, ch in enumerate(secret) if not re.match(r"[A-Za-z0-9_-]", ch)]
+        if not odd:
+            return secret
+        where = ", ".join(f"{i}" + (f" ('{ch}')" if show else "") for i, ch in odd)
+        print(f"Position {where} of {len(secret)} is not a letter, digit, - or _, and a "
+              f"RetailNext secret key has only those. Look at that character on the token "
+              f"page (text copied from a picture of it is often misread there).")
+        if input("Type the secret key again? [Y/n] ").strip().lower() in ("n", "no"):
+            return secret
 
 
 def need() -> Connection:
@@ -98,9 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "connect":
             conn = save_connection(input("Subscription (in rag.cloud.retailnext.net it is 'rag'; "
                                          "the whole address works too): "),
-                                   input("Access key: "),
-                                   input("Secret key: ") if args.show_secret
-                                   else getpass.getpass("Secret key (hidden; paste with Cmd+V): "))
+                                   input("Access key: "), ask_secret(args.show_secret))
             for problem in key_problems(conn):
                 print(f"Warning: {problem}")
             stores = locations(conn, ["store"])
@@ -113,6 +128,8 @@ def main(argv: list[str] | None = None) -> int:
                       f"{n.get('store_id') or ''!s:<8} {n.get('uuid')}")
             print(f"\n{len(nodes)} locations. Saved {save_raw('locations', nodes)}")
         elif args.cmd == "traffic":
+            from crossing_count import video as vid  # loads the video libraries: only here
+
             conn = need()
             span = vid.parse_filename_interval(args.video.name)
             if span is None:
