@@ -10,7 +10,9 @@ accuracy, and its errors would correlate with the sensor's.
 
 Everything runs locally. Nothing is uploaded, and there is no telemetry. Footage
 is read where it lies and never copied into the repo (`.gitignore` blocks video
-files, and `runs/`, which holds images derived from footage).
+files, and `runs/`, which holds images derived from footage). The one network
+use is optional: fetching RetailNext's own counts from its API (`retailnext.py`),
+which only downloads numbers.
 
 ## Status
 
@@ -22,7 +24,9 @@ files, and `runs/`, which holds images derived from footage).
 | M4 | CSV export, pipeline metrics, report (`export.py`) | built |
 | – | Manual counting page (`count.py`), no detection at all | built |
 | – | Count wizard (`wizard.py`): automatic or manual count, then a PowerPoint report | built |
-| – | Windows installer (PyInstaller + Inno Setup, built by GitHub Actions) | built; not yet run on GitHub |
+| – | Windows installer (PyInstaller + Inno Setup, built by GitHub Actions) | built on GitHub |
+| – | Benchmark (`bench.py`): what the automatic count finds, on checked clips | built |
+| – | RetailNext API (`retailnext.py`): connect, list locations, fetch traffic | connect and fetch built; reading the answer into the wizard waits for a real answer |
 
 ## Setup
 
@@ -174,6 +178,21 @@ output cannot contain someone the tool never showed, so on those clips
 today's method". A hand count of part of the footage is shown but left out of
 the totals. If a camera's drawing changed since its count ran, the clip is
 skipped unless you pass `--allow-config-change`.
+
+## RetailNext's numbers from its API (`retailnext.py`, optional)
+
+    uv run retailnext.py connect      # subscription name, access key, secret key
+    uv run retailnext.py locations    # the stores (and other locations) the key sees
+    uv run retailnext.py traffic VIDEO  # RetailNext's 15-minute traffic for that period
+
+A RetailNext admin makes the key under Admin Settings > System Access Tokens;
+a key limited to Data, to the stores you validate, and with an expiry date is
+enough. `connect` asks for it in your terminal and keeps it in this computer's
+credential store (Keychain on a Mac, Credential Manager on Windows), never in
+a file, a report, a log or git; only the subscription name goes in
+`settings.json`. `forget` removes it. The only requests are RetailNext data
+queries: nothing about the footage is sent. Answers are kept as they came in
+`retailnext/` in the data folder.
 
 ## Windows app
 

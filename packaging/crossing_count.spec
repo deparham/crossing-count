@@ -5,18 +5,22 @@
 # models/ must hold the weights (yolo11s.pt, yolo11m.pt) before building.
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 ROOT = Path(SPECPATH).parent
 SCRIPTS = ["gate", "detect", "count", "review", "export", "setup_ui", "proposed",
-           "trace_line", "wizard", "label", "train_heads"]
+           "trace_line", "wizard", "label", "train_heads", "retailnext"]
 
-datas = collect_data_files("crossing_count") + collect_data_files("ultralytics")
+# keyring finds the credential store (Credential Manager, Keychain) through its
+# package metadata, so that goes in too.
+datas = (collect_data_files("crossing_count") + collect_data_files("ultralytics")
+         + copy_metadata("keyring"))
 for folder in ("models", "assets", "sites"):
     if (ROOT / folder).is_dir():
         datas.append((str(ROOT / folder), folder))
 
-hiddenimports = SCRIPTS + collect_submodules("uvicorn") + collect_submodules("crossing_count")
+hiddenimports = (SCRIPTS + collect_submodules("uvicorn") + collect_submodules("crossing_count")
+                 + collect_submodules("keyring"))
 
 a = Analysis(
     [str(ROOT / "packaging" / "launcher.py")],

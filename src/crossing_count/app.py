@@ -20,6 +20,7 @@ COMMANDS = {
     "gate": "gate", "detect": "detect", "count": "count", "review": "review",
     "export": "export", "setup": "setup_ui", "proposed": "proposed", "trace": "trace_line",
     "wizard": "wizard", "label": "label", "train-heads": "train_heads",
+    "retailnext": "retailnext",
 }
 
 

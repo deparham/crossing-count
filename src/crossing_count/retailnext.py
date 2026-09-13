@@ -1,0 +1,187 @@
+"""RetailNext's own counts, from its cloud API: optional, and downloads only.
+
+The only requests are data queries to <subscription>.api.retailnext.net, made when a
+person asks for RetailNext's numbers; no footage or result is ever sent. The access key
+and secret key live in this computer's credential store (Keychain on a Mac, Credential
+Manager on Windows) through keyring, never in a file, a report, a log or git;
+settings.json keeps only the subscription name.
+
+As documented (retailnext.atlassian.net, PUBLICDOCS, "API"): Basic authentication with
+the access key and secret key; POST v2/location lists locations; POST v2/datamine gives
+metrics such as traffic_in and traffic_out, grouped by time.
+"""
+
+from __future__ import annotations
+
+import base64
+import contextlib
+import json
+import re
+import ssl
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import keyring
+import keyring.errors
+
+from . import paths
+from .util import write_json_atomic
+
+SERVICE = "CrossingCount RetailNext"  # the credential store's entry
+TIMEOUT_S = 30
+RETRIES = 3
+_SUBSCRIPTION = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+_open = urllib.request.urlopen  # replaced in tests: nothing there reaches the network
+
+
+class RetailNextError(Exception):
+    """A request RetailNext refused or could not answer, said plainly."""
+
+
+@dataclass(frozen=True)
+class Connection:
+    subscription: str
+    access_key: str
+    secret_key: str
+
+    @property
+    def base(self) -> str:
+        return f"https://{self.subscription}.api.retailnext.net"
+
+
+def subscription_name(text: str) -> str:
+    """"acme", "acme.api.retailnext.net" or "https://acme.retailnext.net/x" -> "acme"."""
+    s = re.sub(r"^https?://", "", text.strip().lower()).split("/")[0].split(".")[0]
+    if not _SUBSCRIPTION.match(s):
+        raise RetailNextError(f"{text!r} is not a RetailNext subscription name (the first "
+                              f"part of your RetailNext web address)")
+    return s
+
+
+def save_connection(subscription: str, access_key: str, secret_key: str) -> Connection:
+    conn = Connection(subscription_name(subscription), access_key.strip(), secret_key.strip())
+    if not conn.access_key or not conn.secret_key:
+        raise RetailNextError("Both the access key and the secret key are needed.")
+    keyring.set_password(SERVICE, conn.subscription, json.dumps(
+        {"access_key": conn.access_key, "secret_key": conn.secret_key}))
+    paths.save_settings({"retailnext_subscription": conn.subscription})
+    return conn
+
+
+def load_connection() -> Connection | None:
+    sub = str(paths.load_settings().get("retailnext_subscription") or "")
+    if not sub:
+        return None
+    try:
+        raw = keyring.get_password(SERVICE, sub)
+        data = json.loads(raw) if raw else None
+    except (keyring.errors.KeyringError, ValueError):
+        return None
+    if not isinstance(data, dict) or not data.get("access_key") or not data.get("secret_key"):
+        return None
+    return Connection(sub, str(data["access_key"]), str(data["secret_key"]))
+
+
+def forget_connection() -> None:
+    sub = str(paths.load_settings().get("retailnext_subscription") or "")
+    if sub:
+        with contextlib.suppress(keyring.errors.PasswordDeleteError):
+            keyring.delete_password(SERVICE, sub)
+    paths.save_settings({"retailnext_subscription": ""})
+
+
+def _context() -> ssl.SSLContext:
+    try:
+        import certifi  # the same trusted certificates on every computer
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+def request(conn: Connection, path: str, body: dict[str, Any]) -> Any:
+    """POST a query; retries RetailNext's own hiccups (5xx, timeouts), never 401/403.
+    Messages never contain the keys."""
+    token = base64.b64encode(f"{conn.access_key}:{conn.secret_key}".encode()).decode()
+    req = urllib.request.Request(
+        f"{conn.base}/{path}", data=json.dumps(body).encode("utf-8"), method="POST",
+        headers={"Authorization": f"Basic {token}", "Accept": "application/json",
+                 "Content-Type": "application/json"})
+    for attempt in range(RETRIES):
+        last = attempt + 1 == RETRIES
+        try:
+            with _open(req, timeout=TIMEOUT_S, context=_context()) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                raise RetailNextError(
+                    f"RetailNext refused the key (HTTP {e.code}): it may be mistyped, revoked, "
+                    f"or not allowed to see this data. Run 'retailnext.py connect' again "
+                    f"with a valid key.") from None
+            if e.code >= 500 and not last:
+                time.sleep(2 ** attempt)
+                continue
+            detail = e.read().decode("utf-8", "replace")[:300]
+            raise RetailNextError(f"RetailNext answered HTTP {e.code} to {path}: {detail}") from None
+        except (urllib.error.URLError, TimeoutError) as e:
+            if not last:
+                time.sleep(2 ** attempt)
+                continue
+            raise RetailNextError(
+                f"Could not reach {conn.base} ({getattr(e, 'reason', e)}). Check the internet "
+                f"connection and the subscription name.") from None
+        except ValueError:
+            raise RetailNextError(f"RetailNext's answer to {path} was not JSON.") from None
+    raise RetailNextError(f"No answer from RetailNext to {path}.")
+
+
+def locations(conn: Connection, types: list[str] | None = None) -> list[dict[str, Any]]:
+    """Every location the key can see (stores, and whatever else RetailNext lists)."""
+    body: dict[str, Any] = {"extra_fields": ["store.store_id", "store.time_zone"]}
+    if types:
+        body["where"] = {"and": [{"location_types": types}]}
+    data = request(conn, "v2/location", body)
+    groups = data.get("nodes", []) if isinstance(data, dict) else []
+    return [n for g in groups for n in (g if isinstance(g, list) else [g]) if isinstance(n, dict)]
+
+
+def traffic_request(location_uuids: list[str], day: date, start: str, until: str,
+                    minutes: int = 15) -> dict[str, Any]:
+    """Traffic in and out for part of one day, per `minutes`: the documented full-day
+    request with its time range narrowed to the footage's (store time, "HH:MM")."""
+    return {"metrics": ["traffic_in", "traffic_out"],
+            "date_ranges": [{"from": {"gregorian": f"{day.isoformat()}T00:00:00Z"},
+                             "to": {"gregorian": f"{(day + timedelta(days=1)).isoformat()}T00:00:00Z"}}],
+            "time_ranges": [{"from": start, "until": until}],
+            "group_bys": [{"group": "time", "unit": "minutes", "value": minutes}],
+            "locations": location_uuids}
+
+
+def traffic(conn: Connection, location_uuids: list[str], day: date, start: str, until: str,
+            minutes: int = 15) -> Any:
+    return request(conn, "v2/datamine", traffic_request(location_uuids, day, start, until, minutes))
+
+
+def period_of(start: datetime, end: datetime, minutes: int = 15) -> tuple[date, str, str]:
+    """The day and whole intervals ("HH:MM" from and until) that cover [start, end]."""
+    if end.date() != start.date() and end.time() != datetime.min.time():
+        raise RetailNextError("Footage that runs past midnight is not supported yet.")
+    first = start.replace(minute=start.minute - start.minute % minutes, second=0, microsecond=0)
+    last = end if end.minute % minutes == 0 and end.second == 0 else (
+        end.replace(minute=end.minute - end.minute % minutes, second=0, microsecond=0)
+        + timedelta(minutes=minutes))
+    until = "24:00" if last.date() != first.date() else f"{last:%H:%M}"
+    return first.date(), f"{first:%H:%M}", until
+
+
+def save_raw(name: str, data: Any) -> Path:
+    """Keep an answer as it came, on this computer (retailnext/ in the data folder)."""
+    folder = paths.data_root() / "retailnext"
+    folder.mkdir(parents=True, exist_ok=True)
+    out = folder / f"{datetime.now().astimezone():%Y%m%d-%H%M%S}-{re.sub(r'[^A-Za-z0-9_-]+', '-', name)}.json"
+    write_json_atomic(out, data)
+    return out
