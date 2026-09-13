@@ -9,6 +9,7 @@
                                       RetailNext's traffic in and out for the video's
                                       period; the answer is saved in retailnext/ in the
                                       data folder, as it came
+    uv run retailnext.py check        look for the usual mistakes, without showing the key
     uv run retailnext.py forget       remove the key from this computer
 
 Nothing is sent to RetailNext but these queries.
@@ -19,6 +20,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import re
+import socket
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +31,7 @@ from crossing_count.retailnext import (
     Connection,
     RetailNextError,
     forget_connection,
+    key_problems,
     load_connection,
     locations,
     period_of,
@@ -63,19 +66,41 @@ def store_for(conn: Connection, video: Path) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("connect")
+    c = sub.add_parser("connect")
+    c.add_argument("--show-secret", action="store_true",
+                   help="show the secret key while typing it, to compare with the token page")
     sub.add_parser("locations")
     t = sub.add_parser("traffic")
     t.add_argument("video", type=Path)
     t.add_argument("--location", help="a location's uuid, from 'locations'")
     t.add_argument("--minutes", type=int, default=15)
+    sub.add_parser("check")
     sub.add_parser("forget")
     args = ap.parse_args(argv)
     try:
+        if args.cmd == "check":
+            conn = need()
+            host = conn.base.removeprefix("https://")
+            print(f"Subscription: {conn.subscription} ({host})")
+            try:
+                socket.getaddrinfo(host, 443)
+            except socket.gaierror:
+                print("  that address does not exist: the subscription name is probably wrong")
+            for problem in key_problems(conn) or ["The keys have the expected shape."]:
+                print(f"  {problem}")
+            try:
+                print(f"RetailNext accepted the key: it sees {len(locations(conn, ['store']))} "
+                      f"store(s).")
+            except RetailNextError as e:
+                print(e)
+                return 1
+            return 0
         if args.cmd == "connect":
             conn = save_connection(input("Subscription name (the first part of your RetailNext "
                                          "web address): "),
-                                   input("Access key: "), getpass.getpass("Secret key (hidden): "))
+                                   input("Access key: "),
+                                   input("Secret key: ") if args.show_secret
+                                   else getpass.getpass("Secret key (hidden; paste with Cmd+V): "))
             stores = locations(conn, ["store"])
             print(f"Connected to {conn.subscription}: the key sees {len(stores)} store(s). "
                   f"It is kept in this computer's credential store.")

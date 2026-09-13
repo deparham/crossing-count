@@ -95,6 +95,25 @@ def forget_connection() -> None:
     paths.save_settings({"retailnext_subscription": ""})
 
 
+_KEY_SHAPE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def key_problems(conn: Connection) -> list[str]:
+    """The usual mistakes in a stored key, found without showing any of it."""
+    out = []
+    access, secret = conn.access_key.lower(), conn.secret_key.lower()
+    if _KEY_SHAPE.match(secret) and not _KEY_SHAPE.match(access):
+        out.append("The secret key has the shape of an access key: the two look swapped.")
+    elif not _KEY_SHAPE.match(access):
+        out.append(f"The access key ({len(conn.access_key)} characters) does not have an access "
+                   f"key's shape (8-4-4-4-12 letters and digits, like the one on the token page).")
+    if re.search(r"\s", conn.access_key + conn.secret_key):
+        out.append("There is a space or line break inside a key.")
+    if not 16 <= len(conn.secret_key) <= 64:
+        out.append(f"The secret key is {len(conn.secret_key)} characters long, which is unusual.")
+    return out
+
+
 def _context() -> ssl.SSLContext:
     try:
         import certifi  # the same trusted certificates on every computer
@@ -118,10 +137,12 @@ def request(conn: Connection, path: str, body: dict[str, Any]) -> Any:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
+                said = e.read().decode("utf-8", "replace").strip()[:200]
                 raise RetailNextError(
-                    f"RetailNext refused the key (HTTP {e.code}): it may be mistyped, revoked, "
-                    f"or not allowed to see this data. Run 'retailnext.py connect' again "
-                    f"with a valid key.") from None
+                    f"RetailNext ({conn.base}) refused the key (HTTP {e.code})"
+                    f"{f': {said}' if said else ''}. The key may be mistyped, swapped with the "
+                    f"secret, revoked, or for another subscription. 'retailnext.py check' "
+                    f"looks for the usual mistakes; 'retailnext.py connect' enters it again.") from None
             if e.code >= 500 and not last:
                 time.sleep(2 ** attempt)
                 continue
