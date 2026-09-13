@@ -207,7 +207,9 @@ queries: nothing about the footage is sent. Answers are kept as they came in
 `retailnext/` in the data folder.
 
 **Getting footage.** Once connected, the wizard's first page has *Get footage
-from RetailNext*: pick the store, the day, the length (15 minutes to an hour),
+from RetailNext*: pick the brand (subscription; the store list then shows only
+its stores, and the last brand is remembered), the store, the day, the length
+(15 minutes to an hour),
 the traffic you validate and how you will count. It asks RetailNext for that
 day's 15-minute traffic over opening hours and shows the busiest windows for
 that traffic (most out for an out validation, most in for an in one), on

@@ -85,7 +85,8 @@
     <div class="big">Get footage from RetailNext</div>
     <div class="muted">Pick the store and the day: the tool finds the busiest stretch for the traffic you validate, then downloads it, clean for an automatic count, with RetailNext's marks for a count by hand.</div>
     <div class="grid2" style="margin-top:10px">
-      <label>Store <input id="rnStore" list="rnStores" placeholder="e.g. CN-123" autocomplete="off"></label>
+      <label>Brand <select id="rnSub"></select></label>
+      <label>Store <input id="rnStore" list="rnStores" placeholder="type the code or the name" autocomplete="off"></label>
       <label>Day <input type="date" id="rnDay"></label>
       <label>Length <select id="rnMinutes"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">1 hour</option></select></label>
       <label>Traffic <select id="rnDir"><option value="out">Out</option><option value="in">In</option><option value="both">In and out</option></select></label>
@@ -349,19 +350,32 @@ async function rnSetup() {
   $("rnCard").hidden = !st.connected;
   if (!st.connected) return;
   if (!$("rnDay").value) $("rnDay").value = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
-  if (W.rnStores) return;
+  const sel = $("rnSub"), subs = st.subscriptions || [];
+  if ([...sel.options].map((o) => o.value).join() !== subs.join()) {
+    let last = "";
+    try { last = localStorage.getItem("rnSub") || ""; } catch (e) { /* no storage here */ }
+    sel.innerHTML = subs.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
+    sel.value = subs.includes(last) ? last : subs[0];
+  }
+  rnStoresFor(sel.value);
+}
+async function rnStoresFor(sub) {  // only the chosen brand's stores
+  W.rnStores = W.rnStores || {};
   try {
-    W.rnStores = (await api("/api/retailnext/stores")).stores;
-    const shared = new Set(W.rnStores.filter((s, i, all) => all.findIndex((x) => x.code === s.code) !== i).map((s) => s.code));
-    $("rnStores").innerHTML = W.rnStores.map((s) => {  // a code two customers share is typed as subscription/code
-      const value = shared.has(s.code) ? `${s.subscription}/${s.code}` : s.code;
-      return `<option value="${esc(value)}">${esc(s.name)} · ${esc(s.subscription)}</option>`;
-    }).join("");
+    if (!W.rnStores[sub]) W.rnStores[sub] = (await api(`/api/retailnext/stores?subscription=${encodeURIComponent(sub)}`)).stores;
+    $("rnStores").innerHTML = W.rnStores[sub].map((s) => `<option value="${esc(s.code)}">${esc(s.name)}</option>`).join("");
   } catch (e) { msg(e.message, "err"); }
 }
+$("rnSub").addEventListener("change", () => {
+  try { localStorage.setItem("rnSub", $("rnSub").value); } catch (e) { /* no storage here */ }
+  $("rnStore").value = ""; $("rnWindows").innerHTML = ""; W.rnPick = null;
+  rnStoresFor($("rnSub").value);
+});
+const rnCode = (code) => (code.includes("/") ? code : `${$("rnSub").value}/${code}`);  // in the chosen brand
 $("rnFind").addEventListener("click", async () => {
-  const pick = { code: $("rnStore").value.trim(), date: $("rnDay").value, minutes: +$("rnMinutes").value, direction: $("rnDir").value };
-  if (!pick.code || !pick.date) { msg("Pick the store and the day.", "warn"); return; }
+  const typed = $("rnStore").value.trim();
+  const pick = { code: typed && rnCode(typed), date: $("rnDay").value, minutes: +$("rnMinutes").value, direction: $("rnDir").value };
+  if (!typed || !pick.date) { msg("Pick the store and the day.", "warn"); return; }
   $("rnWindows").innerHTML = '<div class="muted" style="margin-top:8px">Asking RetailNext…</div>';
   try {
     const r = await api("/api/retailnext/busiest", pick);

@@ -264,10 +264,16 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         return {"connected": bool(rn.subscriptions()), "subscriptions": rn.subscriptions()}
 
     @app.get("/api/retailnext/stores")
-    def retailnext_stores() -> dict[str, Any]:
-        """Every connected subscription's stores, each with its subscription."""
+    def retailnext_stores(subscription: str | None = None) -> dict[str, Any]:
+        """One connected subscription's stores (or every one's), each with its subscription."""
+        conns = rn_connections()
+        if subscription:
+            if subscription not in conns:
+                raise HTTPException(400, f"{subscription} is not connected on this computer: run "
+                                         f"'retailnext.py connect {subscription}'.")
+            conns = {subscription: conns[subscription]}
         stores = []
-        for sub, conn in rn_connections().items():
+        for sub, conn in conns.items():
             try:
                 nodes = rn_locations(conn)
             except rn.RetailNextError as exc:
