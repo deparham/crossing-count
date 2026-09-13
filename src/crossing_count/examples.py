@@ -45,6 +45,14 @@ def check_folder(path: str) -> Path:
     return p
 
 
+def _in_folder(line: str, prefix: str) -> bool:
+    try:
+        path = str(json.loads(line).get("path", ""))
+    except ValueError:
+        return False
+    return path == prefix or path.startswith(prefix + "/") or path.startswith(prefix + "\\")
+
+
 def moments(w: Wizard) -> list[dict[str, Any]]:
     """What to save: positives and negatives, each with its time, camera and source."""
     st = w.state
@@ -136,9 +144,18 @@ def export_examples(w: Wizard, root: Path) -> dict[str, Any]:
             "direction": mo["direction"], "source": mo["source"], "camera": mo["camera"],
             "video": st["filename"], "t_seconds": round(mo["t"], 3), "export_id": export_id},
             ensure_ascii=False))
-    if lines:
-        with (root / "index.jsonl").open("a", encoding="utf-8") as fh:
-            fh.write("\n".join(lines) + "\n")
+    # The index keeps one entry per example: this video's earlier entries are replaced.
+    index = root / "index.jsonl"
+    prefix = str(video_dir.relative_to(root))
+    try:
+        kept = [line for line in index.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not _in_folder(line, prefix)]
+    except OSError:
+        kept = []
+    if kept or lines:
+        tmp = index.with_name(index.name + ".tmp")
+        tmp.write_text("\n".join([*kept, *lines]) + "\n", encoding="utf-8")
+        tmp.replace(index)
     positives = sum(1 for line in lines if '"label": "crossing"' in line)
     return {"count": len(lines), "positives": positives, "negatives": len(lines) - positives,
             "folder": str(video_dir)}

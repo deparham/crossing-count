@@ -76,6 +76,12 @@ def test_hand_count_and_report(manual: Wizard, tmp_path: Path) -> None:
     assert meta["source"] == "manual_click" and meta["operator"] == "Pat" and meta["frames"]
     assert (examples / index[0]["path"] / meta["frames"][0]["file"]).is_file()
     assert meta["line"] and all(0 <= x <= 640 and 0 <= y <= 480 for x, y in meta["line"])
+    (examples / "index.jsonl").write_text(  # another video's entry, which must survive
+        (examples / "index.jsonl").read_text() + '{"path": "other/video/cam/crossing_0001"}\n')
+    manual.save_examples(examples, wait=True)  # saving again replaces this video's entries
+    again = (examples / "index.jsonl").read_text().splitlines()
+    assert len(again) == len(index) + 1 and again[-1].startswith('{"path": "syn-1/')
+    assert '{"path": "other/video/cam/crossing_0001"}' in again
 
 
 def test_manual_count_through_the_page_api(two_tile_video: dict[str, Any], tmp_path: Path,
