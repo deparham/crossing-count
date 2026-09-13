@@ -21,7 +21,7 @@ from typing import Any
 
 from crossing_count import paths
 from crossing_count.detector import pick_device
-from crossing_count.heads import HeadLabels, match_heads
+from crossing_count.heads import HeadLabels, LabelError, match_heads
 
 MIN_HEADS = 200
 
@@ -32,6 +32,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--base", default="yolo11s.pt", help="starting weights in models/")
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--force", action="store_true", help=f"train with fewer than {MIN_HEADS} heads")
+    ap.add_argument("--hold-out", metavar="TEXT",
+                    help="check on the videos whose file name contains TEXT (e.g. a store code)")
     args = ap.parse_args(argv)
 
     store = HeadLabels()
@@ -41,7 +43,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Mark at least {MIN_HEADS} heads first (about 1000 is the aim), or pass --force.")
         return 2
     run = paths.data_root() / "training" / datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-    data = store.export_yolo(run / "dataset")
+    try:
+        data = store.export_yolo(run / "dataset", hold_out=args.hold_out)
+    except LabelError as e:
+        print(e)
+        return 2
     print(f"training on {data['train']} pictures, checking on {data['val']}")
 
     os.environ.setdefault("YOLO_OFFLINE", "1")
@@ -62,28 +68,43 @@ def main(argv: list[str] | None = None) -> int:
     shutil.copy2(best, out)
 
     # The check: the new detector against the current one, on pictures it never trained on.
+    # The current one's guesses exist only where it had run; both are scored on those.
     trained = YOLO(str(best))
-    new = [0, 0, 0]
+    confs = (0.15, 0.25, 0.40)
+    new = {c: [0, 0, 0] for c in confs}
+    new_same = {c: [0, 0, 0] for c in confs}
     old = [0, 0, 0]
-    compared = 0
+    compared = marked_same = 0
     for fid in data["val_ids"]:
         frame = store.get(fid)
         marked = frame["heads"]
-        res: Any = trained.predict(str(store.image(fid)), imgsz=args.imgsz, conf=0.25,
+        res: Any = trained.predict(str(store.image(fid)), imgsz=args.imgsz, conf=min(confs),
                                    verbose=False)
-        boxes = res[0].boxes.xyxy.tolist() if res and res[0].boxes is not None else []
-        found = [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for b in boxes]
-        new = [a + b for a, b in zip(new, match_heads(found, marked), strict=True)]
+        boxes = res[0].boxes if res and res[0].boxes is not None else None
+        xyxy = boxes.xyxy.tolist() if boxes is not None else []
+        sure = boxes.conf.tolist() if boxes is not None else []
+        for c in confs:
+            found = [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for b, s in zip(xyxy, sure) if s >= c]
+            score = match_heads(found, marked)
+            new[c] = [a + b for a, b in zip(new[c], score, strict=True)]
+            if frame.get("prefilled"):
+                new_same[c] = [a + b for a, b in zip(new_same[c], score, strict=True)]
         if frame.get("prefilled"):
             compared += 1
+            marked_same += len(marked)
             guess = [(p[0], p[1]) for p in frame["prefill"]]
             old = [a + b for a, b in zip(old, match_heads(guess, marked), strict=True)]
     total = sum(len(store.get(fid)["heads"]) for fid in data["val_ids"])
     print(f"\nChecked on {len(data['val_ids'])} pictures kept out of training ({total} marked heads):")
-    print(f"  new head detector:  found {new[0]}, missed {new[2]}, invented {new[1]}")
+    for c in confs:
+        f, inv, miss = new[c]
+        print(f"  new head detector, {c:.0%} sure:  found {f}, missed {miss}, invented {inv}")
     if compared:
-        print(f"  current detector (on the {compared} of them it had guessed): found {old[0]}, "
-              f"missed {old[2]}, invented {old[1]}")
+        print(f"\nOn the {compared} of them the current detector had guessed ({marked_same} heads):")
+        print(f"  current detector:              found {old[0]}, missed {old[2]}, invented {old[1]}")
+        for c in confs:
+            f, inv, miss = new_same[c]
+            print(f"  new head detector, {c:.0%} sure:  found {f}, missed {miss}, invented {inv}")
     print(f"\nSaved {out}. It is not used for counting until it proves better on your clips.")
     return 0
 

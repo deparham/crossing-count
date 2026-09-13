@@ -224,17 +224,24 @@ class HeadLabels:
                 "heads": sum(r["heads"] for r in done), "target": TARGET_HEADS,
                 "videos": sorted({r["video"] for r in rows})}
 
-    def export_yolo(self, out: Path, val_share: float = 0.2) -> dict[str, Any]:
+    def export_yolo(self, out: Path, val_share: float = 0.2,
+                    hold_out: str | None = None) -> dict[str, Any]:
         """A YOLO training set of the finished frames: one class, "head".
 
         Frames kept for checking come from other videos where possible, so the check
-        says how the detector does on footage it never saw.
+        says how the detector does on footage it never saw. hold_out picks them: the
+        videos whose file name contains it.
         """
         done = [self.get(r["id"]) for r in self.summary() if r["done"]]
         if not done:
             raise LabelError("No finished frames to train on yet.")
         videos = sorted({f["video"] for f in done})
-        if len(videos) >= 3:  # whole videos held out, about val_share of the frames
+        if hold_out:
+            is_val = [hold_out.lower() in f["video"].lower() for f in done]
+            if not any(is_val) or all(is_val):
+                raise LabelError(f"--hold-out {hold_out!r} must match some videos but not all: "
+                                 f"{', '.join(videos)}")
+        elif len(videos) >= 3:  # whole videos held out, about val_share of the frames
             per = {v: sum(1 for f in done if f["video"] == v) for v in videos}
             val_videos: set[str] = set()
             for v in sorted(videos, key=lambda v: (per[v], v)):

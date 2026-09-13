@@ -91,6 +91,21 @@ def test_training_set_in_yolo_format(tmp_path: Path) -> None:
     assert "names:\n  0: head" in Path(data["yaml"]).read_text()
 
 
+def test_training_set_holds_out_a_chosen_video(tmp_path: Path) -> None:
+    store = HeadLabels(tmp_path / "labels")
+    for k, video in enumerate(["Export - YD-612-PB1.mp4", "Export - RW-128.mp4", "other.mp4"]):
+        fid = f"clip{k}__cam__00000000"
+        (store.frames_dir / f"{fid}.jpg").write_bytes(b"jpg")
+        (store.frames_dir / f"{fid}.json").write_text(json.dumps({
+            "id": fid, "video": video, "camera": "cam", "t": 0, "size": [640, 480],
+            "prefill": [], "heads": [], "prefilled": False, "done": False, "skipped": False}))
+        store.save(fid, [[320, 240, 16]])
+    data = store.export_yolo(tmp_path / "set", hold_out="yd-612")
+    assert data["val_ids"] == ["clip0__cam__00000000"] and data["train"] == 2
+    with pytest.raises(LabelError, match="must match"):
+        store.export_yolo(tmp_path / "set", hold_out="nowhere")
+
+
 def test_matching_found_heads_to_marked_ones() -> None:
     assert match_heads([(100, 100), (300, 300)], [[104, 98, 14], [500, 500, 14]]) == (1, 1, 1)
 
