@@ -484,8 +484,13 @@ function showItem(i) {
   play(it.clip, 1);
   let head, q;
   if (it.kind === "counted") { head = `Crossing ${k} of ${counted.length}`; q = `The tool counted someone going <span class="pill ${it.direction}">${dir}</span> at ${clock(it.t)} on ${esc(it.camera)}.<br>Is that a real person going ${dir}?`; }
-  else if (it.why === "lost") { head = `Possible miss ${k} of ${possible.length}`; q = `The tool lost a person right at the line at ${clock(it.t)} on ${esc(it.camera)}.<br>Did someone go <span class="pill ${it.direction}">${dir}</span> here?`; }
-  else { head = `Possible miss ${k} of ${possible.length}`; q = `The counting rule rejected this <span class="pill ${it.direction}">${dir}</span> at ${clock(it.t)} on ${esc(it.camera)} (they did not reach the mask zone the way the rule expects).<br>Did someone really go ${dir}?`; }
+  else if (it.why === "lost") { head = `Possible miss ${k} of ${possible.length}`; q = `The tool lost a person right at the line at ${clock(it.t)} on ${esc(it.camera)}. These are usually false alarms (about 1 in 10 is real), so a quick look is enough.<br>Did someone go <span class="pill ${it.direction}">${dir}</span> here?`; }
+  else {
+    const why = { no_filter: "the track never touched the filter zone", returned_same_track: "it looked like one person going out and coming back, but it may be two people",
+                  outward_no_mask: "they were not seen in the mask zone before leaving", pending_expired: "they were not seen reaching the mask zone" }[it.why] || "the counting rule rejected it";
+    head = `Possible miss ${k} of ${possible.length}`;
+    q = `The tool did not count this <span class="pill ${it.direction}">${dir}</span> at ${clock(it.t)} on ${esc(it.camera)}: ${why}.<br>Did someone really go ${dir}?`;
+  }
   const where = it.twin && it.twin.camera === it.camera ? "on this camera" : `on ${esc(it.twin && it.twin.camera)}`;
   const twin = it.twin ? `<div class="warn" style="margin-top:8px">A ${dir} already counted ${where} at ${clock(it.twin.t)} may be this same person. Same person: press <kbd>N</kbd>, so they are counted once. Someone else (for example in a group): press <kbd>Y</kbd>.</div>` : "";
   $("panel").innerHTML = `<div class="muted">${head}</div><div style="font-size:16px;margin-top:6px">${q}</div>${twin}

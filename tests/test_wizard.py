@@ -16,7 +16,15 @@ from pptx import Presentation
 
 from crossing_count.report_pptx import A4_H, A4_W, build_report
 from crossing_count.webapp import Setup
-from crossing_count.wizard import Progress, Wizard, WizardError, list_videos, mark_twins
+from crossing_count.wizard import (
+    POSSIBLE_REASONS,
+    Progress,
+    Wizard,
+    WizardError,
+    list_videos,
+    mark_twins,
+    prompt_priority,
+)
 from crossing_count.wizard_app import PPTX, create_wizard_app
 
 
@@ -68,6 +76,13 @@ def test_progress_is_read_from_gate_and_detect_output() -> None:
     assert p.camera == "CN-2" and p.overall() == pytest.approx(5 + 47.5)
     p.feed("objc[42]: Class AVFFrameReceiver is implemented in both ...")
     assert not any(line.startswith("objc") for line in p.log)
+
+
+def test_possible_misses_most_often_real_come_first() -> None:
+    assert {"no_filter", "returned_same_track", "outward_no_mask"} <= set(POSSIBLE_REASONS)
+    assert "uturn_no_mask" not in POSSIBLE_REASONS  # measured: never real
+    assert sorted(["lost", "pending_expired", "no_filter"], key=prompt_priority) == [
+        "no_filter", "pending_expired", "lost"]
 
 
 def test_one_person_on_two_cameras_is_flagged() -> None:

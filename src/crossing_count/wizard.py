@@ -43,7 +43,19 @@ CHOICES = {"in": ["in"], "out": ["out"], "both": ["in", "out"]}
 LABELS = {"in": "Traffic In", "out": "Traffic Out"}
 MODELS = ("yolo11m.pt", "yolo11s.pt")
 TWIN_WINDOW_S = 2.0  # same direction this close on another camera: maybe one person seen twice
-POSSIBLE_REASONS = ("pending_expired", "pending_at_eof", "pending_at_range_end", "outward_no_mask")
+# Rule rejections offered to the checker. Measured on checked clips (11:30 CN-123, YD-612):
+# "never touched the filter zone" and "out and back on one track" were real about half the
+# time or more; exits without the mask 3 in 7; entries lost before the mask 0 in 8; tracks
+# broken at the line 9 in 94. U-turns (0 in 2) stay rejected.
+POSSIBLE_REASONS = ("no_filter", "returned_same_track", "outward_no_mask", "pending_expired",
+                    "pending_at_eof", "pending_at_range_end")
+PROMPT_PRIORITY = {"no_filter": 0, "returned_same_track": 0, "outward_no_mask": 0,
+                   "pending_expired": 1, "pending_at_eof": 1, "pending_at_range_end": 1, "lost": 2}
+
+
+def prompt_priority(why: str) -> int:
+    """Possible misses most often real come first; tracks broken at the line last."""
+    return PROMPT_PRIORITY.get(why, 1)
 CLIP_BEFORE_S = 2.5
 CLIP_AFTER_S = 1.5
 FOUND = {  # how each verified crossing came to be counted, for the report
@@ -712,7 +724,9 @@ class Wizard:
                                   "t": float(u["t_seconds"]), "direction": u["direction_guess"],
                                   "clip": clip(float(u["start_s"]), float(u["end_s"])),
                                   "point": None, "path": None})
-        items.sort(key=lambda i: (i["kind"] != "counted", i["t"], i["picture"]))
+        items.sort(key=lambda i: (i["kind"] != "counted",
+                                  prompt_priority(i["why"]) if i["kind"] == "possible" else 0,
+                                  i["t"], i["picture"]))
         mark_twins(items)
         return items
 
