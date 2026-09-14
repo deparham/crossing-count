@@ -13,5 +13,5 @@ def test_the_package_version_is_the_projects() -> None:
     assert __version__ == project["project"]["version"]
     assert app_version().startswith(__version__)
     assert __copyright__ == "© 2026 Parham Forozan"
-    page = (paths.SOURCE_ROOT / "src" / "crossing_count" / "web" / "wizard.html").read_text()
+    page = (paths.SOURCE_ROOT / "src" / "crossing_count" / "web" / "wizard.html").read_text(encoding="utf-8")
     assert "© 2026 Parham Forozan" in page
