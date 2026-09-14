@@ -5,14 +5,16 @@ from __future__ import annotations
 import functools
 import subprocess
 
-from . import __version__, paths
+from . import __version__, builtin, paths
 
 
 @functools.lru_cache(maxsize=1)
 def app_version() -> str:
-    """"0.1.0", or "0.1.0 (a834778)" from a git checkout ("…, changed" with edits not committed)."""
+    """"0.1.0 (a834778)" from a git checkout ("…, changed" with edits not committed),
+    "0.1.0 (build 57, a834778)" from one of GitHub's builds, else "0.1.0"."""
     if paths.FROZEN or not (paths.SOURCE_ROOT / ".git").exists():
-        return __version__
+        info = builtin.build()
+        return f"{__version__} (build {info['build']}, {str(info['commit'])[:7]})" if info else __version__
 
     def git(*args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(["git", "-C", str(paths.SOURCE_ROOT), *args], capture_output=True,

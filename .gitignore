@@ -37,3 +37,10 @@ retailnext/
 
 # Camera drawings: the user's own, never touched by an update
 sites/
+
+# Written into the app by GitHub's build (packaging/build_info.py): build number, built-in keys
+src/crossing_count/build.json
+src/crossing_count/builtin.dat
+
+# Gold set: counts of a retailer's footage
+gold/

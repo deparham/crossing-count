@@ -33,7 +33,7 @@ from zoneinfo import ZoneInfo
 import keyring
 import keyring.errors
 
-from . import paths
+from . import builtin, paths
 from .util import write_json_atomic
 
 SERVICE = "CrossingCount RetailNext"  # the credential store's entry
@@ -94,13 +94,24 @@ def clean_key(text: str) -> str:
     return _PASTE_MARKS.sub("", text).strip()
 
 
-def subscriptions() -> list[str]:
-    """The connected subscriptions (names only: the keys are in the credential store), in
+def saved_subscriptions() -> list[str]:
+    """The subscriptions connected on this computer (their keys in the credential store), in
     the order they were connected."""
     settings = paths.load_settings()
     subs = [str(s) for s in settings.get("retailnext_subscriptions") or [] if s]
     old = str(settings.get("retailnext_subscription") or "")  # from when one was kept
     return subs if not old or old in subs else [old, *subs]
+
+
+def builtin_subscriptions() -> list[str]:
+    """Brands built into this app by GitHub's build (none in the project folder)."""
+    return list(builtin.retailnext())
+
+
+def subscriptions() -> list[str]:
+    """Every usable subscription (names only): this computer's, then those built in."""
+    subs = saved_subscriptions()
+    return subs + [b for b in builtin_subscriptions() if b not in subs]
 
 
 def save_connection(subscription: str, access_key: str, secret_key: str) -> Connection:
@@ -111,13 +122,14 @@ def save_connection(subscription: str, access_key: str, secret_key: str) -> Conn
         raise RetailNextError("Both the access key and the secret key are needed.")
     keyring.set_password(SERVICE, conn.subscription, json.dumps(
         {"access_key": conn.access_key, "secret_key": conn.secret_key}))
-    subs = [s for s in subscriptions() if s != conn.subscription] + [conn.subscription]
+    subs = [s for s in saved_subscriptions() if s != conn.subscription] + [conn.subscription]
     paths.save_settings({"retailnext_subscriptions": subs, "retailnext_subscription": ""})
     return conn
 
 
 def load_connection(subscription: str | None = None) -> Connection | None:
-    """One subscription's connection; without a name, the one connected last."""
+    """One subscription's connection; without a name, the one connected last. A key on this
+    computer comes before one built into the app."""
     subs = subscriptions()
     sub = subscription or (subs[-1] if subs else "")
     if not sub:
@@ -126,8 +138,10 @@ def load_connection(subscription: str | None = None) -> Connection | None:
         raw = keyring.get_password(SERVICE, sub)
         data = json.loads(raw) if raw else None
     except (keyring.errors.KeyringError, ValueError):
-        return None
+        data = None
     if not isinstance(data, dict) or not data.get("access_key") or not data.get("secret_key"):
+        data = builtin.retailnext().get(sub)
+    if not data:
         return None
     return Connection(sub, str(data["access_key"]), str(data["secret_key"]))
 
@@ -151,20 +165,21 @@ def reconnect(subscription: str) -> Connection | None:
     type. None if its key is not there."""
     sub = subscription_name(subscription)
     conn = load_connection(sub)
-    if conn is not None:
-        subs = [s for s in subscriptions() if s != sub] + [sub]
+    if conn is not None and sub not in builtin_subscriptions():
+        subs = [s for s in saved_subscriptions() if s != sub] + [sub]
         paths.save_settings({"retailnext_subscriptions": subs, "retailnext_subscription": ""})
     return conn
 
 
 def connections() -> list[Connection]:
-    """Every connected subscription whose key is in the credential store."""
+    """Every usable subscription with its key (this computer's first, then built in)."""
     return [c for s in subscriptions() if (c := load_connection(s)) is not None]
 
 
 def forget_connection(subscription: str | None = None) -> None:
-    """Remove one subscription's key from this computer, or every one's."""
-    subs = subscriptions()
+    """Remove one subscription's key from this computer, or every one's. A brand built into
+    the app stays usable: its key is in the app, not on this computer."""
+    subs = saved_subscriptions()
     gone = [subscription] if subscription else subs
     for sub in gone:
         with contextlib.suppress(keyring.errors.PasswordDeleteError):

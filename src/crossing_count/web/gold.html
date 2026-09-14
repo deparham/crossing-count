@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CrossingCount · Gold set</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f2f5f8; --panel: #ffffff; --panel2: #f3f6f9; --border: #dce3ea; --border2: #c9d3dc;
+    --text: #1b2536; --title: #101d3b; --muted: #637083;
+    --accent: #1f9bb3; --accent2: #17829a; --soft: #e4f3f6; --ring: rgba(31,155,179,.28);
+    --navy: #101d3b; --navy2: #1b2d55;
+    --ok: #15803d; --warn: #b45309; --err: #c53030;
+    --shadow: 0 1px 2px rgba(16,29,59,.05), 0 6px 20px rgba(16,29,59,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #0b1222; --panel: #121b2e; --panel2: #18233a; --border: #243150; --border2: #30406a;
+      --text: #e4e9f1; --title: #f3f6fa; --muted: #92a0b5;
+      --accent: #27a9c2; --accent2: #45bdd4; --soft: rgba(39,169,194,.14); --ring: rgba(39,169,194,.35);
+      --ok: #3ecf8e; --warn: #f5b942; --err: #ff6b6b;
+      --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px rgba(0,0,0,.25);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+         background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+  header { display: flex; gap: 14px; align-items: center; padding: 12px 20px; color: #fff;
+           background: linear-gradient(100deg, var(--navy) 0%, var(--navy2) 100%); }
+  header b { font-size: 16px; } header b span { color: #5cc8dc; }
+  header .sep { width: 1px; height: 22px; background: rgba(255,255,255,.2); }
+  header h1 { font-size: 14px; margin: 0; font-weight: 500; }
+  main { padding: 20px; max-width: 1360px; margin: 0 auto; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px;
+          margin-bottom: 14px; box-shadow: var(--shadow); }
+  .big { font-size: 18px; font-weight: 650; color: var(--title); margin-bottom: 4px; }
+  .muted { color: var(--muted); } .ok { color: var(--ok); } .warn { color: var(--warn); } .err { color: var(--err); }
+  button { background: var(--panel); color: var(--text); border: 1px solid var(--border2); border-radius: 9px;
+           padding: 7px 15px; cursor: pointer; font: inherit; font-weight: 500; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  .sets { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+  .sets div { background: var(--panel2); border: 1px solid var(--border); border-radius: 12px; padding: 10px 16px;
+              min-width: 170px; color: var(--muted); font-size: 13px; }
+  .sets b { display: block; font-size: 22px; color: var(--title); }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  tr.pick { cursor: pointer; } tr.pick:hover { background: var(--soft); }
+  .pill { display: inline-block; padding: 0 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
+          background: var(--panel2); border: 1px solid var(--border); margin: 1px 2px 1px 0; }
+  .pill.test { background: var(--soft); border-color: var(--accent); }
+  ul.limits { margin: 8px 0 0; padding-left: 20px; }
+  h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 0 6px; }
+  footer { text-align: center; font-size: 12px; margin: 24px 0 16px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header><b>Crossing<span>Count</span></b><span class="sep"></span><h1>Gold set</h1><span class="muted" id="dataset" style="color:rgba(255,255,255,.65)"></span></header>
+<main>
+  <div class="card">
+    <div class="big">What the gold set is</div>
+    <div class="muted">Clips a person counted by hand, watching every moment: every crossing was looked for, not only those the tool pointed at. The automatic counter is scored against them and never trained on them. Each store is in one set for good: <b>train</b> and <b>validation</b> (together, the development set) for measuring changes, <b>test</b> held back for a final check. A clip counted by two people keeps only the crossings both counted; the moments they disagree on are left out and listed.</div>
+    <div class="sets" id="sets"></div>
+  </div>
+
+  <div class="card">
+    <div class="big">Clips</div>
+    <div class="scroll"><table id="clips"></table></div>
+  </div>
+
+  <div class="card">
+    <div class="big">Score the automatic count</div>
+    <div class="muted">Each clip needs an automatic count of the same cameras over the same period (the footage without RetailNext's marks, counted automatically in the wizard). Its recorded detections are replayed with today's settings, so a score shows what the tool does now.</div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+      <button id="dev" class="primary">Score on the development set</button>
+      <button id="test">Final check on the test set</button>
+    </div>
+    <div id="testNote" class="muted" style="margin-top:6px"></div>
+    <div id="status" style="margin-top:10px"></div>
+    <div id="result"></div>
+  </div>
+
+  <div class="card">
+    <div class="big">Earlier scorings</div>
+    <div class="muted">Every scoring is kept (in bench/experiments in the data folder), with the app version, detector, settings and clips it used. Click one to see it.</div>
+    <div class="scroll"><table id="history"></table></div>
+  </div>
+</main>
+<footer>CrossingCount · © 2026 Parham Forozan. All rights reserved.</footer>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+function esc(x) { return String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+  return j;
+}
+const pause = (ms) => new Promise((ok) => setTimeout(ok, ms));
+const NAMES = { train: "Train", validation: "Validation", test: "Test" };
+let G = null;
+
+function when(iso) { return iso ? new Date(iso).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" }) : ""; }
+function period(p) {
+  const a = new Date(p.start), b = new Date(p.end);
+  return `${a.toLocaleDateString("en-AU")} ${p.start.slice(11, 16)}–${p.end.slice(11, 16)}`;
+}
+function render() {
+  $("dataset").textContent = G.dataset;
+  $("sets").innerHTML = ["train", "validation", "test"].map((k) => {
+    const s = G.sets[k];
+    return `<div>${NAMES[k]}<b>${s.clips} clip${s.clips === 1 ? "" : "s"}</b>${s.stores.length} store${s.stores.length === 1 ? "" : "s"} · ${s.crossings} crossings</div>`;
+  }).join("");
+  $("clips").innerHTML = G.clips.length
+    ? `<tr><th>Clip</th><th>Set</th><th>Period</th><th>Cameras</th><th>Counted by</th><th>Crossings</th><th>Two people</th><th>Tags</th></tr>` +
+      G.clips.map((c) => {
+        const a = c.agreement;
+        const two = !a ? '<span class="muted">not yet</span>'
+          : a.disagreements ? `<span class="warn">${a.agreed} agreed, ${a.disagreements} disputed</span>` : `<span class="ok">agree (${a.agreed})</span>`;
+        return `<tr><td>${esc(c.store.code)} ${esc(c.store.name)}<div class="muted" style="font-size:12px">${esc(c.id)}</div></td>` +
+          `<td><span class="pill ${c.split === "test" ? "test" : ""}">${NAMES[c.split]}</span></td><td>${esc(period(c.period))}</td>` +
+          `<td>${c.cameras.map(esc).join("<br>")}</td><td>${c.reviews.map((r) => esc(r.reviewer)).join(", ")}</td>` +
+          `<td>${c.crossings}${c.uncertain ? ` <span class="muted">(+${c.uncertain} uncertain)</span>` : ""}</td><td>${two}</td>` +
+          `<td>${c.tags.map((t) => `<span class="pill">${esc(G.tags[t] || t)}</span>`).join("")}${c.notes ? `<div class="muted" style="font-size:12px">${esc(c.notes)}</div>` : ""}</td></tr>`;
+      }).join("")
+    : `<tr><td class="muted">No gold clip yet. Count a clip by hand in the wizard (Manual), watching every moment, then keep it on the report page.</td></tr>`;
+  $("testNote").textContent = `Tune only on the development set: the test set is for a final check, and each use is recorded (so far: ${G.test_scorings}).`;
+  $("history").innerHTML = G.experiments.length
+    ? `<tr><th>When</th><th>Set</th><th>Clips</th><th>Crossings</th><th>Recall</th><th>Precision</th><th>Version</th></tr>` +
+      G.experiments.map((e) => `<tr class="pick" data-id="${esc(e.id)}"><td>${esc(when(e.made_at))}</td><td>${esc(e.set)}</td><td>${e.clips}</td><td>${e.crossings}</td>` +
+        `<td>${e.sufficient ? pct(e.recall) : '<span class="muted">sample too small</span>'}</td><td>${e.sufficient ? pct(e.precision) : "–"}</td><td class="muted">${esc(e.app_version)}</td></tr>`).join("")
+    : `<tr><td class="muted">None yet.</td></tr>`;
+}
+function pct(v) { return v == null ? "–" : `${v}%`; }
+function ci(r) { return r ? ` <span class="muted">(${r[0]}–${r[1]})</span>` : ""; }
+function row(label, m) {
+  if (!m) return "";
+  const rates = m.sufficient
+    ? `<td>${pct(m.recall)}${ci(m.recall_ci)}</td><td>${pct(m.miss_rate)}</td><td>${pct(m.wrong_way_rate)}</td><td>${pct(m.precision)}${ci(m.precision_ci)}</td><td>${m.f1 ?? "–"}</td>`
+    : `<td colspan="5" class="muted">${esc(m.reason)}</td>`;
+  return `<tr><td>${esc(label)}</td><td>${m.truth}</td><td>${m.found}</td><td>${m.wrong_way}</td><td>${m.missed}</td><td>${m.false}${m.duplicate ? ` <span class="muted">(${m.duplicate} duplicate)</span>` : ""}</td>${rates}</tr>`;
+}
+const HEAD = `<tr><th></th><th>Crossings</th><th>Found</th><th>Wrong way</th><th>Missed</th><th>False</th><th>Recall (95%)</th><th>Miss rate</th><th>Wrong way</th><th>Precision (95%)</th><th>F1</th></tr>`;
+function showResult(e) {
+  const t = e.totals, w = e.workload;
+  let html = `<h3>${e.set === "test" ? "Test set (held-out stores)" : "Development set (train and validation)"} · ${esc(when(e.made_at))}</h3>`;
+  if (e.limits.length) html += `<ul class="limits warn">${e.limits.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>`;
+  if (t) {
+    html += `<div class="scroll"><table>${HEAD}${row("All", t.all)}${Object.entries(t.by_direction).map(([d, m]) => row(d === "in" ? "In" : "Out", m)).join("")}</table></div>`;
+    const sets = Object.entries(e.by_split || {});
+    if (sets.length > 1) html += `<h3>By set</h3><div class="scroll"><table>${HEAD}${sets.map(([k, m]) => row(NAMES[k], m.all)).join("")}</table></div>`;
+    const tags = Object.entries(e.by_tag || {});
+    if (tags.length) html += `<h3>By tag</h3><div class="scroll"><table>${HEAD}${tags.map(([k, m]) => row(G.tags[k] || k, m.all)).join("")}</table></div>`;
+    html += `<h3>Reviewing it asks for, per hour of one camera's footage (${w.camera_hours} h scored)</h3>
+      <div>${w.questions_per_hour ?? "–"} questions · ${w.possible_misses_per_hour ?? "–"} of them possible misses · ${w.watch_minutes_per_hour ?? "–"} minutes of unexplained movement to watch.
+      The possible-miss list showed ${w.misses_on_list} of the ${w.misses} crossings the tool missed${w.misses_on_list_pct != null ? ` (${w.misses_on_list_pct}%)` : ""}; ${w.real_misses_per_100_listed ?? "–"} of every 100 it listed were real misses.</div>`;
+  }
+  html += `<h3>Clips</h3><ul>${e.clips.map((c) => c.scored
+      ? `<li>${esc(c.id)}: ${Object.values(c.by_direction).reduce((a, m) => a + m.found, 0)} found, ${Object.values(c.by_direction).reduce((a, m) => a + m.missed, 0)} missed, ${Object.values(c.by_direction).reduce((a, m) => a + m.false, 0)} false <span class="muted">(automatic count ${esc(c.run)})</span></li>`
+      : `<li class="muted">${esc(c.id)}: not scored. ${esc(c.reason)}</li>`).join("")}</ul>`;
+  const det = (e.detectors || []).map((d) => `${esc(d.model)}${d.sha256 ? ` (${d.sha256.slice(0, 12)})` : ""}`).join(", ");
+  html += `<div class="muted" style="font-size:12px;margin-top:8px">CrossingCount ${esc(e.app_version)} · ${esc(e.dataset)} · detector ${det || "–"} · a tool crossing and a person's are one when at most ${e.settings.tolerance_s} s apart on the same camera · no rate on fewer than ${e.settings.min_sample} crossings.
+    Found: counted the right way. Recall = found ÷ the person's crossings; miss rate = missed ÷ the person's crossings; precision = found ÷ the tool's crossings. None of these is sensor accuracy.</div>`;
+  $("result").innerHTML = html;
+}
+async function score(which) {
+  if (which === "test" && !confirm(`Score the held-out test set?\n\nUse it only for a final check of a version you have settled on the development set: tuning on it makes its result mean nothing. This use is recorded (${G.test_scorings} so far).`)) return;
+  $("dev").disabled = $("test").disabled = true;
+  $("status").innerHTML = '<span class="muted">Replaying the automatic counts on the gold clips…</span>';
+  try {
+    await api("/api/gold/score", { which });
+    for (;;) {
+      await pause(1000);
+      const j = await api("/api/gold/score");
+      if (j.state === "running") continue;
+      if (j.state === "failed") { $("status").innerHTML = `<span class="err">${esc(j.error)}</span>`; break; }
+      $("status").innerHTML = ""; showResult(j.result); break;
+    }
+    G = await api("/api/gold"); render();
+  } catch (e) { $("status").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  finally { $("dev").disabled = $("test").disabled = false; }
+}
+$("dev").addEventListener("click", () => score("development"));
+$("test").addEventListener("click", () => score("test"));
+$("history").addEventListener("click", async (e) => {
+  const tr = e.target.closest("[data-id]");
+  if (!tr) return;
+  try { showResult(await api(`/api/gold/experiment?id=${encodeURIComponent(tr.dataset.id)}`)); $("result").scrollIntoView({ behavior: "smooth" }); }
+  catch (err) { $("status").innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+});
+(async () => {
+  try { G = await api("/api/gold"); render(); } catch (e) { $("status").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+})();
+</script>
+</body>
+</html>

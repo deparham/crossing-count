@@ -24,8 +24,8 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 from starlette.routing import Mount
 
+from . import gold, paths, releases, updates
 from . import overlay as ov
-from . import paths, updates
 from . import retailnext as rn
 from .examples import check_folder
 from .review_app import WEB_DIR, _range_response
@@ -49,6 +49,20 @@ EXPORT_WAIT_S = 1800.0  # and for how long, before giving up
 
 class ForgetIn(BaseModel):
     subscription: str
+
+
+class TokenIn(BaseModel):
+    token: str  # kept in the credential store (or GitHub's secrets) only; never sent back
+
+
+class GoldSaveIn(BaseModel):
+    tags: list[str] = []
+    notes: str = ""
+
+
+class GoldScoreIn(BaseModel):
+    which: str = "development"  # or "test": the held-out stores, for a final check only
+    note: str = ""
 
 
 def _restart() -> None:
@@ -183,6 +197,8 @@ class _Current:
     draw: str | None = None
     rn_nodes: dict[str, list[dict[str, Any]]] | None = None  # per subscription, fetched once
     rn_job: dict[str, Any] | None = None  # the footage being exported and downloaded
+    update_job: dict[str, Any] | None = None  # the installed app downloading its new version
+    gold_job: dict[str, Any] | None = None  # the automatic count being scored on gold clips
 
 
 def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = None,
@@ -297,9 +313,15 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         except ValueError as exc:
             raise HTTPException(400, f"{text!r} is not a day (YYYY-MM-DD).") from exc
 
+    def rn_lists() -> dict[str, Any]:
+        """The brands: every usable one, this computer's own, and those built into the app."""
+        return {"subscriptions": rn.subscriptions(), "saved": rn.saved_subscriptions(),
+                "builtin": rn.builtin_subscriptions()}
+
     @app.get("/api/retailnext")
     def retailnext_status() -> dict[str, Any]:
-        return {"connected": bool(rn.subscriptions()), "subscriptions": rn.subscriptions()}
+        return {"connected": bool(rn.subscriptions()), **rn_lists(),
+                "can_share": releases.can_share()}
 
     @app.post("/api/retailnext/connect")
     def retailnext_connect(c: ConnectIn) -> dict[str, Any]:
@@ -311,7 +333,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
             raise HTTPException(400, str(exc)) from exc
         if cur.rn_nodes is not None:
             cur.rn_nodes.pop(conn.subscription, None)  # a new key may see other stores
-        return {"subscription": conn.subscription, "subscriptions": rn.subscriptions()}
+        return {"subscription": conn.subscription, **rn_lists()}
 
     @app.post("/api/retailnext/forget")
     def retailnext_forget(f: ForgetIn) -> dict[str, Any]:
@@ -320,14 +342,37 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
             sub = rn.subscription_name(f.subscription)
         except rn.RetailNextError as exc:
             raise HTTPException(400, str(exc)) from exc
+        if sub in rn.builtin_subscriptions() and sub not in rn.saved_subscriptions():
+            raise HTTPException(400, f"{sub} is built into this app, so it cannot be removed "
+                                     f"here.")
         rn.forget_connection(sub)
         if cur.rn_nodes is not None:
             cur.rn_nodes.pop(sub, None)
-        return {"subscriptions": rn.subscriptions()}
+        return rn_lists()
+
+    @app.post("/api/share/brands")
+    def share_brands() -> dict[str, Any]:
+        """This computer's brands into GitHub's secrets, for the next builds of the apps."""
+        saved = set(rn.saved_subscriptions())
+        try:
+            return releases.share_brands([c for c in rn.connections() if c.subscription in saved])
+        except releases.ReleaseError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/share/token")
+    def share_token(t: TokenIn) -> dict[str, Any]:
+        """A token for the apps' update notice, into GitHub's secrets."""
+        try:
+            return releases.share_update_token(t.token)
+        except releases.ReleaseError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.get("/api/update")
     def update_status(fetch: bool = True) -> dict[str, Any]:
-        """A newer version on GitHub, or one on this computer not yet running."""
+        """A newer version: on GitHub, or (in the project folder) on this computer and not
+        yet running. Without fetch, only which version is running."""
+        if paths.FROZEN:
+            return releases.status() if fetch else releases.local_status()
         return updates.status(fetch=fetch)
 
     @app.post("/api/update")
@@ -337,12 +382,35 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
             raise HTTPException(409, "A count is running: let it finish (or stop it) first.")
         if cur.rn_job and cur.rn_job.get("state") in ("exporting", "downloading"):
             raise HTTPException(409, "Footage is downloading: let it finish first.")
+        if paths.FROZEN:  # download and install in the background; the page follows the job
+            if not (cur.update_job and cur.update_job.get("state") in
+                    ("downloading", "installing", "restarting")):
+                job: dict[str, Any] = {"state": "downloading", "done": 0, "total": None,
+                                       "message": ""}
+                cur.update_job = job
+                threading.Thread(target=releases.run_update,
+                                 args=(job, lambda: threading.Timer(1.5, _stop_server).start()),
+                                 daemon=True).start()
+            return {"ok": True, "job": True}
         try:
             now = updates.apply()
         except updates.UpdateError as exc:
             raise HTTPException(400, str(exc)) from exc
         threading.Timer(0.5, _restart).start()
         return {"ok": True, "head": now}
+
+    @app.get("/api/update/job")
+    def update_job() -> dict[str, Any]:
+        return dict(cur.update_job or {})
+
+    @app.post("/api/update/token")
+    def update_token(t: TokenIn) -> dict[str, Any]:
+        """The installed app's GitHub token, typed on the page: tried, then kept."""
+        try:
+            releases.connect(t.token)
+        except releases.ReleaseError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return releases.status()
 
     @app.post("/api/quit")
     def quit_app() -> dict[str, Any]:
@@ -666,5 +734,71 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     @app.get("/video")
     def video_file(request: Request) -> Response:
         return _range_response(wiz().video, request.headers.get("range"))
+
+    # ---- the gold set ----------------------------------------------------------------------
+
+    def data() -> Path:
+        return runs_root if runs_root is not None else paths.data_root()
+
+    @app.get("/gold", response_class=HTMLResponse)
+    @app.get("/gold/", response_class=HTMLResponse)
+    def gold_page() -> str:
+        return (WEB_DIR / "gold.html").read_text(encoding="utf-8")
+
+    @app.get("/api/gold")
+    def gold_overview() -> dict[str, Any]:
+        return gold.overview(data())
+
+    @app.get("/api/gold/current")
+    def gold_current() -> dict[str, Any]:
+        """Can this footage's count be kept as a gold clip, and is it kept already?"""
+        w = wiz()
+        rec = gold.find(w.state, data())
+        return {"problems": gold.problems(w.state), "tags": gold.TAGS,
+                "clip": gold.describe(rec) if rec else None}
+
+    @app.post("/api/gold/save")
+    def gold_save(g: GoldSaveIn) -> dict[str, Any]:
+        w = wiz()
+        try:
+            return {"clip": gold.save(w.state, w.run_dir, g.tags, g.notes, data())}
+        except gold.GoldError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/gold/recount")
+    def gold_recount() -> dict[str, Any]:
+        return run(wiz().recount)
+
+    @app.post("/api/gold/score")
+    def gold_score(s: GoldScoreIn) -> dict[str, Any]:
+        """Score the automatic count on gold clips, in the background (replays take a while)."""
+        if s.which not in ("development", "test"):
+            raise HTTPException(400, "Score the development set or the test set.")
+        if cur.gold_job and cur.gold_job.get("state") == "running":
+            raise HTTPException(409, "Already scoring: wait for it to finish.")
+        job: dict[str, Any] = {"state": "running", "which": s.which}
+        cur.gold_job = job
+
+        def work() -> None:
+            try:
+                job.update(state="done", result=gold.evaluate(s.which, data(), s.note))
+            except (gold.GoldError, OSError, ValueError) as exc:
+                job.update(state="failed", error=str(exc))
+
+        threading.Thread(target=work, daemon=True).start()
+        return dict(job)
+
+    @app.get("/api/gold/score")
+    def gold_score_status() -> dict[str, Any]:
+        return dict(cur.gold_job or {})
+
+    @app.get("/api/gold/experiment")
+    def gold_experiment(id: str) -> dict[str, Any]:
+        path = gold.experiments_dir(data()) / f"{Path(id).name}.json"
+        if not path.is_file():
+            raise HTTPException(404, "No such scoring.")
+        import json
+
+        return dict(json.loads(path.read_text(encoding="utf-8")))
 
     return app

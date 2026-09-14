@@ -324,7 +324,8 @@ def test_the_app_finds_the_busiest_time_and_downloads_it(monkeypatch: pytest.Mon
     footage = tmp_path / "footage"
     footage.mkdir()
     client = TestClient(create_wizard_app(tmp_path, tmp_path / "runs", [footage]))
-    assert client.get("/api/retailnext").json() == {"connected": True, "subscriptions": ["acme"]}
+    brands = client.get("/api/retailnext").json()
+    assert (brands["connected"], brands["subscriptions"], brands["builtin"]) == (True, ["acme"], [])
     monkeypatch.setattr(rn, "connect", lambda sub, access, secret: CONN)
     added = client.post("/api/retailnext/connect", json={
         "subscription": "acme", "access_key": "AK-typed", "secret_key": "SK-typed"})

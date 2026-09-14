@@ -1,7 +1,11 @@
 # Builds the Mac app (CrossingCount-<version>.dmg, Apple Silicon) on GitHub's Macs.
 # Download it from the run's "Artifacts" section, open it and drag CrossingCount to
-# Applications. It is not signed with an Apple Developer ID: the first time, right-click
-# it and choose Open.
+# Applications. It is not signed with an Apple Developer ID: the first time, open it from
+# System Settings > Privacy & Security > Open Anyway.
+#
+# Each build of main is also published as the release mac-b<run number>, which installed
+# apps check for their update notice (the newest three are kept). The repository secrets
+# RETAILNEXT_BRANDS and UPDATE_TOKEN, when set, are built in (packaging/build_info.py).
 name: Mac app
 
 on:
@@ -9,6 +13,9 @@ on:
     branches: [main, master]
     tags: ["v*"]
   workflow_dispatch:
+
+permissions:
+  contents: write  # to publish the build as a release
 
 jobs:
   app:
@@ -33,6 +40,12 @@ jobs:
           fetch yolo11s.pt 85a76fe86dd8afe384648546b56a7a78580c7cb7b404fc595f97969322d502d5
           fetch yolo11m.pt d5ffc1a674953a08e11a8d21e022781b1b23a19b730afc309290bd9fb5305b95
 
+      - name: Build number, and what is built in
+        env:
+          RETAILNEXT_BRANDS: ${{ secrets.RETAILNEXT_BRANDS }}
+          UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
+        run: uv run python packaging/build_info.py mac
+
       - name: Bundle with PyInstaller
         run: uv run pyinstaller packaging/crossing_count.spec --noconfirm --distpath dist --workpath build
 
@@ -52,3 +65,15 @@ jobs:
           name: CrossingCount-mac
           path: ${{ env.DMG }}
           if-no-files-found: error
+
+      - name: Publish for the apps' update notice
+        if: github.ref_type == 'branch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="mac-b${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" "$DMG" --target "$GITHUB_SHA" \
+            --title "Mac build ${GITHUB_RUN_NUMBER}" --notes "$(git log -1 --format=%s)"
+          gh release list --limit 100 --json tagName --jq '.[].tagName' \
+            | sed -n 's/^mac-b\([0-9][0-9]*\)$/\1/p' | sort -rn | tail -n +4 \
+            | while read -r n; do gh release delete "mac-b$n" --yes --cleanup-tag; done

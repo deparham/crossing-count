@@ -1,5 +1,9 @@
 # Builds the Windows installer (CrossingCount-Setup-<version>.exe) on GitHub's
 # Windows machines. Download it from the run's "Artifacts" section.
+#
+# Each build of main is also published as the release win-b<run number>, which installed
+# apps check for their update notice (the newest three are kept). The repository secrets
+# RETAILNEXT_BRANDS and UPDATE_TOKEN, when set, are built in (packaging/build_info.py).
 name: Windows installer
 
 on:
@@ -7,6 +11,9 @@ on:
     branches: [main, master]
     tags: ["v*"]
   workflow_dispatch:
+
+permissions:
+  contents: write  # to publish the build as a release
 
 jobs:
   tests:
@@ -20,6 +27,7 @@ jobs:
       - run: uv run pytest -q
 
   installer:
+    needs: tests  # no installer, and no update notice, from code whose tests fail
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +50,12 @@ jobs:
             if ($hash -ne $weights[$name]) { throw "$name has checksum $hash, expected $($weights[$name])" }
           }
 
+      - name: Build number, and what is built in
+        env:
+          RETAILNEXT_BRANDS: ${{ secrets.RETAILNEXT_BRANDS }}
+          UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
+        run: uv run python packaging/build_info.py win
+
       - name: Bundle with PyInstaller
         run: uv run pyinstaller packaging/crossing_count.spec --noconfirm --distpath dist --workpath build
 
@@ -62,3 +76,19 @@ jobs:
           name: CrossingCount-Setup
           path: dist/installer/*.exe
           if-no-files-found: error
+
+      - name: Publish for the apps' update notice
+        if: github.ref_type == 'branch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "win-b${{ github.run_number }}"
+          $exe = (Get-ChildItem dist/installer/*.exe | Select-Object -First 1).FullName
+          gh release create $tag $exe --target "${{ github.sha }}" --title "Windows build ${{ github.run_number }}" --notes "$(git log -1 --format=%s)"
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+          $old = gh release list --limit 100 --json tagName --jq '.[].tagName' |
+            Where-Object { $_ -match '^win-b\d+$' } |
+            Sort-Object { [int]($_ -replace '^win-b', '') } -Descending |
+            Select-Object -Skip 3
+          foreach ($t in $old) { gh release delete $t --yes --cleanup-tag }

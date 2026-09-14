@@ -61,6 +61,14 @@
           margin-bottom: 14px; box-shadow: var(--shadow); }
   .card.flush { padding: 4px 8px; }
   .sub { margin-top: 12px; padding: 14px 16px; background: var(--panel2); border: 1px solid var(--border); border-radius: 12px; }
+  .card.notice { border-color: var(--accent); background: var(--soft); }
+  .card.notice ul { margin: 6px 0 0; padding-left: 20px; }
+  textarea { width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--border2);
+             border-radius: 9px; padding: 7px 10px; font: inherit; resize: vertical; margin-top: 4px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 6px; }
+  .tags label { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+  .checks { list-style: none; padding: 0; margin: 12px 0 0; }
+  .checks li { padding: 2px 0; } .checks b { display: inline-block; width: 1.5em; }
   .big { font-size: 18px; font-weight: 650; letter-spacing: -.01em; color: var(--title); margin-bottom: 4px; }
   .muted { color: var(--muted); } .warn { color: var(--warn); } .ok { color: var(--ok); } .err { color: var(--err); }
   a { color: var(--accent); }
@@ -149,12 +157,36 @@
   <span class="sep"></span><h1>Count wizard</h1>
   <span id="vname" class="muted">No footage chosen yet</span>
   <div class="tools">
+    <a href="#" id="shareLink" hidden>Colleagues' apps</a>
+    <a href="#" id="updToken" hidden>Get update notices</a>
+    <a href="/gold/" target="_blank" rel="noopener">Gold set</a>
     <a href="/label/" target="_blank" rel="noopener">Mark heads (train the detector)</a>
     <button id="updateApp" class="primary" hidden>Update</button>
     <button id="quitApp" title="Close CrossingCount; everything is saved">Quit</button>
   </div></header>
 <nav id="steps" aria-label="Steps"></nav>
 <main>
+
+<div class="card notice" id="updBanner" hidden>
+  <div class="big">A new version of CrossingCount is ready</div>
+  <div id="updWhat" class="muted"></div>
+  <div style="margin-top:10px;display:flex;gap:8px"><button id="updNow" class="primary">Update now</button><button id="updLater">Later</button></div>
+</div>
+<div class="card" id="updCard" hidden>
+  <div class="big">Hear about new versions</div>
+  <div class="muted">New versions of CrossingCount are kept on a private GitHub repository, so this app needs a GitHub token that can read it. Ask whoever looks after CrossingCount for one. To make one: on GitHub, your picture → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token; Repository access: Only select repositories → crossing-count; Repository permissions: Contents → Read-only.</div>
+  <div class="grid2"><label>GitHub token <input id="updTokenIn" type="password" autocomplete="off" spellcheck="false"></label></div>
+  <button id="updTokenSave" class="primary">Save</button>
+  <span class="muted">Kept in this computer's Keychain (Credential Manager on Windows), never in a file.</span>
+</div>
+<div class="card" id="shareCard" hidden>
+  <div class="big">Colleagues' apps</div>
+  <div class="muted">GitHub builds the Mac app and the Windows installer. They can carry this computer's RetailNext brands, so colleagues open those stores with nothing to type, and a GitHub token, so their apps hear of new versions. Anyone who has the app can dig these out of it: if a laptop is lost, change the keys (in RetailNext, or the token on GitHub), then build again.</div>
+  <div style="margin-top:12px"><button id="shareBrands">Build this computer's brands into the apps</button></div>
+  <div class="grid2" style="margin-top:12px"><label>GitHub token that can read this repository (Contents: read-only) <input id="shareToken" type="password" autocomplete="off" spellcheck="false"></label></div>
+  <button id="shareTokenBtn">Build this token into the apps</button>
+  <div class="muted" style="margin-top:8px">Each starts new builds on GitHub now; colleagues' apps offer the update when they are ready, in about 20 minutes.</div>
+</div>
 
 <section id="s-footage">
   <div class="card" id="rnCard" hidden>
@@ -324,6 +356,17 @@
     <div style="margin-top:12px"><button id="make" class="primary">Make PowerPoint</button></div>
     <div id="made" style="margin-top:12px"></div>
   </div>
+  <div class="card" id="goldCard" hidden>
+    <div class="big">Gold set</div>
+    <div class="muted">A count by hand of every moment of the footage can be kept as a gold clip. The automatic counter is measured against gold clips, never trained on them. <a href="/gold/" target="_blank" rel="noopener">Open the gold set</a></div>
+    <div id="goldWhy" class="warn" style="margin-top:8px"></div>
+    <div class="muted" style="margin-top:10px">What is in this clip?</div>
+    <div id="goldTags" class="tags"></div>
+    <label class="muted" style="display:block;margin-top:10px">Notes: what makes it hard, anything you were unsure of
+      <textarea id="goldNotes" rows="2"></textarea></label>
+    <button id="goldSave" class="primary" style="margin-top:10px">Keep as a gold clip</button>
+    <div id="goldDone" style="margin-top:10px"></div>
+  </div>
 </section>
 
 <video id="video" preload="auto" muted playsinline style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"></video>
@@ -442,7 +485,8 @@ async function rnSetup() {
   try { st = await api("/api/retailnext"); } catch (e) { return; }
   $("rnCard").hidden = false;  // asks for the brand; a brand not connected yet asks for its key
   if (!$("rnDay").value) $("rnDay").value = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
-  rnSubs(st.subscriptions || []);
+  rnSubs(st.subscriptions || [], st);
+  $("shareLink").hidden = !st.can_share;
   if (!$("rnSub").value) {
     let last = "";
     try { last = localStorage.getItem("rnSub") || ""; } catch (e) { /* no storage here */ }
@@ -450,11 +494,15 @@ async function rnSetup() {
   }
   rnBrand();
 }
-function rnSubs(subs) {
+function rnSubs(subs, lists) {  // lists: which are this computer's own, which built into the app
   W.rnSubs = subs;
+  if (lists) { W.rnSaved = lists.saved || []; W.rnBuiltin = lists.builtin || []; }
+  const own = W.rnSaved || subs, inApp = W.rnBuiltin || [];
   $("rnSubs").innerHTML = subs.map((s) => `<option value="${esc(s)}"></option>`).join("");
   $("rnBrands").innerHTML = subs.length
-    ? "Brands connected on this computer: " + subs.map((s) => `${esc(s)} <a href="#" data-forget="${esc(s)}">remove</a>`).join(" · ")
+    ? "Brands: " + subs.map((s) => inApp.includes(s) && !own.includes(s)
+        ? `${esc(s)} <span class="muted">(built into this app)</span>`
+        : `${esc(s)} <a href="#" data-forget="${esc(s)}">remove</a>`).join(" · ")
     : "No brand connected yet: type one above and enter its API key.";
 }
 $("rnBrands").addEventListener("click", async (e) => {
@@ -466,35 +514,104 @@ $("rnBrands").addEventListener("click", async (e) => {
   try {
     const r = await api("/api/retailnext/forget", { subscription: sub });
     if (W.rnStores) delete W.rnStores[sub];
-    rnSubs(r.subscriptions);
+    rnSubs(r.subscriptions, r);
     if (rnSubName($("rnSub").value) === sub) $("rnSub").value = "";
     rnBrand(); msg(`${sub}'s key is no longer on this computer.`, "ok");
   } catch (err) { msg(err.message, "err"); }
 });
 // ---------- updates ----------
-async function checkUpdate() {  // a newer version on GitHub, or one on this computer not yet running
+const pause = (ms) => new Promise((ok) => setTimeout(ok, ms));
+function stored(key, value) {  // this browser's memory of a choice ("" when it has none)
+  try { if (value === undefined) return localStorage.getItem(key) || ""; localStorage.setItem(key, value); } catch (e) { /* no storage here */ }
+  return "";
+}
+function updId(u) { return u.installed ? `b${u.latest}` : String(u.latest || u.head || ""); }
+async function checkUpdate() {  // a newer version: on GitHub, or on this computer and not yet running
   let u;
   try { u = await api("/api/update"); } catch (e) { return; }
   W.update = u;
-  $("updateApp").hidden = !(u.supported && (u.behind || u.restart));
+  const ready = u.supported && u.available, newer = ready && u.behind > 0;
+  $("updateApp").hidden = !ready;
   $("updateApp").textContent = u.behind ? "Update available" : "Restart for the new version";
   $("updateApp").title = u.changes.length ? u.changes.join("\n") : "A newer version is ready";
+  $("updToken").hidden = !u.needs_token;
+  $("updBanner").hidden = !newer || stored("updLater") === updId(u);
+  if (newer) {
+    $("updWhat").innerHTML = esc(u.installed ? `Build ${u.latest} is ready; this is build ${u.build}.`
+                                             : `${u.behind} change${u.behind > 1 ? "s" : ""} on GitHub.`)
+      + (u.changes.length ? `<ul>${u.changes.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : "");
+  }
+  if (newer && stored("updTold") !== updId(u) && "Notification" in window && Notification.permission === "granted") {
+    stored("updTold", updId(u));  // one desktop notice per new version
+    const n = new Notification("CrossingCount: a new version is ready", { body: u.changes[0] || "Open CrossingCount to update it.", tag: "crossingcount-update" });
+    n.onclick = () => { window.focus(); n.close(); };
+  }
 }
+document.addEventListener("click", () => {  // desktop notices need the browser's permission: asked once
+  if (stored("notifyAsked") || !("Notification" in window) || Notification.permission !== "default") return;
+  stored("notifyAsked", "1");
+  Notification.requestPermission().catch(() => {});
+});
+$("updLater").addEventListener("click", () => { stored("updLater", updId(W.update || {})); $("updBanner").hidden = true; });
+$("updNow").addEventListener("click", () => $("updateApp").click());
+$("updToken").addEventListener("click", (e) => { e.preventDefault(); $("updCard").hidden = !$("updCard").hidden; });
+$("updTokenSave").addEventListener("click", async () => {
+  try {
+    await api("/api/update/token", { token: $("updTokenIn").value });
+    $("updTokenIn").value = ""; $("updCard").hidden = true;
+    msg("Saved: CrossingCount will tell you when a new version is ready.", "ok"); checkUpdate();
+  } catch (e) { msg(e.message, "err"); }
+});
 $("updateApp").addEventListener("click", async () => {
   const u = W.update || { changes: [] };
   const what = u.changes.length ? `What's new:\n• ${u.changes.join("\n• ")}\n\n` : "";
-  if (!confirm(`${what}Update CrossingCount now? It starts again by itself; everything is saved.`)) return;
+  const how = !u.installed ? "It starts again by itself; everything is saved."
+    : `It downloads the new version${u.size ? ` (${Math.round(u.size / 1e6)} MB)` : ""}, installs it and starts again by itself; everything is saved.`
+      + (u.platform === "win" ? " Windows may ask whether to allow the installer." : "");
+  if (!confirm(`${what}Update CrossingCount now? ${how}`)) return;
   $("updateApp").disabled = true; msg("Updating…");
-  try { await api("/api/update", {}); } catch (e) { $("updateApp").disabled = false; msg(e.message, "err"); return; }
-  document.body.innerHTML = '<p style="padding:48px;font:16px system-ui">Updating CrossingCount… this page opens again by itself in a moment.</p>';
-  await new Promise((ok) => setTimeout(ok, 2500));
-  for (let i = 0; i < 90; i++) {  // the app starts again on the new version
-    try { const r = await fetch("/api/update?fetch=false"); if (r.ok) { location.reload(); return; } } catch (e) { /* not back yet */ }
-    await new Promise((ok) => setTimeout(ok, 1000));
+  let r;
+  try { r = await api("/api/update", {}); } catch (e) { $("updateApp").disabled = false; msg(e.message, "err"); return; }
+  while (r.job) {  // the installed app: downloading, then installing
+    await pause(1000);
+    let j;
+    try { j = await api("/api/update/job"); } catch (e) { break; }  // gone: it is starting again
+    if (j.state === "downloading") msg(`Downloading the new version… ${j.total ? Math.round(100 * j.done / j.total) + "%" : ""}`);
+    else if (j.state === "installing") msg(j.message);
+    else if (j.state === "restarting") break;
+    else { $("updateApp").disabled = false; msg(j.message || "The update stopped.", j.state === "manual" ? "warn" : "err"); return; }
+  }
+  document.body.innerHTML = '<p style="padding:48px;font:16px system-ui">Updating CrossingCount… this page opens again by itself when the new version is running.</p>';
+  let down = false;  // reload once the new version answers (the old one stops first)
+  for (let i = 0; i < 240; i++) {
+    await pause(1000);
+    try { const q = await fetch("/api/update?fetch=false", { cache: "no-store" }); if (q.ok && (down || i >= 15)) { location.reload(); return; } }
+    catch (e) { down = true; }
   }
   document.body.innerHTML = '<p style="padding:48px;font:16px system-ui">CrossingCount did not come back by itself. Open it again from its icon.</p>';
 });
 checkUpdate();
+setInterval(checkUpdate, 30 * 60 * 1000);  // while the page is open, every half hour
+$("shareLink").addEventListener("click", (e) => { e.preventDefault(); $("shareCard").hidden = !$("shareCard").hidden; });
+$("shareBrands").addEventListener("click", async () => {
+  const subs = W.rnSaved || [];
+  if (!subs.length) { msg("Connect a brand on this page first.", "warn"); return; }
+  if (!confirm(`Build ${subs.join(", ")} into the Mac and Windows apps?\n\nEveryone who installs a new build can then open these brands' stores. Anyone who has the app can dig the keys out of it.`)) return;
+  $("shareBrands").disabled = true; msg("Sending the brands to GitHub…");
+  try {
+    const r = await api("/api/share/brands", {});
+    msg(`Done: ${r.brands.join(", ")} go into the builds started now. ${r.notes.join(" ")}`, r.notes.length ? "warn" : "ok");
+  } catch (e) { msg(e.message, "err"); } finally { $("shareBrands").disabled = false; }
+});
+$("shareTokenBtn").addEventListener("click", async () => {
+  if (!$("shareToken").value.trim()) { msg("Paste the token first.", "warn"); return; }
+  $("shareTokenBtn").disabled = true; msg("Trying the token, then sending it to GitHub…");
+  try {
+    const r = await api("/api/share/token", { token: $("shareToken").value });
+    $("shareToken").value = "";
+    msg(`Done: the builds started now carry the token. ${r.notes.join(" ")}`, r.notes.length ? "warn" : "ok");
+  } catch (e) { msg(e.message, "err"); } finally { $("shareTokenBtn").disabled = false; }
+});
 $("quitApp").addEventListener("click", async () => {
   const busy = (W.st && W.st.job && W.st.job.status === "running") || $("rnJob");
   if (!confirm(busy ? "A count or download is still running and will stop. Quit CrossingCount?" : "Quit CrossingCount? Everything is saved.")) return;
@@ -528,7 +645,7 @@ async function rnConnect() {
   try {
     const r = await api("/api/retailnext/connect", { subscription: sub, access_key: $("rnAccess").value, secret_key: $("rnSecret").value });
     $("rnAccess").value = ""; $("rnSecret").value = "";
-    rnSubs(r.subscriptions); $("rnSub").value = r.subscription;
+    rnSubs(r.subscriptions, r); $("rnSub").value = r.subscription;
     msg(`${r.subscription} connected. Its key is kept in this computer's credential store.`, "ok");
     rnBrand();
   } catch (e) { msg(e.message, "err"); }
@@ -1094,9 +1211,9 @@ ENTER.report = async () => {
   $("repDate").value = st.report_date || new Date().toLocaleDateString("en-GB"); $("operator").value = st.operator || "";
   $("numbers").innerHTML = `<div class="nums">${s.dirs.map((d) => {
     const acc = c.accuracy[d], span = c.accuracy_range[d], u = c.unsure[d];
-    const accText = c.status !== "complete" ? "no accuracy (incomplete)"
-      : u && span ? `accuracy ${span[0] === span[1] ? span[0] : span[0] + "–" + span[1]}%`
-      : `accuracy ${acc.accuracy_pct == null ? "–" : acc.accuracy_pct + "%"}`;
+    const accText = c.status !== "complete" ? "no sensor accuracy (incomplete)"
+      : u && span ? `sensor accuracy ${span[0] === span[1] ? span[0] : span[0] + "–" + span[1]}%`
+      : `sensor accuracy ${acc.accuracy_pct == null ? "–" : acc.accuracy_pct + "%"}`;
     return `<div>${LABEL[d]}<b>${c.verified[d]}${u ? "–" + (c.verified[d] + u) : ""} ${manual ? "counted" : "verified"}</b>RetailNext ${s.sensor[d]} · ${accText}</div>`;
   }).join("")}</div>` + (c.incomplete.length
     ? `<div class="warn">Validation incomplete: ${c.incomplete.map(esc).join(" ")} The report will give no accuracy figure.</div>` : "");
@@ -1110,12 +1227,50 @@ ENTER.report = async () => {
     $("numbers").innerHTML += (cmp.intervals.length > 1 ? `<table class="ivs">${head("Time")}${rows(cmp.intervals, "label")}</table>` : "") +
       (cmp.cameras.length > 1 ? `<table class="ivs">${head("Camera")}${rows(cmp.cameras, "camera")}</table>` : "");
   }
+  $("numbers").innerHTML += `<ul class="checks">${(c.checks || []).map((k) =>
+    `<li><b class="${k.ok === false ? "err" : k.ok ? "ok" : "muted"}">${k.ok === false ? "✗" : k.ok ? "✓" : "–"}</b>${esc(k.name)}${k.detail ? ` <span class="muted">(${esc(k.detail)})</span>` : ""}</li>`).join("")}</ul>`;
   $("logoInfo").textContent = s.logo ? `Logo: ${s.logo}` : "No logo file found (assets/logo.png): the report header will show the company name as text.";
+  showGold();
   W.settings = await api("/api/settings").catch(() => ({ examples_dir: "" }));
   $("exDir").value = W.settings.examples_dir || "";
   showExamples(s.examples);
   $("made").innerHTML = s.report ? madeHtml(s.report.path) : "";
 };
+async function showGold() {  // a count by hand of every moment can be kept as a gold clip
+  const card = $("goldCard");
+  card.hidden = !(W.st && W.st.mode === "manual");
+  if (card.hidden) return;
+  let g;
+  try { g = await api("/api/gold/current"); } catch (e) { card.hidden = true; return; }
+  const clip = g.clip, on = new Set(clip ? clip.tags : []);
+  $("goldWhy").textContent = g.problems.join(" ");
+  $("goldTags").innerHTML = Object.entries(g.tags).map(([k, label]) =>
+    `<label><input type="checkbox" data-tag="${esc(k)}" ${on.has(k) ? "checked" : ""}> ${esc(label)}</label>`).join("");
+  if (clip && !$("goldNotes").value) $("goldNotes").value = clip.notes || "";
+  $("goldDone").innerHTML = clip ? goldHtml(clip) : "";
+}
+function goldHtml(c) {
+  const a = c.agreement, who = c.reviews.map((r) => `${esc(r.reviewer)} (${r.crossings})`).join(" and ");
+  return `<div class="ok">Kept as gold clip ${esc(c.id)}, in the ${esc(c.split)} set, counted by ${who}.</div>`
+    + (a ? `<div class="${a.disagreements ? "warn" : "ok"}" style="margin-top:6px">The two counts agree on ${a.agreed} crossing(s)${a.disagreements
+            ? `; they disagree on ${a.disagreements}, which stay out of any scoring until someone looks again: ${a.where.map(esc).join(", ")}` : ""}.</div>`
+       : `<div class="muted" style="margin-top:6px">Someone else can count the same footage without seeing this count: it shows how far two people agree. <button id="goldRecount" style="margin-left:6px">Count it again as someone else</button></div>`);
+}
+$("goldSave").addEventListener("click", async () => {
+  const tags = [...$("goldTags").querySelectorAll("[data-tag]:checked")].map((el) => el.dataset.tag);
+  $("goldSave").disabled = true;
+  try {
+    setState(await api("/api/store", { name: $("storeName").value, code: $("storeCode").value, location: $("storeLoc").value,
+                                         report_date: $("repDate").value, operator: $("operator").value }));
+    const r = await api("/api/gold/save", { tags, notes: $("goldNotes").value });
+    $("goldWhy").textContent = ""; $("goldDone").innerHTML = goldHtml(r.clip); msg("Kept in the gold set.", "ok");
+  } catch (e) { msg(e.message, "err"); } finally { $("goldSave").disabled = false; }
+});
+$("goldDone").addEventListener("click", async (e) => {
+  if (!e.target.closest("#goldRecount")) return;
+  if (!confirm("Start a second count by hand of this footage, by someone else?\n\nThe first count is kept (in the gold set and the history folder) and is not shown. The second person types their own name on the report page.")) return;
+  try { setState(await api("/api/gold/recount", {})); $("goldNotes").value = ""; go("hand"); } catch (err) { msg(err.message, "err"); }
+});
 function showExamples(ex) {
   $("exStatus").innerHTML = !ex ? ($("exDir").value.trim() ? "" : '<span class="muted">No examples folder set: learning examples will not be saved.</span>')
     : ex.status === "saving" ? '<span class="muted">Saving learning examples…</span>'

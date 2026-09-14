@@ -911,6 +911,21 @@ class Wizard:
             self.state["manual"]["done"] = bool(done)
             self._save()
 
+    def recount(self) -> None:
+        """Start a second, independent count by hand of the same footage, by someone else:
+        the first is kept in the history folder (and in the gold set, if it was kept there),
+        and nothing of it is shown to the second person."""
+        with self._lock:
+            if not self.manual():
+                raise WizardError("Only a count by hand can be counted again.")
+            self._archive("second count")
+            self._decide("recount")
+            m = self.state["manual"]
+            m.update(counts=[], watched={}, positions={}, done=False)
+            self.state["store"]["operator"] = ""  # the second person types their own name
+            self.state["report"] = None
+            self._save()
+
     def manual_summary(self) -> dict[str, Any]:
         dur = float(self.state["duration_s"])
         m = self.state["manual"]
@@ -969,8 +984,10 @@ class Wizard:
                                         **info})
 
     def _archive(self, reason: str) -> Path | None:
-        """Keep the current check, and a copy of its report, before it is replaced."""
-        if not self.checked_work() and not self.state.get("report"):
+        """Keep the current check (or count by hand), and a copy of its report, before it is
+        replaced."""
+        if (not self.checked_work() and not self.state.get("report")
+                and not self.state["manual"]["counts"]):
             return None
         folder = self.dir / "history"
         folder.mkdir(parents=True, exist_ok=True)
@@ -1243,16 +1260,20 @@ class Wizard:
         answers = self.state["answers"]
         c = {"detected": dict.fromkeys(dirs, 0), "verified": dict.fromkeys(dirs, 0),
              "unsure": dict.fromkeys(dirs, 0), "confirmed": 0, "rejected": 0, "found": 0,
-             "not_found": 0, "added": 0, "unanswered": 0, "groups": 0, "group_people": 0}
+             "not_found": 0, "added": 0, "unanswered": 0, "groups": 0, "group_people": 0,
+             "asked": {"counted": 0, "possible": 0}, "answered": {"counted": 0, "possible": 0}}
         people = self.state["people"]
         items = self.check_items()
         for it in items:
             if it["kind"] == "counted":
                 c["detected"][it["direction"]] += 1
+            kind = "counted" if it["kind"] == "counted" else "possible"
+            c["asked"][kind] += 1
             a = answers.get(it["id"])
             if a is None:
                 c["unanswered"] += 1
                 continue
+            c["answered"][kind] += 1
             if a == "unsure":
                 c["unsure"][it["direction"]] += 1
                 continue
@@ -1297,7 +1318,32 @@ class Wizard:
                                for d in self.dirs()}
         c["incomplete"] = problems
         c["status"] = "incomplete" if problems else "complete"
+        c["checks"] = self.checklist(c)
         return c
+
+    def checklist(self, c: dict[str, Any]) -> list[dict[str, Any]]:
+        """Each requirement of a complete validation: passed (True), not (False), or not
+        applying (None). All the tool's proposals being checked is not the same as every
+        crossing being looked for: only watching the footage covers the rest."""
+        rows: list[tuple[str, bool | None, str]]
+        if self.manual():
+            rows = [("Counting finished", bool(self.state["manual"]["done"]), "")]
+            rows += [(f"Footage of {cam} watched", pct >= MIN_WATCHED_PCT, f"{pct:.0f}%")
+                     for cam, pct in c["watched_pct"].items()]
+        else:
+            asked, done = c["asked"], c["answered"]
+            ranges = c["watch_ranges"]
+            rows = [("Automatic count finished", self.state["job"]["status"] == "done", ""),
+                    ("Crossings the tool counted: each checked",
+                     done["counted"] == asked["counted"], f"{done['counted']} of {asked['counted']}"),
+                    ("Possible misses: each checked", done["possible"] == asked["possible"],
+                     f"{done['possible']} of {asked['possible']}"),
+                    ("Movement the tool could not explain: watched",
+                     None if not ranges else c["watch_done"] == ranges,
+                     f"{c['watch_done']} of {ranges} stretches" if ranges else "there was none")]
+        rows.append(("RetailNext's count entered",
+                     all(self.state["sensor"].get(d) is not None for d in self.dirs()), ""))
+        return [{"name": n, "ok": ok, "detail": d} for n, ok, d in rows]
 
     def unsure_rows(self) -> list[dict[str, Any]]:
         """Crossings the checker could not decide: listed in the report, never counted."""
@@ -1542,6 +1588,13 @@ class Wizard:
         if c["incomplete"]:
             method.insert(0, "VALIDATION INCOMPLETE. " + " ".join(c["incomplete"]) + " No accuracy "
                           "is given: people in footage nobody watched may be missing from the count.")
+        word = {True: "pass", False: "NOT MET", None: "does not apply"}
+        method.append("Validation checks: " + "; ".join(
+            k["name"] + (f" ({k['detail']})" if k["detail"] else "") + f": {word[k['ok']]}"
+            for k in c["checks"]) + ".")
+        method.append("Sensor accuracy compares RetailNext's count with the count verified here: "
+                      "it shows how close the sensor came, not how well the automatic counter "
+                      "did.")
         method.append(f"Report made with CrossingCount {app_version()}, {__copyright__}.")
         return {
             "count_label": "MANUAL COUNT" if self.manual() else "VERIFIED COUNT",

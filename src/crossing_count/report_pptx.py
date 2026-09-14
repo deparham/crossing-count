@@ -167,12 +167,14 @@ def _cover(slide: Any, data: dict[str, Any]) -> None:
         verified = f"{r['verified']}–{r['verified'] + unsure}" if unsure else str(r["verified"])
         cards = ((f"{kind}{tag or ' COUNT'}", verified),
                  (f"SYSTEM{tag or ' COUNT'}", str(r["system"])),
-                 (f"ACCURACY{tag}", accuracy))
+                 (f"SENSOR ACCURACY{tag}", accuracy))  # RetailNext against the verified count
         for j, (label, value) in enumerate(cards):
             left, hi = 0.53 + j * 2.47, j == 2
             _panel(slide, left, top, 2.24, card_h, TEAL if hi else CARD_BG, shadow=True)
-            _write(_box(slide, left, top + (0.27 if one else 0.15), 2.24, 0.3), label, 11,
-                   bold=True, color=WHITE if hi else GREY, align=PP_ALIGN.CENTER, spacing=2)
+            long = len(label) > 15  # "SENSOR ACCURACY OUT" fits the card only smaller
+            _write(_box(slide, left, top + (0.27 if one else 0.15), 2.24, 0.3), label,
+                   9 if long else 11, bold=True, color=WHITE if hi else GREY,
+                   align=PP_ALIGN.CENTER, spacing=1 if long else 2)
             _write(_box(slide, left, top + (0.58 if one else 0.40), 2.24, 0.8 if one else 0.6),
                    value, _value_size(value, 50 if one else 36), bold=True, font=SERIF,
                    color=WHITE if hi else NAVY, align=PP_ALIGN.CENTER,

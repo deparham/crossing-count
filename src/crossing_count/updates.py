@@ -59,7 +59,7 @@ def status(root: Path | None = None, running: str | None = RUNNING, fetch: bool 
     root = root or paths.SOURCE_ROOT
     ok, reason = supported(root)
     out: dict[str, Any] = {"supported": ok, "reason": reason, "behind": 0, "changes": [],
-                           "restart": False, "notes": []}
+                           "restart": False, "notes": [], "available": False}
     if not ok:
         return out
     try:
@@ -75,11 +75,14 @@ def status(root: Path | None = None, running: str | None = RUNNING, fetch: bool 
         if out["behind"]:
             log = _git(root, "log", "--format=%s", f"HEAD..{upstream}", timeout=10)
             out["changes"] = log.stdout.splitlines()[:10]
+            latest = _git(root, "rev-parse", "--short", upstream, timeout=10)
+            out["latest"] = latest.stdout.strip() if latest.returncode == 0 else None
         now = head(root)
         out["head"], out["running"] = now, running
         out["restart"] = bool(running and now and running != now)
     except (OSError, subprocess.SubprocessError, ValueError) as e:
         out["notes"].append(f"git could not be asked: {e}")
+    out["available"] = bool(out["behind"] or out["restart"])
     return out
 
 

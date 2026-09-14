@@ -175,6 +175,61 @@ detector: on a store it never saw it found 28 of 234 heads, where the current
 one found 166. Most frames were marked footage, and it learned the sensor's
 height bubbles rather than heads. It is not used.
 
+## Gold set: measuring the automatic count against full hand counts
+
+The question is how reliably CrossingCount finds every real crossing, and only
+a count that looked everywhere can answer it. "Every crossing the tool proposed
+was checked" is not that: people the tool never showed are missing from such a
+check. So:
+
+- **Gold clip.** A count by hand in the wizard (Manual) that watched at least
+  99% of every counted camera's footage can be kept on the report page as a
+  gold clip, with tags (busy, heavy crowd, groups, occlusion, low light,
+  people stopping or coming back, ...) and notes. It is saved in
+  `gold/gold_v1/` in the data folder with the store, cameras, period, counted
+  traffic, direction convention, every crossing (camera, time, clock,
+  direction), who counted and when. Models never write to it.
+- **Sets by store, fixed.** The first time a store's clip is kept, the store
+  goes to the next of test, validation, train, train (`gold/gold_v1/splits.json`)
+  and never moves, so no store's footage is on both sides. Tune on the
+  development set (train and validation); the test set is for a final check,
+  scored only on request and every use recorded.
+- **A second person.** "Count it again as someone else" starts a blind second
+  count of the same footage (the first is kept). The two are matched like the
+  tool's crossings; what both counted is the clip's truth, and the moments
+  they disagree on are listed and left out of the scoring as uncertain,
+  never settled by the tool.
+- **Scoring** (the **Gold set** page, from the header). Each clip needs an
+  automatic count of the same cameras over the same period (the footage
+  without RetailNext's marks, counted automatically); its recorded detections
+  are replayed with today's settings and matched by clock time. A tool
+  crossing and a person's are one when on the same camera and at most 2 s
+  apart, one-to-one, the most pairs possible (close crossings included):
+
+  | | |
+  |---|---|
+  | found | counted, the right way |
+  | wrong way | counted, the other direction (reported, never hidden) |
+  | missed | not counted at all |
+  | false | counted with nobody crossing (duplicates are shown within it) |
+  | recall | found ÷ the person's crossings (per direction too) |
+  | miss rate | missed ÷ the person's crossings |
+  | precision, F1 | found ÷ the tool's crossings; their harmonic mean |
+
+  Recall, wrong way and miss rate add to 100%. Rates come with 95% intervals,
+  per direction, per set and per tag, and none is given on fewer than 30
+  crossings ("insufficient sample"). The page also shows the reviewing the
+  tool asks for per camera-hour: questions, possible misses, minutes of
+  movement to watch, and how many of the tool's misses its list showed.
+- **Records.** Every scoring is kept in `bench/experiments/` with the app
+  version, detector and its weights' SHA-256, settings, dataset, set and clips.
+
+**Sensor accuracy is not AI accuracy.** The report's accuracy card compares
+RetailNext's count with the verified count: how close the sensor came. The
+report now says so, and lists its validation checks (each crossing checked,
+each possible miss checked, unexplained movement watched, footage watched)
+as met or not.
+
 ## Measuring the automatic count (`bench.py`)
 
     uv run bench.py                # every clip with a finished count by a person
@@ -305,8 +360,39 @@ self-test, then `CrossingCount-<version>.dmg` under the run's **Artifacts**.
 Your drawings, runs, reports and settings live in
 `~/Library/Application Support/CrossingCount` (its log in `logs/wizard.log`
 there), so a new version never touches them. RetailNext keys stay in the
-Keychain. The app is updated by installing a newer `.dmg`: the page's
-**Update** button is for the project folder only.
+Keychain.
+
+## Update notices and colleagues' apps
+
+Every build GitHub makes of `main` is also published as a release of the
+(private) repository: `mac-b<n>` with the `.dmg`, `win-b<n>` with the
+installer; the newest three of each are kept. An installed app knows its own
+build (`build.json`, written in by the build) and, while its page is open,
+checks GitHub every half hour. When a newer build is ready, a banner lists
+what changed, the browser shows a desktop notice (it asks once for
+permission), and **Update** does the rest: the Mac app downloads the new one,
+puts it in its own place and starts again; on Windows the new installer runs
+silently (Windows may ask to allow it) and starts the app again. If the Mac
+app sits where it cannot replace itself, the new `.dmg` opens for you to drag.
+
+A private repository's releases can only be read with a GitHub token. Make a
+fine-grained token (GitHub → Settings → Developer settings → Fine-grained
+tokens) with access to this repository only and **Contents: Read-only**, then:
+
+- **Build it into the apps** (no colleague types anything): in the project
+  folder's page, **Colleagues' apps** → paste it → **Build this token into the
+  apps**. Or type it once in an installed app's **Get update notices**.
+- **RetailNext brands** go into the apps the same way: **Colleagues' apps** →
+  **Build this computer's brands into the apps** sends the brands in this
+  Mac's Keychain to the repository's secrets (`RETAILNEXT_BRANDS`); the next
+  builds carry them, and colleagues see those brands' stores with nothing to
+  type. A key on a colleague's own computer still comes first.
+
+Both buttons need the GitHub command line (`gh`) signed in, and start new
+builds at once. **Anything built into the app can be dug out of it by whoever
+has it**: if a laptop is lost, change the keys in RetailNext (or revoke the
+token on GitHub) and build again. The project folder keeps its own **Update**
+button (git) and gets the same banner and notice.
 
 Licences: YOLO (Ultralytics) is under AGPL-3.0. Check with whoever handles
 licensing before giving the program to anyone outside the company: that needs
