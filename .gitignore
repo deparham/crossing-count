@@ -34,3 +34,6 @@ build/
 dist/
 bench/
 retailnext/
+
+# Camera drawings: the user's own, never touched by an update
+sites/

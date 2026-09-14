@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from starlette.routing import Mount
 
 from . import overlay as ov
-from . import paths
+from . import paths, updates
 from . import retailnext as rn
 from .examples import check_folder
 from .review_app import WEB_DIR, _range_response
@@ -49,6 +49,11 @@ EXPORT_WAIT_S = 1800.0  # and for how long, before giving up
 
 class ForgetIn(BaseModel):
     subscription: str
+
+
+def _restart() -> None:
+    """Start again on the version just updated to."""
+    updates.restart()
 
 
 def _stop_server() -> None:
@@ -319,6 +324,25 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         if cur.rn_nodes is not None:
             cur.rn_nodes.pop(sub, None)
         return {"subscriptions": rn.subscriptions()}
+
+    @app.get("/api/update")
+    def update_status(fetch: bool = True) -> dict[str, Any]:
+        """A newer version on GitHub, or one on this computer not yet running."""
+        return updates.status(fetch=fetch)
+
+    @app.post("/api/update")
+    def update_apply() -> dict[str, Any]:
+        """Take the newer version and start again on it. Not while work is running."""
+        if cur.wizard is not None and cur.wizard.job_status()["status"] == "running":
+            raise HTTPException(409, "A count is running: let it finish (or stop it) first.")
+        if cur.rn_job and cur.rn_job.get("state") in ("exporting", "downloading"):
+            raise HTTPException(409, "Footage is downloading: let it finish first.")
+        try:
+            now = updates.apply()
+        except updates.UpdateError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        threading.Timer(0.5, _restart).start()
+        return {"ok": True, "head": now}
 
     @app.post("/api/quit")
     def quit_app() -> dict[str, Any]:

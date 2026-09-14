@@ -45,6 +45,14 @@ you go. `packaging/mac/build_launcher.sh` builds that launcher. RetailNext
 brands are connected and removed on the first page too: type the brand, and
 if it is not connected yet, enter its API key there.
 
+**Updating.** When a newer version is on GitHub (or one on this Mac that is not
+running yet), an **Update** button appears at the top of the page. It lists
+what is new, takes the new version only by fast-forward, starts the app again
+and reloads the page; it waits while a count or download is running, and
+changes nothing if the update cannot be applied cleanly. Your camera drawings
+in `sites/`, runs, reports and settings are not in git, so an update never
+touches them. (The Windows app is updated with a new installer instead.)
+
 ## Easiest: the count wizard (`wizard.py`)
 
 ```bash

@@ -37,7 +37,7 @@ def test_rule_reflects_optional_zones() -> None:
 
 
 def test_brief_example_config_loads() -> None:
-    cfg = load_config(ROOT / "sites" / "example_carindale.json")
+    cfg = load_config(ROOT / "tests" / "fixtures" / "example_carindale.json")
     assert cfg.rule == "line+mask"
     assert len(cfg.sha256) == 64
     bind(cfg, 1280, 960)

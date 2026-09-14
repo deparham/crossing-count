@@ -79,6 +79,7 @@
 <body>
 <header><h1>Count wizard</h1><span id="vname" class="muted">No footage chosen yet</span>
   <a href="/label/" target="_blank" rel="noopener" style="margin-left:auto;color:var(--accent)">Mark heads (train the detector)</a>
+  <button id="updateApp" class="primary" style="margin-left:12px" hidden>Update</button>
   <button id="quitApp" style="margin-left:12px" title="Close CrossingCount; everything is saved">Quit</button></header>
 <nav id="steps" aria-label="Steps"></nav>
 <main>
@@ -398,6 +399,30 @@ $("rnBrands").addEventListener("click", async (e) => {
     rnBrand(); msg(`${sub}'s key is no longer on this computer.`, "ok");
   } catch (err) { msg(err.message, "err"); }
 });
+// ---------- updates ----------
+async function checkUpdate() {  // a newer version on GitHub, or one on this computer not yet running
+  let u;
+  try { u = await api("/api/update"); } catch (e) { return; }
+  W.update = u;
+  $("updateApp").hidden = !(u.supported && (u.behind || u.restart));
+  $("updateApp").textContent = u.behind ? "Update available" : "Restart for the new version";
+  $("updateApp").title = u.changes.length ? u.changes.join("\n") : "A newer version is ready";
+}
+$("updateApp").addEventListener("click", async () => {
+  const u = W.update || { changes: [] };
+  const what = u.changes.length ? `What's new:\n• ${u.changes.join("\n• ")}\n\n` : "";
+  if (!confirm(`${what}Update CrossingCount now? It starts again by itself; everything is saved.`)) return;
+  $("updateApp").disabled = true; msg("Updating…");
+  try { await api("/api/update", {}); } catch (e) { $("updateApp").disabled = false; msg(e.message, "err"); return; }
+  document.body.innerHTML = '<p style="padding:48px;font:16px system-ui">Updating CrossingCount… this page opens again by itself in a moment.</p>';
+  await new Promise((ok) => setTimeout(ok, 2500));
+  for (let i = 0; i < 90; i++) {  // the app starts again on the new version
+    try { const r = await fetch("/api/update?fetch=false"); if (r.ok) { location.reload(); return; } } catch (e) { /* not back yet */ }
+    await new Promise((ok) => setTimeout(ok, 1000));
+  }
+  document.body.innerHTML = '<p style="padding:48px;font:16px system-ui">CrossingCount did not come back by itself. Open it again from its icon.</p>';
+});
+checkUpdate();
 $("quitApp").addEventListener("click", async () => {
   const busy = (W.st && W.st.job && W.st.job.status === "running") || $("rnJob");
   if (!confirm(busy ? "A count or download is still running and will stop. Quit CrossingCount?" : "Quit CrossingCount? Everything is saved.")) return;
