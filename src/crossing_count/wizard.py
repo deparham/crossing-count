@@ -61,6 +61,8 @@ def prompt_priority(why: str) -> int:
 CLIP_BEFORE_S = 2.5
 CLIP_AFTER_S = 1.5
 MIN_WATCHED_PCT = 99.0  # a hand count that watched less of a camera's footage is incomplete
+GROUND_TRUTH_SPEC = "1.0"  # docs/GROUND_TRUTH_SPECIFICATION.md: what a crossing is
+RULE_CHOICES = ("count", "exclude")  # what counts as a person: children, staff (spec section 4)
 MAX_GROUP = 9  # people one answer can count, when a group crosses together
 FOUND = {  # how each verified crossing came to be counted, for the report
     "detected": "Detected, confirmed",
@@ -422,7 +424,7 @@ class Wizard:
             self._save()
         for key, value in (("mode", None), ("marks", None), ("examples", None), ("people", {}),
                            ("decisions", []), ("sensor_intervals", {}), ("sensor_cameras", {}),
-                           ("sensor_source", None),
+                           ("sensor_source", None), ("rules", {"children": "count", "staff": "count"}),
                            ("manual", {"counts": [], "watched": {}, "positions": {},
                                        "done": False, "next_id": 1})):
             self.state.setdefault(key, value)
@@ -495,6 +497,17 @@ class Wizard:
             raise WizardError("Choose Traffic In, Traffic Out or both.")
         with self._lock:
             self.state["direction"] = direction
+            self._save()
+
+    def set_rules(self, children: str, staff: str) -> None:
+        """What counts as a person (Ground Truth Specification, section 4), set to match
+        what the sensor is set up to count."""
+        with self._lock:
+            for name, value in (("children", children), ("staff", staff)):
+                if value not in RULE_CHOICES:
+                    raise WizardError(f"{name}: choose count or exclude")
+            self.state["rules"] = {"children": children, "staff": staff}
+            self._decide("rules", children=children, staff=staff)
             self._save()
 
     def set_sensor(self, values: dict[str, int | None] | None = None,
@@ -909,6 +922,8 @@ class Wizard:
     def manual_done(self, done: bool = True) -> None:
         with self._lock:
             self.state["manual"]["done"] = bool(done)
+            if done:  # the definition this count was finished under
+                self.state["manual"]["specification"] = GROUND_TRUTH_SPEC
             self._save()
 
     def recount(self) -> None:
@@ -1577,6 +1592,15 @@ class Wizard:
                 f"Share of the footage watched: {shares}.",
                 method[-1],
             ]
+        rules, said = self.state["rules"], {"count": "counted", "exclude": "not counted"}
+        spec = self.state["manual"].get("specification") or GROUND_TRUTH_SPEC
+        method.insert(len(method) - 1, f"Crossings as defined by CrossingCount's Ground Truth "
+                      f"Specification v{spec}: children {said[rules['children']]}, staff "
+                      f"{said[rules['staff']]}.")
+        if self.marked():
+            method.insert(len(method) - 1, "Counted on footage showing RetailNext's own tracks "
+                          "and counts, which can sway a count towards the sensor's: this count "
+                          "is not independent of the sensor.")
         if c.get("groups"):
             method.insert(3, f"{c['groups']} of the confirmed crossings were groups crossing "
                              f"together: {c['group_people']} people, each counted.")

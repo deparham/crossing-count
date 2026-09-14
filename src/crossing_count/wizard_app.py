@@ -28,6 +28,7 @@ from . import gold, paths, releases, updates
 from . import overlay as ov
 from . import retailnext as rn
 from .examples import check_folder
+from .localweb import local_only
 from .review_app import WEB_DIR, _range_response
 from .webapp import Setup, create_app
 from .wizard import Wizard, WizardError, default_folders, list_videos
@@ -58,6 +59,17 @@ class TokenIn(BaseModel):
 class GoldSaveIn(BaseModel):
     tags: list[str] = []
     notes: str = ""
+    lighting: str = "normal"
+    occlusion: str = "none"
+
+
+class GoldFreezeIn(BaseModel):
+    note: str = ""
+
+
+class RulesIn(BaseModel):
+    children: str = "count"  # or "exclude", as the sensor is set up (Ground Truth Spec, s. 4)
+    staff: str = "count"
 
 
 class GoldScoreIn(BaseModel):
@@ -206,6 +218,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                       commands: Callable[[Wizard], list[list[str]]] | None = None) -> FastAPI:
     sites = sites_dir or paths.sites_dir()
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    local_only(app)  # only its own pages, on this computer (localweb.py)
     cur = _Current()
     from .heads_app import create_label_app  # the head-marking page, at /label/
 
@@ -646,6 +659,10 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     def direction(d: DirectionIn) -> dict[str, Any]:
         return run(lambda: wiz().set_direction(d.direction))
 
+    @app.post("/api/rules")
+    def rules(r: RulesIn) -> dict[str, Any]:
+        return run(lambda: wiz().set_rules(r.children, r.staff))
+
     @app.post("/api/sensor")
     def sensor(s: SensorIn) -> dict[str, Any]:
         return run(lambda: wiz().set_sensor(s.values, s.intervals, s.cameras))
@@ -755,25 +772,42 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     def gold_page() -> str:
         return (WEB_DIR / "gold.html").read_text(encoding="utf-8")
 
+    def shared() -> Path | None:
+        """The team's shared folder (the report page's shared folder), when set and there."""
+        where = paths.load_settings().get("examples_dir")
+        p = Path(str(where)).expanduser() if where else None
+        return p if p is not None and p.is_dir() else None
+
     @app.get("/api/gold")
     def gold_overview() -> dict[str, Any]:
-        return gold.overview(data())
+        return gold.overview(data(), shared())
 
     @app.get("/api/gold/current")
     def gold_current() -> dict[str, Any]:
         """Can this footage's count be kept as a gold clip, and is it kept already?"""
         w = wiz()
-        rec = gold.find(w.state, data())
+        rec = gold.find(w.state, data(), shared())
         return {"problems": gold.problems(w.state), "tags": gold.TAGS,
-                "clip": gold.describe(rec) if rec else None}
+                "lighting": gold.LIGHTING, "occlusion": gold.OCCLUSION,
+                "shared": shared() is not None, "clip": gold.describe(rec) if rec else None}
 
     @app.post("/api/gold/save")
     def gold_save(g: GoldSaveIn) -> dict[str, Any]:
         w = wiz()
         try:
-            return {"clip": gold.save(w.state, w.run_dir, g.tags, g.notes, data())}
+            return {"clip": gold.save(w.state, w.run_dir, g.tags, g.notes, data(), g.lighting,
+                                      g.occlusion, shared())}
         except gold.GoldError as exc:
             raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/gold/freeze")
+    def gold_freeze(f: GoldFreezeIn) -> dict[str, Any]:
+        """Freeze the set as it is: a version written once, never rewritten."""
+        try:
+            rel = gold.freeze(data(), f.note, shared())
+        except gold.GoldError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {k: rel[k] for k in ("dataset_version", "created_at", "content_hash", "crossings")}
 
     @app.post("/api/gold/recount")
     def gold_recount() -> dict[str, Any]:
@@ -791,7 +825,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
         def work() -> None:
             try:
-                job.update(state="done", result=gold.evaluate(s.which, data(), s.note))
+                job.update(state="done", result=gold.evaluate(s.which, data(), s.note, shared()))
             except (gold.GoldError, OSError, ValueError) as exc:
                 job.update(state="failed", error=str(exc))
 

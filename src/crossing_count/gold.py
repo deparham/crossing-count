@@ -1,15 +1,17 @@
 """The gold set: clips a person counted in full, kept to measure the automatic count.
 
-A gold clip is a count by hand in the wizard (Manual) that watched at least
-MIN_WATCHED_PCT of every counted camera's footage: every crossing in it was looked for,
-not only those the tool pointed at. ("Every crossing the tool proposed was checked" is a
-different thing and never makes a gold clip.) Each clip is one JSON file under
-<data>/gold/<dataset>/, written only from people's counts, never by a model.
+A gold clip is a count by hand in the wizard (Manual) on clean footage that watched at
+least MIN_WATCHED_PCT of every counted camera's footage: every crossing in it was looked
+for, not only those the tool pointed at, and nothing the sensor drew could sway it.
+("Every crossing the tool proposed was checked" is a different thing and never makes a
+gold clip.) Each clip is one JSON file under gold/<dataset>/, written only from people's
+counts, never by a model. See docs/DATASET_SPECIFICATION.md.
 
-Each store goes to train, validation or test the first time one of its clips is kept
-(in turn: test, validation, train, train) and never moves, so no store's footage is on
-both sides of a comparison. Tuning looks at train and validation only ("development");
-the test set is scored only when asked, and every time it is, that is recorded.
+Each store is in train, validation or test by a fixed rule on its code (the same on
+every computer, so a team sharing clips agrees on it), so no store's footage is on both
+sides of a comparison. Tuning looks at train and validation only ("development"); the
+test set is scored only when asked, against a frozen version of the set, and every time
+it is, that is recorded.
 
 A second person can count the same footage without seeing the first count. The two are
 matched the way the tool's crossings are (evaluate.agreement); the moments they disagree
@@ -19,44 +21,62 @@ To score a clip, an automatic count of the same store's cameras over the same pe
 needed (the clean footage counted automatically in the wizard). Its recorded detections
 are replayed through today's tracking and counting rule, and its crossings matched to the
 clip's by clock time (both from RetailNext's file names).
+
+With a shared folder set (e.g. the team's SharePoint library, synced by OneDrive), every
+clip kept is also copied to <shared>/gold/<dataset>/, and clips found there are part of
+the set on every computer.
 """
 
 from __future__ import annotations
 
 import functools
 import hashlib
+import json
 import re
 from collections.abc import Iterable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from av.error import FFmpegError
+
 from . import bench, paths
+from . import video as vid
 from .config import ConfigError
 from .evaluate import MIN_SAMPLE, TOLERANCE_S, add, agreement, consensus, match, score, summary
 from .gating import camera_dir
 from .manual import merge_ranges
 from .util import write_json_atomic
 from .version import app_version
-from .wizard import CHOICES, MIN_WATCHED_PCT, default_folders, review_items, watch_stretches
+from .wizard import (
+    CHOICES,
+    GROUND_TRUTH_SPEC,
+    MIN_WATCHED_PCT,
+    default_folders,
+    review_items,
+    watch_stretches,
+)
 
 DATASET = "gold_v1"
-ROTATION = ("test", "validation", "train", "train")
+SPLITS = ("train", "validation", "test")
 DEVELOPMENT = ("train", "validation")
 TAGS = {
-    "quiet": "Quiet traffic",
-    "normal": "Normal traffic",
-    "busy": "Busy traffic",
     "crowd": "Heavy crowd",
     "groups": "Groups, or people crossing close together",
     "both_ways": "People going in and out at once",
-    "occlusion": "People hidden behind others or objects",
-    "low_light": "Low light or glare",
     "stopping": "People stopping or turning near the line",
     "returning": "Crossing and coming straight back",
     "parallel": "People walking along the line",
-    "marks": "Counted on footage with RetailNext's marks",
+    "partial": "People only partly in the picture",
+    "wide_angle": "Wide-angle (fisheye) picture",
 }
+LIGHTING = {"normal": "Normal light", "low": "Low light", "glare": "Glare or strong sun",
+            "mixed": "Changing light"}
+OCCLUSION = {"none": "People hardly ever hidden", "some": "People sometimes hidden",
+             "heavy": "People often hidden"}
+TRAFFIC = ((40.0, "quiet"), (120.0, "normal"), (240.0, "busy"))  # crossings per camera-hour
+TRAFFIC_NAMES = {"quiet": "Quiet traffic", "normal": "Normal traffic", "busy": "Busy traffic",
+                 "heavy": "Heavy traffic"}
 CONVENTION = "In = into the store: the side the counting line's triangles point to."
 CLOCK_SLACK_S = 1.0  # an automatic count's footage must cover the clip to within this
 FEW_STORES = 3  # fewer stores than this in a set: results may not carry over to others
@@ -71,8 +91,6 @@ def _now() -> str:
 
 
 def _read(p: Path) -> dict[str, Any] | None:
-    import json
-
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -88,25 +106,24 @@ def _watched_pct(ranges: list[list[float]], duration: float) -> float:
     return 100.0 * sum(b - a for a, b in merge_ranges(ranges)) / duration if duration else 0.0
 
 
+def labels() -> dict[str, str]:
+    """Names for every tag and condition results are broken down by."""
+    return {**TAGS, **{f"traffic:{k}": v for k, v in TRAFFIC_NAMES.items()},
+            **{f"lighting:{k}": v for k, v in LIGHTING.items()},
+            **{f"occlusion:{k}": v for k, v in OCCLUSION.items()}}
+
+
 # ---- which store is in which set -----------------------------------------------------------
 
-def splits(root: Path | None = None) -> dict[str, str]:
-    data = _read(folder(root) / "splits.json") or {}
-    return {str(k): str(v) for k, v in (data.get("stores") or {}).items()}
+def split_of(code: str) -> str:
+    """A store's set, fixed by its code: the same on every computer, for good. About one
+    store in five goes to test, one in five to validation, the rest to train."""
+    bucket = int(hashlib.sha256(code.strip().upper().encode("utf-8")).hexdigest(), 16) % 100
+    return "test" if bucket < 20 else "validation" if bucket < 40 else "train"
 
 
-def split_for(code: str, root: Path | None = None) -> str:
-    """The store's set: given the first time, never changed."""
-    key = code.strip().upper()
-    known = splits(root)
-    if key not in known:
-        known[key] = ROTATION[len(known) % len(ROTATION)]
-        write_json_atomic(folder(root) / "splits.json", {
-            "dataset": DATASET,
-            "rule": ("Each store, the first time one of its clips is kept, goes to the next of "
-                     "test, validation, train, train, and never moves."),
-            "stores": known})
-    return known[key]
+def traffic_level(per_camera_hour: float) -> str:
+    return next((name for limit, name in TRAFFIC if per_camera_hour < limit), "heavy")
 
 
 # ---- keeping a count by hand as a gold clip ------------------------------------------------
@@ -118,8 +135,15 @@ def problems(state: dict[str, Any]) -> list[str]:
                  "looks only where the tool pointed.")]
     out = []
     m, dur = state.get("manual") or {}, float(state["duration_s"])
+    if state.get("marks"):
+        out.append("This footage shows RetailNext's own tracks and counts, which can sway a "
+                   "count towards the sensor's: a gold clip is counted on clean footage "
+                   "(downloaded for a count by hand, without RetailNext's marks).")
     if not m.get("done"):
         out.append("Finish counting first.")
+    elif not m.get("specification"):
+        out.append("This count was finished before the Ground Truth Specification: check it "
+                   f"follows v{GROUND_TRUTH_SPEC}, then press I've finished counting again.")
     for cam in state["cameras"]:
         pct = _watched_pct((m.get("watched") or {}).get(cam["sensor"], []), dur)
         if pct < MIN_WATCHED_PCT:
@@ -143,17 +167,31 @@ def clip_id(state: dict[str, Any]) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", words).strip("-")
 
 
-def find(state: dict[str, Any], root: Path | None = None) -> dict[str, Any] | None:
-    """The gold clip of this footage's store and period, if one was kept."""
+def find(state: dict[str, Any], root: Path | None = None,
+         shared: Path | None = None) -> dict[str, Any] | None:
+    """The gold clip of this footage's store and period, if one was kept (here or shared)."""
     if not state.get("clock_start") or not str(state["store"].get("code") or "").strip():
         return None
-    return _read(folder(root) / f"{clip_id(state)}.json")
+    name = f"{clip_id(state)}.json"
+    return _read(folder(root) / name) or (_read(folder(shared) / name) if shared else None)
+
+
+def _video_facts(state: dict[str, Any]) -> dict[str, Any]:
+    facts: dict[str, Any] = {"filename": state["filename"], "fingerprint": state["fingerprint"],
+                             "fps": None, "width": None, "height": None}
+    try:
+        info = vid.probe(state["video"])
+    except (OSError, ValueError, FFmpegError):
+        return facts
+    return {**facts, "fps": info.fps_reported, "width": info.width, "height": info.height}
 
 
 def save(state: dict[str, Any], run_dir: Path, tags: Iterable[str], notes: str = "",
-         root: Path | None = None) -> dict[str, Any]:
+         root: Path | None = None, lighting: str = "normal", occlusion: str = "none",
+         shared: Path | None = None) -> dict[str, Any]:
     """Keep this count by hand in the gold set: a new clip, or a second person's count of
-    one already kept (the same person again replaces their own count)."""
+    one already kept (the same person again replaces their own count). With a shared
+    folder, the clip is also copied there."""
     bad = problems(state)
     if bad:
         raise GoldError(" ".join(bad))
@@ -161,14 +199,17 @@ def save(state: dict[str, Any], run_dir: Path, tags: Iterable[str], notes: str =
     unknown = [t for t in tags if t not in TAGS]
     if unknown:
         raise GoldError(f"Unknown tag(s): {', '.join(unknown)}.")
+    if lighting not in LIGHTING or occlusion not in OCCLUSION:
+        raise GoldError("Choose the lighting and how often people are hidden.")
     dirs = list(CHOICES[state["direction"]])
     start = datetime.fromisoformat(state["clock_start"])
     reviewer = str(state["store"]["operator"]).strip()
     m, dur = state["manual"], float(state["duration_s"])
+    rules = dict(state.get("rules") or {"children": "count", "staff": "count"})
     review = {
         "reviewer": reviewer, "at": _now(), "run": str(run_dir),
         "video": {"filename": state["filename"], "fingerprint": state["fingerprint"]},
-        "marked": bool(state.get("marks")),
+        "marked": bool(state.get("marks")), "specification": m["specification"],
         "watched_pct": {c["sensor"]: round(_watched_pct(m["watched"].get(c["sensor"], []), dur), 1)
                         for c in state["cameras"]},
         "crossings": [{"camera": c["camera"], "t": round(float(c["t"]), 2),
@@ -180,24 +221,27 @@ def save(state: dict[str, Any], run_dir: Path, tags: Iterable[str], notes: str =
     cams = [{"sensor": c["sensor"], "picture": c["picture"], "config": c.get("config")}
             for c in state["cameras"]]
     path = folder(root) / f"{clip_id(state)}.json"
-    rec = _read(path)
+    rec = _read(path) or (_read(folder(shared) / path.name) if shared else None)
     if rec is None:
+        code = str(state["store"]["code"]).strip()
         rec = {"schema": "gold/1", "dataset": DATASET, "id": clip_id(state),
-               "store": {"code": str(state["store"]["code"]).strip(),
-                         "name": str(state["store"].get("name") or "")},
-               "split": split_for(str(state["store"]["code"]), root),
+               "store": {"code": code, "name": str(state["store"].get("name") or "")},
+               "split": split_of(code),
                "period": {"start": start.isoformat(),
                           "end": (start + timedelta(seconds=dur)).isoformat(),
                           "tz": state.get("tz") or ""},
-               "duration_s": dur, "cameras": cams, "dirs": dirs,
-               "direction_convention": CONVENTION, "reviews": [], "tags": [], "notes": "",
-               "created_at": _now()}
+               "duration_s": dur, "video": _video_facts(state), "cameras": cams, "dirs": dirs,
+               "direction_convention": CONVENTION, "specification": m["specification"],
+               "rules": rules, "reviews": [], "tags": [], "notes": "", "created_at": _now()}
     else:
         if rec["dirs"] != dirs:
             raise GoldError(f"This clip was counted for {' and '.join(rec['dirs']).upper()}: "
                             f"count the same traffic.")
         if sorted(c["sensor"] for c in rec["cameras"]) != sorted(c["sensor"] for c in cams):
             raise GoldError("This clip was counted on other cameras: count the same ones.")
+        if rec.get("rules", rules) != rules:
+            raise GoldError("This clip was counted with other rules for children or staff: "
+                            "count it with the same ones.")
     reviews = list(rec["reviews"])
     mine = [k for k, r in enumerate(reviews) if r["reviewer"].casefold() == reviewer.casefold()]
     if mine:
@@ -206,9 +250,17 @@ def save(state: dict[str, Any], run_dir: Path, tags: Iterable[str], notes: str =
         raise GoldError("Two people have counted this clip already.")
     else:
         reviews.append(review)
+    first = reviews[0]
+    hours = dur * len(cams) / 3600
+    per_hour = round(len(first["crossings"]) / hours, 1) if hours else 0.0
     rec.update(reviews=reviews, tags=tags, notes=notes.strip(), updated_at=_now(),
-               made_with=app_version())
+               made_with=app_version(),
+               conditions={"traffic": traffic_level(per_hour), "traffic_per_camera_hour": per_hour,
+                           "traffic_thresholds": [limit for limit, _ in TRAFFIC],
+                           "lighting": lighting, "occlusion": occlusion})
     write_json_atomic(path, rec)
+    if shared is not None:
+        write_json_atomic(folder(shared) / path.name, rec)
     return describe(rec)
 
 
@@ -254,15 +306,121 @@ def describe(rec: dict[str, Any]) -> dict[str, Any]:
     return {"id": rec["id"], "store": rec["store"], "split": rec["split"], "period": rec["period"],
             "duration_s": rec["duration_s"], "cameras": [c["sensor"] for c in rec["cameras"]],
             "dirs": rec["dirs"], "tags": rec["tags"], "notes": rec["notes"],
+            "conditions": rec.get("conditions") or {}, "rules": rec.get("rules") or {},
+            "specification": rec.get("specification"),
             "reviews": [{"reviewer": r["reviewer"], "at": r["at"], "crossings": len(r["crossings"])}
                         for r in rec["reviews"]],
             "crossings": sum(len(v) for v in real.values()),
             "uncertain": sum(len(v) for v in unsure.values()), "agreement": agree}
 
 
-def clips(root: Path | None = None) -> list[dict[str, Any]]:
-    return [rec for p in sorted(folder(root).glob("*.json"))
-            if (rec := _read(p)) is not None and rec.get("schema") == "gold/1"]
+def _clip_files(root: Path | None = None, shared: Path | None = None
+                ) -> list[tuple[Path, dict[str, Any]]]:
+    """Every clip: this computer's, then any only in the shared folder (by id, ours first)."""
+    out: dict[str, tuple[Path, dict[str, Any]]] = {}
+    for where in [*([shared] if shared else []), root]:  # root None: this computer's data folder
+        for p in sorted(folder(where).glob("*.json")):
+            rec = _read(p)
+            if rec is not None and rec.get("schema") == "gold/1":
+                out[rec["id"]] = (p, rec)  # this computer's copy last: it wins
+    return [out[k] for k in sorted(out)]
+
+
+def clips(root: Path | None = None, shared: Path | None = None) -> list[dict[str, Any]]:
+    return [rec for _, rec in _clip_files(root, shared)]
+
+
+def splits(root: Path | None = None, shared: Path | None = None) -> dict[str, str]:
+    """Each store with a gold clip, and its set."""
+    return {str(r["store"]["code"]).strip().upper(): r["split"] for r in clips(root, shared)}
+
+
+# ---- versions: frozen, checksummed manifests -----------------------------------------------
+
+def manifests_dir(root: Path | None = None) -> Path:
+    return folder(root) / "manifests"
+
+
+def _sha_file(p: Path) -> str:
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def manifest(root: Path | None = None, shared: Path | None = None,
+             records: bool = False) -> dict[str, Any]:
+    """What the set holds right now, with a hash of its contents."""
+    files = _clip_files(root, shared)
+    entries = []
+    for p, rec in files:
+        entry = {"id": rec["id"], "split": rec["split"], "sha256": _sha_file(p),
+                 "crossings": describe(rec)["crossings"]}
+        if records:  # a frozen version keeps the clips themselves, so it can be scored later
+            entry["record"] = rec
+        entries.append(entry)
+    content = hashlib.sha256(json.dumps([[e["id"], e["sha256"]] for e in entries]).encode()).hexdigest()
+    return {"dataset_id": DATASET, "content_hash": content,
+            "ground_truth_versions": sorted({str(r.get("specification")) for _, r in files
+                                             if r.get("specification")}),
+            "stores": sorted({str(r["store"]["code"]) for _, r in files}),
+            "cameras": sorted({f"{r['store']['code']}/{c['sensor']}" for _, r in files
+                               for c in r["cameras"]}),
+            "videos": sorted({str(v["video"]["fingerprint"]) for _, r in files for v in r["reviews"]}),
+            "crossings": sum(e["crossings"] for e in entries),
+            "splits": {str(r["store"]["code"]): r["split"] for _, r in files},
+            "clips": entries}
+
+
+def releases(root: Path | None = None) -> list[dict[str, Any]]:
+    """Frozen versions, oldest first."""
+    found = [r for p in manifests_dir(root).glob(f"{DATASET}.*.json") if (r := _read(p))]
+    return sorted(found, key=lambda r: int(str(r["dataset_version"]).rsplit(".", 1)[1]))
+
+
+def version_of(current: dict[str, Any], root: Path | None = None) -> str:
+    """The frozen version the set matches exactly, or "unreleased"."""
+    same = [r for r in releases(root) if r.get("content_hash") == current["content_hash"]]
+    return str(same[-1]["dataset_version"]) if same else "unreleased"
+
+
+def freeze(root: Path | None = None, note: str = "", shared: Path | None = None) -> dict[str, Any]:
+    """Freeze the set as it is: a new version, written once and never rewritten."""
+    now = manifest(root, shared, records=True)
+    if not now["clips"]:
+        raise GoldError("Nothing to freeze: there is no gold clip yet.")
+    known = releases(root)
+    same = next((r for r in known if r["content_hash"] == now["content_hash"]), None)
+    if same is not None:
+        return same
+    n = max((int(str(r["dataset_version"]).rsplit(".", 1)[1]) for r in known), default=0) + 1
+    rel = {"dataset_version": f"{DATASET}.{n}", "created_at": _now(), "note": note.strip(),
+           "made_with": app_version(), **now}
+    path = manifests_dir(root) / f"{DATASET}.{n}.json"
+    if path.exists():
+        raise GoldError(f"{path.name} exists already: a frozen version is never rewritten.")
+    write_json_atomic(path, rel)
+    return rel
+
+
+def check(root: Path | None = None, shared: Path | None = None) -> list[str]:
+    """What is wrong with the set's files, or has changed since a version was frozen."""
+    out = []
+    for where in [root, *([shared] if shared else [])]:  # root None: this computer's data folder
+        for p in sorted(folder(where).glob("*.json")):
+            rec = _read(p)
+            if rec is None or rec.get("schema") != "gold/1":
+                out.append(f"{p.name}: not a readable gold clip")
+                continue
+            code = str(rec["store"]["code"])
+            if rec["split"] != split_of(code):
+                out.append(f"{rec['id']}: marked {rec['split']}, but store {code} belongs to "
+                           f"{split_of(code)}")
+    current = {c["id"]: c["sha256"] for c in manifest(root, shared)["clips"]}
+    for rel in releases(root):
+        changed = [c["id"] for c in rel["clips"] if current.get(c["id"]) != c["sha256"]]
+        if changed:
+            out.append(f"{rel['dataset_version']}: {len(changed)} clip(s) changed or gone since it "
+                       f"was frozen ({', '.join(changed[:3])}); the frozen version keeps them as "
+                       f"they were.")
+    return out
 
 
 # ---- scoring the automatic count on gold clips ---------------------------------------------
@@ -354,15 +512,18 @@ def score_camera(real: list[tuple[float, str]], unsure: list[float], items: list
 
 
 def score_clip(rec: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
-    base = {"id": rec["id"], "split": rec["split"], "tags": rec["tags"],
+    cond = rec.get("conditions") or {}
+    keys = [*rec["tags"], *(f"{k}:{cond[k]}" for k in ("traffic", "lighting", "occlusion")
+                            if cond.get(k))]
+    base = {"id": rec["id"], "split": rec["split"], "tags": rec["tags"], "groups": keys,
             "store": rec["store"]["code"], "scored": False}
     real, unsure, agree = truth(rec)
     base.update(agreement=agree, uncertain=sum(len(v) for v in unsure.values()))
     hit = find_run(rec, (root or paths.data_root()) / "runs")
     if hit is None:
         return {**base, "reason": (
-            "No automatic count of these cameras over this period yet: download the same period "
-            "without RetailNext's marks (Footage > RetailNext > Automatic) and count it "
+            "No automatic count of these cameras over this period on this computer yet: "
+            "download the same period (Footage > RetailNext > Automatic) and count it "
             "automatically.")}
     run_dir, offset, have = hit
     try:
@@ -435,35 +596,48 @@ def experiments_dir(root: Path | None = None) -> Path:
     return (root or paths.data_root()) / "bench" / "experiments"
 
 
-def evaluate(which: str, root: Path | None = None, note: str = "") -> dict[str, Any]:
+def evaluate(which: str, root: Path | None = None, note: str = "",
+             shared: Path | None = None) -> dict[str, Any]:
     """Score the automatic count on the development clips (train and validation) or, when
-    asked, on the held-out test clips; the result is kept as an experiment record."""
+    asked, on the held-out test clips, which needs a frozen version of the set. The result
+    is kept as an experiment record naming the dataset version it used."""
     if which not in ("development", "test"):
         raise GoldError("Score the development set or the test set.")
     chosen = DEVELOPMENT if which == "development" else ("test",)
-    recs = [r for r in clips(root) if r["split"] in chosen]
+    current = manifest(root, shared)
+    version = version_of(current, root)
+    if which == "test" and version == "unreleased":
+        raise GoldError("Freeze the gold set first (Versions, on the gold page): a test-set score "
+                        "must name a frozen version of the set.")
+    recs = [r for r in clips(root, shared) if r["split"] in chosen]
     if not recs:
         raise GoldError(f"No gold clip in the {which} set yet.")
     results = [score_clip(r, root) for r in recs]
     scored = [c for c in results if c["scored"]]
     total: dict[str, dict[str, int]] = {}
     by_split: dict[str, dict[str, dict[str, int]]] = {}
-    by_tag: dict[str, dict[str, dict[str, int]]] = {}
+    by_group: dict[str, dict[str, dict[str, int]]] = {}
     for c in scored:
         add(total, c["by_direction"])
         add(by_split.setdefault(c["split"], {}), c["by_direction"])
-        for t in c["tags"]:
-            add(by_tag.setdefault(t, {}), c["by_direction"])
+        for g in c["groups"]:
+            add(by_group.setdefault(g, {}), c["by_direction"])
     n = sum(v["truth"] for v in total.values())
     made = datetime.now().astimezone()
+    ids = {r["id"] for r in recs}
     exp = {"id": f"{made:%Y%m%d-%H%M%S}-{which}", "made_at": made.isoformat(timespec="seconds"),
-           "set": which, "splits": list(chosen), "dataset": DATASET, "app_version": app_version(),
-           "settings": {**bench.settings(), "tolerance_s": TOLERANCE_S, "min_sample": MIN_SAMPLE},
+           "set": which, "splits": list(chosen),
+           "dataset": {"id": DATASET, "version": version, "content_hash": current["content_hash"],
+                       "clips": [{k: c[k] for k in ("id", "split", "sha256")}
+                                 for c in current["clips"] if c["id"] in ids]},
+           "app_version": app_version(),
+           "settings": {**bench.settings(), "tolerance_s": TOLERANCE_S, "min_sample": MIN_SAMPLE,
+                        "ground_truth_specification": GROUND_TRUTH_SPEC},
            "detectors": sorted({d["model"]: d for c in scored for d in c["detectors"]}.values(),
                                key=lambda d: str(d["model"])),
            "clips": results, "totals": summary(total) if total else None,
            "by_split": {k: summary(v) for k, v in by_split.items()},
-           "by_tag": {k: summary(v) for k, v in sorted(by_tag.items())},
+           "by_tag": {k: summary(v) for k, v in sorted(by_group.items())},
            "workload": _workload(scored), "limits": _limits(recs, scored, n), "note": note}
     write_json_atomic(experiments_dir(root) / f"{exp['id']}.json", exp)
     return exp
@@ -477,18 +651,20 @@ def experiments(root: Path | None = None) -> list[dict[str, Any]]:
         if not e:
             continue
         tot = (e.get("totals") or {}).get("all") or {}
+        ds = e.get("dataset")
         out.append({"id": e["id"], "made_at": e["made_at"], "set": e["set"],
                     "app_version": e.get("app_version"),
+                    "dataset_version": ds.get("version") if isinstance(ds, dict) else ds,
                     "clips": sum(1 for c in e.get("clips", []) if c.get("scored")),
                     "crossings": tot.get("truth", 0), "recall": tot.get("recall"),
                     "precision": tot.get("precision"), "sufficient": tot.get("sufficient", False)})
     return out
 
 
-def overview(root: Path | None = None) -> dict[str, Any]:
-    recs = clips(root)
+def overview(root: Path | None = None, shared: Path | None = None) -> dict[str, Any]:
+    recs = clips(root, shared)
     sets: dict[str, dict[str, Any]] = {s: {"clips": 0, "stores": set(), "crossings": 0}
-                                       for s in ("train", "validation", "test")}
+                                       for s in SPLITS}
     described = [describe(r) for r in recs]
     for d in described:
         s = sets[d["split"]]
@@ -496,7 +672,15 @@ def overview(root: Path | None = None) -> dict[str, Any]:
         s["stores"].add(d["store"]["code"])
         s["crossings"] += d["crossings"]
     exps = experiments(root)
-    return {"dataset": DATASET, "tags": TAGS, "clips": described,
+    current = manifest(root, shared)
+    return {"dataset": DATASET, "tags": TAGS, "labels": labels(), "lighting": LIGHTING,
+            "occlusion": OCCLUSION, "clips": described,
             "sets": {k: {**v, "stores": sorted(v["stores"])} for k, v in sets.items()},
             "experiments": exps, "test_scorings": sum(1 for e in exps if e["set"] == "test"),
-            "tolerance_s": TOLERANCE_S, "min_sample": MIN_SAMPLE}
+            "version": version_of(current, root), "content_hash": current["content_hash"],
+            "releases": [{k: r.get(k) for k in ("dataset_version", "created_at", "note",
+                                                 "crossings", "content_hash")}
+                         | {"clips": len(r.get("clips", []))} for r in releases(root)],
+            "checks": check(root, shared), "shared": str(folder(shared)) if shared else None,
+            "tolerance_s": TOLERANCE_S, "min_sample": MIN_SAMPLE,
+            "specification": GROUND_TRUTH_SPEC}

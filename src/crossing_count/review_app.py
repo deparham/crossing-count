@@ -104,7 +104,10 @@ def create_review_app(video: str | Path, run_dir: str | Path, operator: str = ""
             for rec in group[key]:
                 records[rec["id"]] = rec
 
+    from .localweb import local_only
+
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    local_only(app)
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:

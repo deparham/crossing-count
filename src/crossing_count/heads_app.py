@@ -44,8 +44,11 @@ class _Adding:
 def create_label_app(root: Path | None = None, folders: list[Path] | None = None,
                      runs_root: Path | None = None) -> FastAPI:
     store = HeadLabels(root)
+    from .localweb import local_only
+
     adding = _Adding()
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    local_only(app)
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:

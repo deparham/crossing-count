@@ -191,14 +191,14 @@
 <section id="s-footage">
   <div class="card" id="rnCard" hidden>
     <div class="big">Get footage from RetailNext</div>
-    <div class="muted">Pick the store and the day: the tool finds the busiest stretch for the traffic you validate, then downloads it, clean for an automatic count, with RetailNext's marks for a count by hand.</div>
+    <div class="muted">Pick the store and the day: the tool finds the busiest stretch for the traffic you validate, then downloads it without RetailNext's own marks. RetailNext's numbers stay hidden until the count is done, so nothing of the sensor's can sway it.</div>
     <div class="grid2" style="margin-top:10px">
       <label>Brand <input id="rnSub" list="rnSubs" placeholder="e.g. rag, from rag.cloud.retailnext.net" autocomplete="off" spellcheck="false"></label>
       <label>Store <input id="rnStore" list="rnStores" placeholder="type the code or the name" autocomplete="off"></label>
       <label>Day <input type="date" id="rnDay"></label>
       <label>Length <select id="rnMinutes"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">1 hour</option></select></label>
       <label>Traffic <select id="rnDir"><option value="out">Out</option><option value="in">In</option><option value="both">In and out</option></select></label>
-      <label>Count <select id="rnMode"><option value="auto">Automatic (clean footage)</option><option value="manual">By hand (with RetailNext's marks)</option></select></label>
+      <label>Count <select id="rnMode"><option value="auto">Automatic</option><option value="manual">By hand</option><option value="marked">By hand on RetailNext's marked footage (a quick look only)</option></select></label>
     </div>
     <datalist id="rnStores"></datalist>
     <datalist id="rnSubs"></datalist>
@@ -270,6 +270,14 @@
       <button data-dir="in">Traffic In</button>
       <button data-dir="out">Traffic Out</button>
       <button data-dir="both" style="font-size:15px;min-width:120px">Both</button>
+    </div>
+    <div class="sub" style="margin-top:16px">
+      <b>What counts as a person</b>
+      <div class="muted">Set these to what the sensor is set up to count, or it is marked wrong for doing what it was told (Ground Truth Specification v1.0, section 4).</div>
+      <div class="grid2">
+        <label>Children walking on their own <select id="ruleChildren"><option value="count">Counted</option><option value="exclude">Not counted: the sensor leaves them out</option></select></label>
+        <label>Staff <select id="ruleStaff"><option value="count">Counted</option><option value="exclude">Not counted: the sensor leaves them out</option></select></label>
+      </div>
     </div>
   </div>
 </section>
@@ -348,8 +356,8 @@
     </div>
     <div id="numbers"></div>
     <div class="grid2" style="grid-template-columns:1fr">
-      <label>Learning examples folder (a shared folder; every crossing is saved there to improve the automatic counter)
-        <input type="text" id="exDir" placeholder="e.g. \\server\share\crossing-count-examples or /Volumes/Shared/examples"></label>
+      <label>Shared folder for the team: your SharePoint library synced by OneDrive, or a network share. Learning examples, this validation's record (no video) and gold clips are saved there, for training and measuring. They hold pictures of people: use a folder only your team can open.
+        <input type="text" id="exDir" placeholder="e.g. ~/Library/CloudStorage/OneDrive-YourCompany/CrossingCount or \\server\share\crossing-count"></label>
     </div>
     <div id="exStatus"></div>
     <div id="logoInfo" class="muted" style="margin-top:6px"></div>
@@ -360,7 +368,11 @@
     <div class="big">Gold set</div>
     <div class="muted">A count by hand of every moment of the footage can be kept as a gold clip. The automatic counter is measured against gold clips, never trained on them. <a href="/gold/" target="_blank" rel="noopener">Open the gold set</a></div>
     <div id="goldWhy" class="warn" style="margin-top:8px"></div>
-    <div class="muted" style="margin-top:10px">What is in this clip?</div>
+    <div class="grid2">
+      <label>Lighting <select id="goldLight"></select></label>
+      <label>People hidden by others or objects <select id="goldOcc"></select></label>
+    </div>
+    <div class="muted" style="margin-top:4px">What else is in this clip?</div>
     <div id="goldTags" class="tags"></div>
     <label class="muted" style="display:block;margin-top:10px">Notes: what makes it hard, anything you were unsure of
       <textarea id="goldNotes" rows="2"></textarea></label>
@@ -378,7 +390,8 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const FLOW = {
-  auto: ["footage", "mode", "draw", "traffic", "retail", "count", "check", "report"],
+  // RetailNext's numbers only after the check, so they cannot sway it
+  auto: ["footage", "mode", "draw", "traffic", "count", "check", "retail", "report"],
   manual: ["footage", "mode", "draw", "traffic", "hand", "retail", "report"],
 };
 const NAMES = { footage: "Footage", mode: "How", draw: "Cameras", traffic: "Traffic", retail: "RetailNext",
@@ -429,9 +442,9 @@ function nextKey() {
   if (!s.direction) return "traffic";
   const missing = s.dirs.some((d) => s.sensor[d] === undefined || s.sensor[d] === null);
   if (s.mode === "manual") return !s.manual.done ? "hand" : missing ? "retail" : "report";
-  if (missing) return "retail";
   if (s.job.status !== "done") return "count";
   if (!s.counts.checked) return "check";
+  if (missing) return "retail";
   return "report";
 }
 function renderSteps() {
@@ -682,7 +695,7 @@ $("rnFind").addEventListener("click", async () => {
     $("rnWindows").innerHTML = !r.windows.length ? '<div class="muted" style="margin-top:8px">RetailNext has no traffic for that day.</div>'
       : `<div class="muted" style="margin-top:8px">${esc(r.store)} (${esc(r.subscription)}): the busiest ${pick.minutes} minutes for ${RN_DIR[pick.direction]} on ${esc(pick.date)}</div>` +
         r.windows.map((w, i) => `<div style="display:flex;gap:12px;align-items:center;margin-top:6px"><b>${esc(w.start)}–${esc(w.until)}</b>` +
-          `<span>${w.in} in · ${w.out} out${w.validity !== "complete" ? ` <span class="warn">(RetailNext: ${esc(w.validity)})</span>` : ""}</span>` +
+          `<span class="muted">${i ? `${i + 1}${["st", "nd", "rd"][i] || "th"} busiest` : "busiest"}${w.validity !== "complete" ? ` <span class="warn">(RetailNext: ${esc(w.validity)})</span>` : ""}</span>` +
           `<button data-win="${i}">${i ? "Download" : "Download the busiest"}</button></div>`).join("");
   } catch (e) { $("rnWindows").innerHTML = ""; msg(e.message, "err"); }
 });
@@ -690,7 +703,7 @@ $("rnWindows").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-win]");
   if (!b || !W.rnPick) return;
   const p = W.rnPick, w = p.windows[+b.dataset.win], mode = $("rnMode").value;
-  try { await api("/api/retailnext/download", { code: p.code, date: p.date, start: w.start, until: w.until, marks: mode === "manual" }); }
+  try { await api("/api/retailnext/download", { code: p.code, date: p.date, start: w.start, until: w.until, marks: mode === "marked" }); }
   catch (err) { msg(err.message, "err"); return; }
   $("rnWindows").innerHTML = '<div id="rnJob" class="muted" style="margin-top:8px">RetailNext is preparing the video…</div>';
   const poll = async () => {
@@ -700,7 +713,7 @@ $("rnWindows").addEventListener("click", async (e) => {
     if (j.state === "done") {  // open it with the choices already made above
       $("rnJob").textContent = "Downloaded. Opening…";
       await openVideo(j.path);
-      try { setState(await api("/api/mode", { mode })); setState(await api("/api/direction", { direction: p.direction })); go(nextKey()); }
+      try { setState(await api("/api/mode", { mode: mode === "auto" ? "auto" : "manual" })); setState(await api("/api/direction", { direction: p.direction })); go(nextKey()); }
       catch (err) { msg(err.message, "err"); }
       return;
     }
@@ -772,7 +785,15 @@ $("drawDone").addEventListener("click", async () => {
 });
 
 // ---------- traffic ----------
-ENTER.traffic = () => document.querySelectorAll("#s-traffic [data-dir]").forEach((b) => b.classList.toggle("on", b.dataset.dir === W.st.direction));
+ENTER.traffic = () => {
+  document.querySelectorAll("#s-traffic [data-dir]").forEach((b) => b.classList.toggle("on", b.dataset.dir === W.st.direction));
+  const r = W.st.rules || {};
+  $("ruleChildren").value = r.children || "count"; $("ruleStaff").value = r.staff || "count";
+};
+["ruleChildren", "ruleStaff"].forEach((id) => $(id).addEventListener("change", async () => {
+  try { setState(await api("/api/rules", { children: $("ruleChildren").value, staff: $("ruleStaff").value })); msg("Saved: what counts as a person.", "ok"); }
+  catch (e) { msg(e.message, "err"); }
+}));
 document.querySelectorAll("#s-traffic [data-dir]").forEach((b) => b.addEventListener("click", async () => {
   try { setState(await api("/api/direction", { direction: b.dataset.dir })); go(nextKey()); } catch (e) { msg(e.message, "err"); }
 }));
@@ -1000,7 +1021,7 @@ function showDone() {
   W.mode = null; V.pause();
   $("panel").innerHTML = `<div style="font-size:16px">Checking finished.</div>${counts()}
     <button id="toReport" class="primary">Make the report →</button>`;
-  $("toReport").addEventListener("click", () => go("report"));
+  $("toReport").addEventListener("click", () => go(nextKey()));  // RetailNext's numbers, if not in yet
 }
 // The video itself is shown, cropped to the camera and scaled, under a see-through canvas
 // that carries only the line and marks: the browser plays it smoothly at any speed.
@@ -1258,7 +1279,10 @@ async function showGold() {  // a count by hand of every moment can be kept as a
   if (card.hidden) return;
   let g;
   try { g = await api("/api/gold/current"); } catch (e) { card.hidden = true; return; }
-  const clip = g.clip, on = new Set(clip ? clip.tags : []);
+  const clip = g.clip, on = new Set(clip ? clip.tags : []), cond = (clip && clip.conditions) || {};
+  const options = (all, chosen) => Object.entries(all).map(([k, label]) => `<option value="${esc(k)}"${k === chosen ? " selected" : ""}>${esc(label)}</option>`).join("");
+  $("goldLight").innerHTML = options(g.lighting, cond.lighting || "normal");
+  $("goldOcc").innerHTML = options(g.occlusion, cond.occlusion || "none");
   $("goldWhy").textContent = g.problems.join(" ");
   $("goldTags").innerHTML = Object.entries(g.tags).map(([k, label]) =>
     `<label><input type="checkbox" data-tag="${esc(k)}" ${on.has(k) ? "checked" : ""}> ${esc(label)}</label>`).join("");
@@ -1267,7 +1291,7 @@ async function showGold() {  // a count by hand of every moment can be kept as a
 }
 function goldHtml(c) {
   const a = c.agreement, who = c.reviews.map((r) => `${esc(r.reviewer)} (${r.crossings})`).join(" and ");
-  return `<div class="ok">Kept as gold clip ${esc(c.id)}, in the ${esc(c.split)} set, counted by ${who}.</div>`
+  return `<div class="ok">Kept as gold clip ${esc(c.id)} (${esc(c.conditions.traffic || "")} traffic), in the ${esc(c.split)} set, counted by ${who}.</div>`
     + (a ? `<div class="${a.disagreements ? "warn" : "ok"}" style="margin-top:6px">The two counts agree on ${a.agreed} crossing(s)${a.disagreements
             ? `; they disagree on ${a.disagreements}, which stay out of any scoring until someone looks again: ${a.where.map(esc).join(", ")}` : ""}.</div>`
        : `<div class="muted" style="margin-top:6px">Someone else can count the same footage without seeing this count: it shows how far two people agree. <button id="goldRecount" style="margin-left:6px">Count it again as someone else</button></div>`);
@@ -1278,7 +1302,7 @@ $("goldSave").addEventListener("click", async () => {
   try {
     setState(await api("/api/store", { name: $("storeName").value, code: $("storeCode").value, location: $("storeLoc").value,
                                          report_date: $("repDate").value, operator: $("operator").value }));
-    const r = await api("/api/gold/save", { tags, notes: $("goldNotes").value });
+    const r = await api("/api/gold/save", { tags, notes: $("goldNotes").value, lighting: $("goldLight").value, occlusion: $("goldOcc").value });
     $("goldWhy").textContent = ""; $("goldDone").innerHTML = goldHtml(r.clip); msg("Kept in the gold set.", "ok");
   } catch (e) { msg(e.message, "err"); } finally { $("goldSave").disabled = false; }
 });

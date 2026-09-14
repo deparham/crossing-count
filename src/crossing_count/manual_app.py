@@ -57,7 +57,10 @@ class SensorIn(BaseModel):
 
 
 def create_manual_app(session: ManualSession) -> FastAPI:
+    from .localweb import local_only
+
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    local_only(app)
 
     def run(change: Callable[[], object]) -> dict[str, Any]:
         try:

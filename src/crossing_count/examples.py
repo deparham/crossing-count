@@ -8,7 +8,14 @@ frames of people, so they go only to the folder chosen in the app's settings.
 
 Layout: <folder>/<store>/<video>/<camera>/<label>_<n>/ with frame_*.jpg (the
 camera's picture from 1.5 s before to 1 s after the moment) and meta.json;
-<folder>/index.jsonl gets one line per example.
+<folder>/index.jsonl gets one line per example. The whole validation (answers, counts by
+hand, the sensor's numbers, the decision log: no video) goes to
+<folder>/validations/<store>/<video>.json.
+
+The folder can be shared by a team (a SharePoint library synced by OneDrive, a network
+share), so everyone's work lands in one place. Each example names its store's set: an
+example from a test-set store says train_ok false and must never be trained on, or the
+test set's results would mean nothing.
 """
 
 from __future__ import annotations
@@ -91,8 +98,43 @@ def moments(w: Wizard) -> list[dict[str, Any]]:
     return out
 
 
+def validation_record(w: Wizard) -> dict[str, Any]:
+    """The whole validation as data, without the video: for the team's shared folder."""
+    from .gold import split_of
+    from .version import app_version
+
+    st = w.state
+    code = str(st["store"].get("code") or "")
+    return {
+        "schema": "validation-record/1", "saved_at": datetime.now().astimezone().isoformat(
+            timespec="seconds"), "app_version": app_version(),
+        "store": st["store"], "split": split_of(code) if code else None,
+        "video": {"filename": st["filename"], "fingerprint": st["fingerprint"],
+                  "duration_s": st["duration_s"], "clock_start": st["clock_start"],
+                  "clock_end": st.get("clock_end"), "tz": st.get("tz")},
+        "mode": st.get("mode") or "auto", "marked": bool(st.get("marks")),
+        "cameras": [{k: c.get(k) for k in ("sensor", "picture", "site", "config")}
+                    for c in st["cameras"]],
+        "direction": st["direction"], "rules": st.get("rules"),
+        "specification": st.get("manual", {}).get("specification"),
+        "sensor": st["sensor"], "sensor_intervals": st.get("sensor_intervals"),
+        "sensor_cameras": st.get("sensor_cameras"), "sensor_source": st.get("sensor_source"),
+        "model": st.get("model"), "job": {k: st["job"].get(k) for k in ("status", "started_at",
+                                                                         "finished_at")},
+        "counts": w.counts(), "answers": st["answers"], "people": st.get("people", {}),
+        "added": st["added"], "watched": st["watched"], "watch": st.get("watch"),
+        "manual": {k: st["manual"].get(k) for k in ("counts", "watched", "done", "specification")},
+        "decisions": st.get("decisions", []), "report": st.get("report"),
+    }
+
+
 def export_examples(w: Wizard, root: Path) -> dict[str, Any]:
+    from .gold import split_of
+
     st, store = w.state, w.state["store"]
+    split = split_of(str(store.get("code") or "")) if store.get("code") else None
+    write_json_atomic(root / "validations" / slugify(store.get("code") or "site")
+                      / f"{slugify(Path(st['filename']).stem)}.json", validation_record(w))
     geometry = w.geometry()
     video_dir = root / slugify(store.get("code") or "site") / slugify(Path(st["filename"]).stem)
     shutil.rmtree(video_dir, ignore_errors=True)  # saving again replaces this video's examples
@@ -132,7 +174,8 @@ def export_examples(w: Wizard, root: Path) -> dict[str, Any]:
             "operator": store.get("operator", ""), "mode": st.get("mode") or "auto",
             "tile_size": [tile["x1"] - tile["x0"], tile["y1"] - tile["y0"]],
             "line": local(g["line"]), "mask": local(g["mask"]), "frames": frames,
-            "export_id": export_id,
+            "export_id": export_id, "split": split, "train_ok": split != "test",
+            "rules": st.get("rules"), "marked": bool(st.get("marks")),
         }
         if "people" in mo:  # how many crossed together at this moment
             meta["people"] = mo["people"]
@@ -145,7 +188,8 @@ def export_examples(w: Wizard, root: Path) -> dict[str, Any]:
         lines.append(json.dumps({
             "path": folder.relative_to(root).as_posix(), "label": mo["label"],
             "direction": mo["direction"], "source": mo["source"], "camera": mo["camera"],
-            "video": st["filename"], "t_seconds": round(mo["t"], 3), "export_id": export_id},
+            "video": st["filename"], "t_seconds": round(mo["t"], 3), "export_id": export_id,
+            "store_code": store.get("code", ""), "split": split, "train_ok": split != "test"},
             ensure_ascii=False))
     # The index keeps one entry per example: this video's earlier entries are replaced.
     index = root / "index.jsonl"

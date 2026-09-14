@@ -74,6 +74,18 @@
   </div>
 
   <div class="card">
+    <div class="big">Versions</div>
+    <div class="muted">A frozen version lists every clip with its checksum and keeps the clips themselves, so a score always names exactly what it was measured on. A test-set score needs one.</div>
+    <div id="version" style="margin-top:8px"></div>
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+      <input id="freezeNote" placeholder="A note for this version (optional), e.g. what was added" style="flex:1;min-width:260px;padding:7px 10px;border-radius:9px;border:1px solid var(--border2);background:var(--panel);color:var(--text);font:inherit">
+      <button id="freeze">Freeze this version</button>
+    </div>
+    <div id="releases" class="scroll"></div>
+    <div id="checks" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
     <div class="big">Score the automatic count</div>
     <div class="muted">Each clip needs an automatic count of the same cameras over the same period (the footage without RetailNext's marks, counted automatically in the wizard). Its recorded detections are replayed with today's settings, so a score shows what the tool does now.</div>
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
@@ -128,13 +140,24 @@ function render() {
           `<td><span class="pill ${c.split === "test" ? "test" : ""}">${NAMES[c.split]}</span></td><td>${esc(period(c.period))}</td>` +
           `<td>${c.cameras.map(esc).join("<br>")}</td><td>${c.reviews.map((r) => esc(r.reviewer)).join(", ")}</td>` +
           `<td>${c.crossings}${c.uncertain ? ` <span class="muted">(+${c.uncertain} uncertain)</span>` : ""}</td><td>${two}</td>` +
-          `<td>${c.tags.map((t) => `<span class="pill">${esc(G.tags[t] || t)}</span>`).join("")}${c.notes ? `<div class="muted" style="font-size:12px">${esc(c.notes)}</div>` : ""}</td></tr>`;
+          `<td>${[...["traffic", "lighting", "occlusion"].filter((k) => c.conditions[k]).map((k) => `${k}:${c.conditions[k]}`), ...c.tags]
+            .map((t) => `<span class="pill">${esc(G.labels[t] || t)}</span>`).join("")}${c.notes ? `<div class="muted" style="font-size:12px">${esc(c.notes)}</div>` : ""}</td></tr>`;
       }).join("")
     : `<tr><td class="muted">No gold clip yet. Count a clip by hand in the wizard (Manual), watching every moment, then keep it on the report page.</td></tr>`;
   $("testNote").textContent = `Tune only on the development set: the test set is for a final check, and each use is recorded (so far: ${G.test_scorings}).`;
+  $("version").innerHTML = !G.clips.length ? '<span class="muted">Nothing to freeze yet.</span>'
+    : G.version === "unreleased" ? `<span class="warn">Not frozen as it is now</span> <span class="muted">(contents ${esc(G.content_hash.slice(0, 12))})</span>`
+    : `<span class="ok">The set matches ${esc(G.version)}.</span>`;
+  $("freeze").disabled = !G.clips.length || G.version !== "unreleased";
+  $("releases").innerHTML = G.releases.length
+    ? `<table><tr><th>Version</th><th>Frozen</th><th>Clips</th><th>Crossings</th><th>Note</th></tr>${G.releases.map((r) =>
+        `<tr><td>${esc(r.dataset_version)}</td><td>${esc(when(r.created_at))}</td><td>${r.clips}</td><td>${r.crossings}</td><td class="muted">${esc(r.note || "")}</td></tr>`).join("")}</table>` : "";
+  $("checks").innerHTML = G.checks.length ? `<ul class="limits warn">${G.checks.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>`
+    : G.clips.length ? '<span class="ok">Every clip file checks out.</span>' : "";
+  if (G.shared) $("dataset").textContent = `${G.dataset} · shared: ${G.shared}`;
   $("history").innerHTML = G.experiments.length
-    ? `<tr><th>When</th><th>Set</th><th>Clips</th><th>Crossings</th><th>Recall</th><th>Precision</th><th>Version</th></tr>` +
-      G.experiments.map((e) => `<tr class="pick" data-id="${esc(e.id)}"><td>${esc(when(e.made_at))}</td><td>${esc(e.set)}</td><td>${e.clips}</td><td>${e.crossings}</td>` +
+    ? `<tr><th>When</th><th>Set</th><th>Dataset</th><th>Clips</th><th>Crossings</th><th>Recall</th><th>Precision</th><th>Version</th></tr>` +
+      G.experiments.map((e) => `<tr class="pick" data-id="${esc(e.id)}"><td>${esc(when(e.made_at))}</td><td>${esc(e.set)}</td><td class="muted">${esc(e.dataset_version || "")}</td><td>${e.clips}</td><td>${e.crossings}</td>` +
         `<td>${e.sufficient ? pct(e.recall) : '<span class="muted">sample too small</span>'}</td><td>${e.sufficient ? pct(e.precision) : "–"}</td><td class="muted">${esc(e.app_version)}</td></tr>`).join("")
     : `<tr><td class="muted">None yet.</td></tr>`;
 }
@@ -157,7 +180,7 @@ function showResult(e) {
     const sets = Object.entries(e.by_split || {});
     if (sets.length > 1) html += `<h3>By set</h3><div class="scroll"><table>${HEAD}${sets.map(([k, m]) => row(NAMES[k], m.all)).join("")}</table></div>`;
     const tags = Object.entries(e.by_tag || {});
-    if (tags.length) html += `<h3>By tag</h3><div class="scroll"><table>${HEAD}${tags.map(([k, m]) => row(G.tags[k] || k, m.all)).join("")}</table></div>`;
+    if (tags.length) html += `<h3>By condition and tag</h3><div class="scroll"><table>${HEAD}${tags.map(([k, m]) => row(G.labels[k] || k, m.all)).join("")}</table></div>`;
     html += `<h3>Reviewing it asks for, per hour of one camera's footage (${w.camera_hours} h scored)</h3>
       <div>${w.questions_per_hour ?? "–"} questions · ${w.possible_misses_per_hour ?? "–"} of them possible misses · ${w.watch_minutes_per_hour ?? "–"} minutes of unexplained movement to watch.
       The possible-miss list showed ${w.misses_on_list} of the ${w.misses} crossings the tool missed${w.misses_on_list_pct != null ? ` (${w.misses_on_list_pct}%)` : ""}; ${w.real_misses_per_100_listed ?? "–"} of every 100 it listed were real misses.</div>`;
@@ -166,7 +189,8 @@ function showResult(e) {
       ? `<li>${esc(c.id)}: ${Object.values(c.by_direction).reduce((a, m) => a + m.found, 0)} found, ${Object.values(c.by_direction).reduce((a, m) => a + m.missed, 0)} missed, ${Object.values(c.by_direction).reduce((a, m) => a + m.false, 0)} false <span class="muted">(automatic count ${esc(c.run)})</span></li>`
       : `<li class="muted">${esc(c.id)}: not scored. ${esc(c.reason)}</li>`).join("")}</ul>`;
   const det = (e.detectors || []).map((d) => `${esc(d.model)}${d.sha256 ? ` (${d.sha256.slice(0, 12)})` : ""}`).join(", ");
-  html += `<div class="muted" style="font-size:12px;margin-top:8px">CrossingCount ${esc(e.app_version)} · ${esc(e.dataset)} · detector ${det || "–"} · a tool crossing and a person's are one when at most ${e.settings.tolerance_s} s apart on the same camera · no rate on fewer than ${e.settings.min_sample} crossings.
+  const ds = e.dataset && e.dataset.version ? `${e.dataset.id} ${e.dataset.version}` : e.dataset;
+  html += `<div class="muted" style="font-size:12px;margin-top:8px">CrossingCount ${esc(e.app_version)} · ${esc(ds)} · detector ${det || "–"} · a tool crossing and a person's are one when at most ${e.settings.tolerance_s} s apart on the same camera · no rate on fewer than ${e.settings.min_sample} crossings.
     Found: counted the right way. Recall = found ÷ the person's crossings; miss rate = missed ÷ the person's crossings; precision = found ÷ the tool's crossings. None of these is sensor accuracy.</div>`;
   $("result").innerHTML = html;
 }
@@ -194,6 +218,14 @@ $("history").addEventListener("click", async (e) => {
   if (!tr) return;
   try { showResult(await api(`/api/gold/experiment?id=${encodeURIComponent(tr.dataset.id)}`)); $("result").scrollIntoView({ behavior: "smooth" }); }
   catch (err) { $("status").innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+});
+$("freeze").addEventListener("click", async () => {
+  $("freeze").disabled = true;
+  try {
+    const r = await api("/api/gold/freeze", { note: $("freezeNote").value });
+    $("freezeNote").value = ""; G = await api("/api/gold"); render();
+    $("status").innerHTML = `<span class="ok">Frozen as ${esc(r.dataset_version)}.</span>`;
+  } catch (e) { $("status").innerHTML = `<span class="err">${esc(e.message)}</span>`; render(); }
 });
 (async () => {
   try { G = await api("/api/gold"); render(); } catch (e) { $("status").innerHTML = `<span class="err">${esc(e.message)}</span>`; }

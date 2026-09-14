@@ -29,6 +29,14 @@ which only downloads numbers.
 | – | Benchmark (`bench.py`): what the automatic count finds, on checked clips | built |
 | – | RetailNext API (`retailnext.py`): connect, list locations, fetch traffic | connect and fetch built; reading the answer into the wizard waits for a real answer |
 
+## Documents
+
+- [Production audit](docs/PRODUCTION_AUDIT.md): architecture, strengths, risks, the plan.
+- [Ground Truth Specification v1.0](docs/GROUND_TRUTH_SPECIFICATION.md): what a crossing
+  is, for the people who count.
+- [Dataset specification](docs/DATASET_SPECIFICATION.md): the gold set, its sets and
+  versions.
+
 ## Setup
 
 ```bash
@@ -125,15 +133,26 @@ tool counts only one of them, the others are not asked about separately, and
 their movement is not among the stretches to watch: answer with how many
 crossed (`2`–`5`). On one busy clip, answering `Y` alone halved the count.
 
-**Learning examples.** Set a shared folder on the report step. Every counted
-crossing is then saved there, as the camera's frames from 1.5 s before to
-1 s after it. With the frames goes a description, `meta.json`, with the camera,
-time and direction, the counting line, and who counted. Checks answered "no"
-and random watched moments with nobody crossing are saved the same way, as
-negatives, and `index.jsonl` lists everything. This is the data for measuring
-the automatic counter on your own cameras and, once there is enough, for
-retraining it. The examples are CCTV frames of people, so keep the folder
-inside the company.
+**The team's shared folder.** Set a shared folder on the report step: a
+SharePoint library synced by OneDrive (its "Sync" button), or a network share.
+Everyone's work then lands in one place:
+
+- **Learning examples.** Every counted crossing, as the camera's frames from
+  1.5 s before to 1 s after it, with `meta.json` (camera, time, direction, the
+  counting line, who counted, the store's set). Checks answered "no" and random
+  watched moments with nobody crossing are saved the same way, as negatives;
+  `index.jsonl` lists everything.
+- **The validation's record** (`validations/<store>/<video>.json`): answers,
+  counts by hand, the sensor's numbers, what counted as a person, the decision
+  log. No video.
+- **Gold clips** (`gold/gold_v1/`), which every computer then includes.
+
+Every example names its store's set, and those from test-set stores say
+`train_ok: false`: never train on them, or the test results mean nothing.
+Training is deliberately a step a person starts, never automatic: a new model is
+used only if it scores better on the gold development set. The folder holds CCTV
+frames of people: check your agreements with the retailers allow it, and keep
+it to your team.
 
 Everything is saved as you go, to `runs/<video>/wizard/state.json`. Open the
 same video again to carry on where you left off.
@@ -183,18 +202,24 @@ a count that looked everywhere can answer it. "Every crossing the tool proposed
 was checked" is not that: people the tool never showed are missing from such a
 check. So:
 
-- **Gold clip.** A count by hand in the wizard (Manual) that watched at least
-  99% of every counted camera's footage can be kept on the report page as a
-  gold clip, with tags (busy, heavy crowd, groups, occlusion, low light,
-  people stopping or coming back, ...) and notes. It is saved in
-  `gold/gold_v1/` in the data folder with the store, cameras, period, counted
-  traffic, direction convention, every crossing (camera, time, clock,
-  direction), who counted and when. Models never write to it.
-- **Sets by store, fixed.** The first time a store's clip is kept, the store
-  goes to the next of test, validation, train, train (`gold/gold_v1/splits.json`)
-  and never moves, so no store's footage is on both sides. Tune on the
-  development set (train and validation); the test set is for a final check,
-  scored only on request and every use recorded.
+- **Gold clip.** A count by hand in the wizard (Manual), on clean footage, that
+  watched at least 99% of every counted camera's footage can be kept on the
+  report page as a gold clip, with its lighting, how often people were hidden,
+  tags (groups, people stopping or coming back, ...) and notes; its traffic
+  level is worked out from the count. It is saved in `gold/gold_v1/` with the
+  store, cameras, period, video facts, what counted as a person, the Ground
+  Truth Specification version, every crossing (camera, time, clock, direction),
+  who counted and when. Models never write to it. See
+  [docs/DATASET_SPECIFICATION.md](docs/DATASET_SPECIFICATION.md).
+- **Sets by store, fixed.** A store's set comes from its code (about one store in
+  five goes to test, one in five to validation, the rest to train), the same on
+  every computer and for good, so no store's footage is on both sides. Tune on
+  the development set (train and validation); the test set is for a final
+  check, scored only on request, against a frozen version, and every use is
+  recorded.
+- **Versions.** "Freeze this version" on the gold page writes a manifest that
+  lists every clip with its checksum and keeps the clips themselves; it is never
+  rewritten. Every score names the version it used.
 - **A second person.** "Count it again as someone else" starts a blind second
   count of the same footage (the first is kept). The two are matched like the
   tool's crossings; what both counted is the clip's truth, and the moments
@@ -289,9 +314,12 @@ its stores, and the last brand is remembered), the store, the day, the length
 the traffic you validate and how you will count. It asks RetailNext for that
 day's 15-minute traffic over opening hours and shows the busiest windows for
 that traffic (most out for an out validation, most in for an in one), on
-RetailNext's own 15-minute boundaries so the comparison is exact. Pick one and
-it exports every camera of the store for that window, clean for an automatic
-count and with RetailNext's marks for a count by hand, downloads it next to
+RetailNext's own 15-minute boundaries so the comparison is exact. The windows
+are shown by rank only: RetailNext's numbers stay hidden until the count is
+done, so they cannot sway it. Pick one and it exports every camera of the store
+for that window without RetailNext's marks (the sensor's own tracks on the
+picture can sway a count by hand too; "by hand on RetailNext's marked footage"
+is still there for a quick look, but never makes a gold clip), downloads it next to
 your other footage (named like RetailNext's own exports, never over another
 file), and opens it with those choices made. Exports are jobs on your
 RetailNext account, which it deletes after 7 days. The key goes only to

@@ -270,8 +270,11 @@ def create_app(video: str | Path, sites_dir: str | Path = "sites",
                setup: Setup | None = None) -> FastAPI:
     """The setup page for one video. Its URLs are relative, so it also works mounted
     under a prefix (the count wizard shows it at /draw/<id>/)."""
+    from .localweb import local_only
+
     s = setup or Setup(Path(video), Path(sites_dir))
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    local_only(app)
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
