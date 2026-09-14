@@ -21,7 +21,7 @@ from pathlib import Path
 
 import uvicorn
 
-from crossing_count import paths
+from crossing_count import paths, window
 from crossing_count.app import PORT, serving
 from crossing_count.wizard_app import create_wizard_app
 
@@ -41,22 +41,32 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--logo", type=Path, help="logo image for the report (default assets/logo.*)")
     ap.add_argument("--sites", type=Path, help="camera drawings folder (default sites/)")
     ap.add_argument("--runs-root", type=Path, help="folder holding runs/ (default: the data folder)")
-    ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--browser", action="store_true",
+                    help="open it in the browser instead of its own window")
+    ap.add_argument("--no-browser", action="store_true",
+                    help="only the server: no window and no browser tab")
     args = ap.parse_args(argv)
     paths.prepare_data_root()
     url = f"http://127.0.0.1:{args.port}/"
-    if serving(args.port):  # opened again while it runs: show the page instead of failing
+    show = "none" if args.no_browser else "browser" if args.browser else "window"
+    if show == "window" and not window.available():
+        show = "browser"
+    if serving(args.port):  # opened again while it runs: show it instead of failing
         print(f"Crossing Count is already running at {url}", flush=True)
-        if not args.no_browser:
+        if show == "window":
+            return window.show(url)
+        if show == "browser":
             webbrowser.open(url)
         return 0
     print(f"Crossing Count is running at {url}\n"
           f"Your data: {paths.data_root()}\n"
-          f"Quit on the page, or close this window, to stop it.", flush=True)
+          f"Quit on the page, or close its window, to stop it.", flush=True)
     app = create_wizard_app(args.sites or paths.sites_dir(), args.runs_root or paths.data_root(),
                             logo=args.logo or paths.logo_path())
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning"))
-    if not args.no_browser:
+    if show == "window":
+        return window.run(server, url)
+    if show == "browser":
         threading.Thread(target=_open_when_up, args=(server, url), daemon=True).start()
     server.run()
     return 0

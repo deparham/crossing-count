@@ -40,9 +40,10 @@ uv sync
 ## Opening and closing it (no terminal needed)
 
 On the Mac, double-click **CrossingCount** in your Applications folder (drag it
-to the Dock for one click). It starts the app if needed and opens it in your
-browser; opened again while it runs, it just shows the page. **Quit** at the
-top of the page closes it, and everything is saved as you go. On a Mac without
+to the Dock for one click). It opens in its own window, not a browser tab
+(`uv run wizard.py --browser` gives the old browser tab). Closing the window,
+or **Quit** at the top of the page, closes it, and everything is saved as you
+go. On a Mac without
 this project, install the Mac app (below). On this one,
 `packaging/mac/build_launcher.sh` builds a launcher that runs this folder. RetailNext
 brands are connected and removed on the first page too: type the brand, and
@@ -306,8 +307,9 @@ overlay; using that to fetch clean footage is a possible next step.
 ## Windows app
 
 The app installs on Windows as a normal program, with a Start-menu and a
-desktop shortcut, and needs no Python. It opens the count wizard in the browser
-and keeps a small window open while it runs; closing that window quits it.
+desktop shortcut, and needs no Python. It opens the count wizard in its own
+window (shown by Edge WebView2, part of Windows 10 and 11); closing the window
+quits it.
 
 GitHub's Windows machines build the installer, with
 `.github/workflows/windows-installer.yml`:
@@ -353,9 +355,9 @@ self-test, then `CrossingCount-<version>.dmg` under the run's **Artifacts**.
    refuses to open it. Open **System Settings → Privacy & Security**, scroll to
    the message about CrossingCount and press **Open Anyway**. After that it opens
    normally.
-3. Double-click it: the count wizard opens in your browser. It has no window or
-   Dock icon of its own; **Quit** on the page closes it, and opening the app
-   again while it runs brings the page back.
+3. Double-click it: the count wizard opens in its own window, with its icon in
+   the Dock. The Gold set and head-marking pages open in windows of their own.
+   Closing the window (or **Quit** on the page, or ⌘Q) closes the app.
 
 Your drawings, runs, reports and settings live in
 `~/Library/Application Support/CrossingCount` (its log in `logs/wizard.log`
@@ -369,8 +371,9 @@ Every build GitHub makes of `main` is also published as a release of the
 installer; the newest three of each are kept. An installed app knows its own
 build (`build.json`, written in by the build) and, while its page is open,
 checks GitHub every half hour. When a newer build is ready, a banner lists
-what changed, the browser shows a desktop notice (it asks once for
-permission), and **Update** does the rest: the Mac app downloads the new one,
+what changed, a desktop notice appears (from the Mac's Notification Centre;
+in a browser tab, the browser asks once for permission), and **Update** does
+the rest: the Mac app downloads the new one,
 puts it in its own place and starts again; on Windows the new installer runs
 silently (Windows may ask to allow it) and starts the app again. If the Mac
 app sits where it cannot replace itself, the new `.dmg` opens for you to drag.

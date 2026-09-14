@@ -37,6 +37,5 @@ Name: "{autodesktop}\Crossing Count"; Filename: "{app}\CrossingCount.exe"; Tasks
 
 [Run]
 Filename: "{app}\CrossingCount.exe"; Description: "Start Crossing Count now"; Flags: nowait postinstall skipifsilent
-; An update from the app's own page installs silently: start the app again, and its page
-; (still open in the browser) reloads by itself.
-Filename: "{app}\CrossingCount.exe"; Parameters: "wizard --no-browser"; Flags: nowait runasoriginaluser; Check: WizardSilent
+; An update from the app's own window installs silently: then open the app again.
+Filename: "{app}\CrossingCount.exe"; Flags: nowait runasoriginaluser; Check: WizardSilent

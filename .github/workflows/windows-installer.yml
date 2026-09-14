@@ -60,7 +60,13 @@ jobs:
         run: uv run pyinstaller packaging/crossing_count.spec --noconfirm --distpath dist --workpath build
 
       - name: Self-test the bundle
-        run: dist\CrossingCount\CrossingCount.exe --self-test
+        shell: pwsh
+        run: |
+          # a windowed program: wait for it, and read what it wrote to its log
+          $env:CROSSING_COUNT_HOME = "$env:RUNNER_TEMP\cc-home"
+          $p = Start-Process -FilePath dist\CrossingCount\CrossingCount.exe -ArgumentList "--self-test" -Wait -PassThru
+          Get-Content "$env:CROSSING_COUNT_HOME\logs\app.log" -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "self-test failed (exit $($p.ExitCode))" }
 
       - name: Installer with Inno Setup
         shell: pwsh

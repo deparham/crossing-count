@@ -293,14 +293,11 @@ def install(file: Path) -> Callable[[], None] | None:
             _run(["/usr/bin/open", str(file)], check=False)
             return None
         install_mac(file, app)
-        exe, log = app / "Contents" / "MacOS" / "CrossingCount", paths.data_root() / "logs" / "wizard.log"
 
-        def start_mac() -> None:
-            log.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.Popen(["/bin/sh", "-c", 'sleep 2; exec "$0" wizard --no-browser >>"$1" 2>&1',
-                              str(exe), str(log)], stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             start_new_session=True)
+        def start_mac() -> None:  # once this one has closed, the new app opens its window
+            subprocess.Popen(["/bin/sh", "-c", 'sleep 2; exec /usr/bin/open -n "$0"', str(app)],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
         return start_mac
 
     args = installer_args(file, Path(sys.executable).resolve().parent,

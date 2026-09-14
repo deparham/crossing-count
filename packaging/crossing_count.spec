@@ -16,13 +16,16 @@ SCRIPTS = ["gate", "detect", "count", "review", "export", "setup_ui", "proposed"
 # keyring finds the credential store (Credential Manager, Keychain) through its
 # package metadata, so that goes in too.
 datas = (collect_data_files("crossing_count") + collect_data_files("ultralytics")
-         + copy_metadata("keyring") + collect_data_files("tzdata"))  # tzdata: time zones on Windows
+         + copy_metadata("keyring") + collect_data_files("tzdata")  # tzdata: time zones on Windows
+         + collect_data_files("webview"))  # the app's own window (pywebview)
 for folder in ("models", "assets", "sites"):
     if (ROOT / folder).is_dir():
         datas.append((str(ROOT / folder), folder))
 
 hiddenimports = (SCRIPTS + collect_submodules("uvicorn") + collect_submodules("crossing_count")
-                 + collect_submodules("keyring"))
+                 + collect_submodules("keyring")
+                 + (["webview.platforms.cocoa"] if sys.platform == "darwin"
+                    else ["webview.platforms.winforms", "webview.platforms.edgechromium"]))
 
 a = Analysis(
     [str(ROOT / "packaging" / "launcher.py")],
@@ -44,9 +47,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="CrossingCount",
-    # Windows: a small window that says the app is running; closing it quits.
-    # Mac: an app without one, closed with Quit on its page.
-    console=not MAC,
+    console=False,  # the app is its own window (the count wizard); closing it quits
     icon=ICON if MAC else None,
 )
 coll = COLLECT(exe, a.binaries, a.datas, name="CrossingCount")

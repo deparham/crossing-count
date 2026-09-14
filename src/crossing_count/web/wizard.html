@@ -541,12 +541,21 @@ async function checkUpdate() {  // a newer version: on GitHub, or on this comput
                                              : `${u.behind} change${u.behind > 1 ? "s" : ""} on GitHub.`)
       + (u.changes.length ? `<ul>${u.changes.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : "");
   }
-  if (newer && stored("updTold") !== updId(u) && "Notification" in window && Notification.permission === "granted") {
+  const inApp = window.pywebview && window.pywebview.api;  // CrossingCount's own window
+  if (newer && stored("updTold") !== updId(u) && (inApp || ("Notification" in window && Notification.permission === "granted"))) {
     stored("updTold", updId(u));  // one desktop notice per new version
-    const n = new Notification("CrossingCount: a new version is ready", { body: u.changes[0] || "Open CrossingCount to update it.", tag: "crossingcount-update" });
-    n.onclick = () => { window.focus(); n.close(); };
+    const title = "CrossingCount: a new version is ready", body = u.changes[0] || "Open CrossingCount to update it.";
+    if (inApp) window.pywebview.api.notify(title, body);
+    else { const n = new Notification(title, { body, tag: "crossingcount-update" }); n.onclick = () => { window.focus(); n.close(); }; }
   }
 }
+window.addEventListener("pywebviewready", checkUpdate);  // in the app's window, once it can send notices
+document.addEventListener("click", (e) => {  // in the app's window, its other pages open in windows of their own
+  const a = e.target.closest('a[target="_blank"]'), href = a ? a.getAttribute("href") || "" : "";
+  if (!a || !window.pywebview || !window.pywebview.api || !href.startsWith("/")) return;
+  e.preventDefault();
+  window.pywebview.api.open(href);
+});
 document.addEventListener("click", () => {  // desktop notices need the browser's permission: asked once
   if (stored("notifyAsked") || !("Notification" in window) || Notification.permission !== "default") return;
   stored("notifyAsked", "1");

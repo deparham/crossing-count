@@ -112,10 +112,12 @@ def _uv() -> str | None:
 
 
 def restart(argv: list[str] | None = None) -> None:
-    """Start the app again on the new version, in this same process (the page reloads
-    itself, so no new browser tab)."""
+    """Start the app again on the new version, in this same process: its window comes back
+    (in the browser, the page reloads itself, so no second tab is opened)."""
     argv = list(sys.argv if argv is None else argv)
-    args = [a for a in argv[1:] if a != "--no-browser"] + ["--no-browser"]
+    args = argv[1:]
+    if "--browser" in args and "--no-browser" not in args:
+        args.append("--no-browser")
     script = str(paths.SOURCE_ROOT / "wizard.py")
     uv = _uv()
     if uv:

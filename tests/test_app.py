@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import sys
 from pathlib import Path
 
 import pytest
 
-from crossing_count import app, paths
+from crossing_count import app, paths, updates, window
 from crossing_count import wizard as wz
 
 
@@ -64,3 +65,29 @@ def test_opening_it_again_finds_the_one_already_running() -> None:
         port = s.getsockname()[1]
         assert app.serving(port)
     assert not app.serving(port)
+
+
+def test_a_restart_brings_the_window_back_and_opens_no_second_tab(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    started: list[list[str]] = []
+
+    class Replaced(Exception):
+        """os.execv does not come back."""
+
+    def fake_execv(exe: str, args: list[str]) -> None:
+        started.append(list(args))
+        raise Replaced
+
+    monkeypatch.setattr(updates, "_uv", lambda: "/uv")
+    monkeypatch.setattr(os, "execv", fake_execv)
+    with pytest.raises(Replaced):
+        updates.restart(["wizard.py", "--port", "8780"])  # its own window: started as it was
+    with pytest.raises(Replaced):
+        updates.restart(["wizard.py", "--browser"])  # the page in the browser reloads itself
+    assert started[0][-2:] == ["--port", "8780"] and "--no-browser" not in started[0]
+    assert started[1][-2:] == ["--browser", "--no-browser"]
+
+
+def test_notices_to_the_mac_are_quoted_safely() -> None:
+    assert window.applescript_text('Build "57"\nis ready \\o/') == '"Build \\"57\\" is ready \\\\o/"'
+    assert window.available()
