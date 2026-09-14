@@ -66,6 +66,25 @@ def _write(shape: Any, text: str, size: float, *, bold: bool = False, color: RGB
         tf.vertical_anchor = anchor
 
 
+def _lines(shape: Any, lines: list[str], size: float, color: RGBColor = NAVY) -> None:
+    """Paragraphs in a text box, the first one bold."""
+    tf = shape.text_frame
+    tf.word_wrap = True
+    for k, line in enumerate(lines):
+        p = tf.paragraphs[0] if k == 0 else tf.add_paragraph()
+        p.space_after = Pt(3)
+        run = p.add_run()
+        run.text = line
+        run.font.size = Pt(size)
+        run.font.bold = k == 0
+        run.font.name = SANS
+        run.font.color.rgb = color
+
+
+def _signed(v: float | None) -> str:
+    return "–" if v is None else f"{v:+.1f}%"
+
+
 def _shadow(shape: Any) -> None:
     effects = etree.SubElement(shape._element.spPr, qn("a:effectLst"))
     shadow = etree.SubElement(effects, qn("a:outerShdw"), blurRad="88900", dist="25400",
@@ -157,8 +176,11 @@ def _cover(slide: Any, data: dict[str, Any]) -> None:
         tag = "" if one else f" {r['key'].upper()}"
         unsure = int(r.get("unsure") or 0)
         span = r.get("accuracy_range")
+        few = complete and r.get("rate") is False  # too few crossings for a percentage
         if not complete:  # footage nobody watched may hold people missing from the count
             accuracy = "INCOMPLETE"
+        elif few:  # the difference in people, in the slot a percentage would take
+            accuracy = f"{int(r['system']) - int(r['verified']):+d}".replace("-", "−")
         elif unsure and span:
             accuracy = (_pct(span[0]) if span[0] == span[1]
                         else f"{_pct(span[0])[:-1]}–{_pct(span[1])}")
@@ -167,7 +189,7 @@ def _cover(slide: Any, data: dict[str, Any]) -> None:
         verified = f"{r['verified']}–{r['verified'] + unsure}" if unsure else str(r["verified"])
         cards = ((f"{kind}{tag or ' COUNT'}", verified),
                  (f"SYSTEM{tag or ' COUNT'}", str(r["system"])),
-                 (f"SENSOR ACCURACY{tag}", accuracy))  # RetailNext against the verified count
+                 (f"DIFFERENCE{tag}" if few else f"SENSOR ACCURACY{tag}", accuracy))
         for j, (label, value) in enumerate(cards):
             left, hi = 0.53 + j * 2.47, j == 2
             _panel(slide, left, top, 2.24, card_h, TEAL if hi else CARD_BG, shadow=True)
@@ -186,6 +208,14 @@ def _cover(slide: Any, data: dict[str, Any]) -> None:
         _write(note, "Validation incomplete: " + " ".join(data.get("incomplete", []))
                + " No accuracy is given.", 10, bold=True, color=WARN_TEXT)
         top += 0.5
+    # what the number describes (how the footage was sampled), and the error at each traffic
+    # level: next to the headline number, never behind it
+    said = [t for t in (data.get("scope"), *(data.get("sample_notes") or []),
+                        (data.get("levels") or {}).get("text")) if t]
+    if said:
+        height = 0.08 + 0.18 * sum(1 + len(t) // 95 for t in said)
+        _lines(_box(slide, 0.53, top - 0.04, 7.2, height), said, 10)
+        top += height + 0.12
 
     _write(_box(slide, 0.5, top, 7.27, 0.3),
            str(data.get("frames_title", "VALIDATION FRAMES — AUTOMATED DETECTION OVERLAY")),
@@ -349,6 +379,21 @@ def _breakdown(new_page: Any, data: dict[str, Any]) -> None:
                         _diff((it.get("accuracy") or {}).get(d["key"]))]
             out.append(row)
         return out
+
+    if levels := (data.get("levels") or {}).get("rows") or []:
+        room(0.95 + 0.26 * len(levels))
+        _write(_box(slide, 0.62, top, 7.1, 0.3), "Error by traffic level", 13, bold=True)
+        top = _grid(slide, ["Traffic level", "Intervals", "Verified", "System", "Error", "Bias",
+                            "WAPE"],
+                    [[str(r["level"]), str(r["intervals"]), str(r["truth"]), str(r["system"]),
+                      f"{int(r['error']):+d}", _signed(r.get("bias_pct")), _pct(r.get("wape_pct"))]
+                     for r in levels], top + 0.35, [1.8, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9])
+        box = _box(slide, 0.53, top + 0.06, 7.2, 0.4)
+        box.text_frame.word_wrap = True
+        _write(box, "Each 15-minute interval is placed by its own verified crossings per "
+               "camera-hour: quiet under 40, normal under 120, busy under 240, heavy from 240.",
+               9, color=GREY)
+        top += 0.55
 
     if ivs:
         if any(it.get("sensor") for it in ivs):

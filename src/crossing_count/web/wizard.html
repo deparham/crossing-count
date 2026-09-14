@@ -193,13 +193,14 @@
 <section id="s-footage">
   <div class="card" id="rnCard" hidden>
     <div class="big">Get footage from RetailNext</div>
-    <div class="muted">Pick the store and the day: the tool finds the busiest stretch for the traffic you validate, then downloads it without RetailNext's own marks. RetailNext's numbers stay hidden until the count is done, so nothing of the sensor's can sway it.</div>
+    <div class="muted">Pick the store and the day. By default the tool finds the busiest stretches for the traffic you validate (peak trading, where sensors fail) and a control window of lower traffic drawn at random, so the results can tell crowding apart from a sensor that is simply off. Every report says which kind of window it measured. Footage comes without RetailNext's own marks, and RetailNext's numbers stay hidden until the count is done, so nothing of the sensor's can sway it.</div>
     <div class="grid2" style="margin-top:10px">
       <label>Brand <input id="rnSub" list="rnSubs" placeholder="e.g. rag, from rag.cloud.retailnext.net" autocomplete="off" spellcheck="false"></label>
       <label>Store <input id="rnStore" list="rnStores" placeholder="type the code or the name" autocomplete="off"></label>
       <label>Day <input type="date" id="rnDay"></label>
       <label>Length <select id="rnMinutes"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">1 hour</option></select></label>
       <label>Traffic <select id="rnDir"><option value="out">Out</option><option value="in">In</option><option value="both">In and out</option></select></label>
+      <label>Windows <select id="rnSampling"><option value="peak">Peak trading, with a control window</option><option value="stratified">One from each traffic level</option><option value="random">At random in trading hours</option></select></label>
       <label>Count <select id="rnMode"><option value="auto">Automatic</option><option value="manual">By hand</option><option value="marked">By hand on RetailNext's marked footage (a quick look only)</option></select></label>
     </div>
     <datalist id="rnStores"></datalist>
@@ -214,7 +215,7 @@
       <button id="rnConnect" style="margin-top:8px">Connect</button>
       <span class="muted">Kept in this computer's Keychain (Credential Manager on Windows), never in a file.</span>
     </div>
-    <button id="rnFind" class="primary" style="margin-top:10px">Find the busiest time</button>
+    <button id="rnFind" class="primary" style="margin-top:10px">Find the windows</button>
     <div id="rnWindows"></div>
   </div>
   <div class="card">
@@ -692,20 +693,26 @@ async function rnConnect() {
 $("rnConnect").addEventListener("click", rnConnect);
 $("rnSecret").addEventListener("keydown", (e) => { if (e.key === "Enter") rnConnect(); });
 const rnCode = (code) => (code.includes("/") ? code : `${rnSubName($("rnSub").value)}/${code}`);  // in the chosen brand
+const RN_MODE = { peak: "the busiest windows and a control window of lower traffic", stratified: "a window from each traffic level", random: "windows drawn at random from the trading hours" };
+const rnRole = (w) => (w.role === "peak" ? (w.rank > 1 ? `${w.rank}${["st", "nd", "rd"][w.rank - 1] || "th"} busiest` : "busiest")
+  : w.role === "control" ? "control window, drawn at random" : w.role === "stratum" ? "drawn at random from its level" : "drawn at random");
 $("rnFind").addEventListener("click", async () => {
   if (!W.rnSubs.includes(rnSubName($("rnSub").value))) { msg("Choose a connected brand first (or connect it with its API key).", "warn"); return; }
   const typed = $("rnStore").value.trim();
-  const pick = { code: typed && rnCode(typed), date: $("rnDay").value, minutes: +$("rnMinutes").value, direction: $("rnDir").value };
+  const pick = { code: typed && rnCode(typed), date: $("rnDay").value, minutes: +$("rnMinutes").value, direction: $("rnDir").value, mode: $("rnSampling").value };
   if (!typed || !pick.date) { msg("Pick the store and the day.", "warn"); return; }
   $("rnWindows").innerHTML = '<div class="muted" style="margin-top:8px">Asking RetailNext…</div>';
   try {
     const r = await api("/api/retailnext/busiest", pick);
     W.rnPick = { ...pick, windows: r.windows };
+    const s = r.sampling || {};
+    // windows are shown by their role and traffic level only: RetailNext's numbers stay hidden
     $("rnWindows").innerHTML = !r.windows.length ? '<div class="muted" style="margin-top:8px">RetailNext has no traffic for that day.</div>'
-      : `<div class="muted" style="margin-top:8px">${esc(r.store)} (${esc(r.subscription)}): the busiest ${pick.minutes} minutes for ${RN_DIR[pick.direction]} on ${esc(pick.date)}</div>` +
-        r.windows.map((w, i) => `<div style="display:flex;gap:12px;align-items:center;margin-top:6px"><b>${esc(w.start)}–${esc(w.until)}</b>` +
-          `<span class="muted">${i ? `${i + 1}${["st", "nd", "rd"][i] || "th"} busiest` : "busiest"}${w.validity !== "complete" ? ` <span class="warn">(RetailNext: ${esc(w.validity)})</span>` : ""}</span>` +
-          `<button data-win="${i}">${i ? "Download" : "Download the busiest"}</button></div>`).join("");
+      : `<div class="muted" style="margin-top:8px">${esc(r.store)} (${esc(r.subscription)}): ${RN_MODE[pick.mode]} of ${pick.minutes} minutes for ${RN_DIR[pick.direction]} on ${esc(pick.date)}. ${r.considered} windows considered; random draws use seed ${esc(s.seed)}, kept with the validation.</div>` +
+        r.windows.map((w, i) => `<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:6px"><b>${esc(w.start)}–${esc(w.until)}</b>` +
+          `<span class="muted">${rnRole(w)} · ${esc(w.level)} traffic${w.validity !== "complete" ? ` <span class="warn">(RetailNext: ${esc(w.validity)})</span>` : ""}</span>` +
+          `<button data-win="${i}">Download</button></div>`).join("") +
+        (s.notes || []).map((n) => `<div class="warn" style="margin-top:6px">${esc(n)}</div>`).join("");
   } catch (e) { $("rnWindows").innerHTML = ""; msg(e.message, "err"); }
 });
 $("rnWindows").addEventListener("click", async (e) => {
@@ -1346,8 +1353,9 @@ ENTER.report = async () => {
   $("storeName").value = st.name; $("storeCode").value = st.code; $("storeLoc").value = st.location;
   $("repDate").value = st.report_date || new Date().toLocaleDateString("en-GB"); $("operator").value = st.operator || "";
   $("numbers").innerHTML = `<div class="nums">${s.dirs.map((d) => {
-    const acc = c.accuracy[d], span = c.accuracy_range[d], u = c.unsure[d];
+    const acc = c.accuracy[d], span = c.accuracy_range[d], u = c.unsure[d], q = c.quote[d];
     const accText = c.status !== "complete" ? "no sensor accuracy (incomplete)"
+      : q && q.system != null && !q.rate ? `${q.words} <span class="muted">(${q.truth} verified: too few for a percentage)</span>`
       : u && span ? `sensor accuracy ${span[0] === span[1] ? span[0] : span[0] + "–" + span[1]}%`
       : `sensor accuracy ${acc.accuracy_pct == null ? "–" : acc.accuracy_pct + "%"}`;
     return `<div>${LABEL[d]}<b>${c.verified[d]}${u ? "–" + (c.verified[d] + u) : ""} ${manual ? "counted" : "verified"}</b>RetailNext ${s.sensor[d]} · ${accText}</div>`;

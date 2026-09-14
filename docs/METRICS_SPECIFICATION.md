@@ -84,6 +84,24 @@ said 0). With crossings answered "unsure", the card gives the range over every w
 could go. When the validation is incomplete, no figure is given ("INCOMPLETE"). It is not
 the automatic counter's accuracy and not a precision or recall.
 
+**Minimum sample** (`validation.quote`, `MIN_VERIFIED_FOR_PCT` = 30). On fewer than 30
+verified crossings no percentage is printed anywhere (the card, the per-interval and
+per-camera rows, the traffic levels, the Sensor results page): one crossing would move it
+by more than three points. The same slot gives the counts and the signed difference
+instead: "verified 11, RetailNext counted 9: an undercount of 2" (card: DIFFERENCE −2).
+On 30 or more, a single window's percentage is printed with its sample size and the note
+that one window gives no range. Tests: `tests/test_engagement.py`.
+
+## 3a. Engagements
+
+Several finalised windows of one store and one system, put together (`engagement.py`, the
+runs page): the route to a quotable figure. Measures as in section 2 over all their
+intervals, a percentage only on 30 or more verified crossings, and a 95% range for the bias
+from resampling whole windows once there are at least 5 (section 4). Incomplete windows,
+windows counted on marked footage, changed ones and ones replaced by a newer version also
+chosen are listed, not used. A kept engagement is read-only and names the manifests (with
+their SHA-256) it was made from.
+
 ## 4. Uncertainty
 
 - **Crossing-level rates**: Wilson score intervals (95%, z = 1.96), sound for small samples
@@ -98,8 +116,22 @@ the automatic counter's accuracy and not a precision or recall.
 
 ## 5. Traffic levels
 
-Crossings per camera-hour: quiet below 40, normal below 120, busy below 240, heavy from
-240. Provisional thresholds, stored with every result that uses them.
+Crossings per camera-hour (the directions validated, together): quiet below 40, normal below
+120, busy below 240, heavy from 240. Provisional thresholds, stored with every result that
+uses them.
+
+- **Error by traffic level** (`validation.by_level`, `validation.level_sentence`) is a
+  headline output: on the report's first page, and at the top of the Sensor results page.
+  Each whole interval is placed by its own verified crossings per camera-hour, and the
+  measures of section 2 are given per level. A system's error in a crowd is not its error in
+  a quiet hour; comparing the levels separates crowding from a system that is off everywhere.
+- **At selection** (docs/GROUND_TRUTH_SPECIFICATION.md, section 9) a window's level comes
+  from the system's own counts, the only numbers known before counting. A system that
+  undercounts a crowd can make a busy window look normal: the result's own level is always
+  the verified one (`traffic` in each result).
+- Summaries count validations by how their window was sampled (peak, control, stratified,
+  random, chosen by hand), say so in the headline, and name stores with peak windows but no
+  control window.
 
 ## 6. What every result records
 

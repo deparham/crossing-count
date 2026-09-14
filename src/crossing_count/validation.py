@@ -34,6 +34,7 @@ from typing import Any
 
 ENGINE = "count-validation/1.0"
 MIN_TRUTH_FOR_PCT = 10  # an interval with fewer verified crossings gives no percentage error
+MIN_VERIFIED_FOR_PCT = 30  # fewer: the counts and the difference are said, no percentage (quote)
 MIN_CLUSTERS = 5
 BOOTSTRAP_N = 2000
 SEED = 20260914  # fixed: the same data always gives the same range
@@ -54,6 +55,26 @@ def traffic_level(per_camera_hour: float) -> str:
 
 def _pct(x: float, of: float) -> float | None:
     return round(100.0 * x / of, 1) if of else None
+
+
+def quote(truth: int, system: int | None) -> dict[str, Any]:
+    """What may be said of one comparison. A percentage only on MIN_VERIFIED_FOR_PCT or more
+    verified crossings: on fewer, one crossing moves it by more than three points and the
+    figure says more about the sample than about the system. Otherwise the counts and the
+    signed difference, in words: "verified 11, the system counted 9: an undercount of 2"."""
+    if system is None:
+        return {"truth": truth, "system": None, "error": None, "rate": False,
+                "words": "no number from the system", "reason": None}
+    err = int(system) - int(truth)
+    words = (f"an undercount of {-err}" if err < 0 else f"an overcount of {err}" if err > 0
+             else "no difference")
+    rate = truth >= MIN_VERIFIED_FOR_PCT
+    reason = None if rate else (
+        f"{truth} verified crossing{'s' if truth != 1 else ''}: fewer than "
+        f"{MIN_VERIFIED_FOR_PCT} are too few for a percentage"
+        + (f" (one crossing moves it by {100 / truth:.0f} points)" if truth else ""))
+    return {"truth": truth, "system": int(system), "error": err, "rate": rate, "words": words,
+            "reason": reason}
 
 
 def metrics(rows: Sequence[Row]) -> dict[str, Any]:
@@ -120,11 +141,67 @@ def bootstrap(clusters: Sequence[Sequence[Row]], stat: Callable[[list[Row]], flo
             round(values[int(0.975 * (len(values) - 1))], 1)]
 
 
+def row_level(r: Row) -> str | None:
+    """An interval's traffic level, from its own verified crossings per camera-hour."""
+    hours = float(r.get("covered_s") or 0) / 3600 * max(1, int(r.get("cameras") or 1))
+    return traffic_level(int(r["truth"]) / hours) if hours else None
+
+
+def by_level(rows: Sequence[Row]) -> dict[str, dict[str, Any]]:
+    """Measures per traffic level, each interval (the directions validated, together) placed
+    by its own verified crossings per camera-hour. A system's error in a crowd is not its
+    error in a quiet hour: this is where the difference shows, and what tells crowding apart
+    from a system that is simply off."""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for r in select(rows, TOTAL):
+        if (lv := row_level(r)) is not None:
+            groups.setdefault(lv, []).append(r)
+    order = list(TRAFFIC_NAMES)
+    return {TRAFFIC_NAMES[k]: {**metrics(rs), "validations": len({r.get("validation") for r in rs})}
+            for k, rs in sorted(groups.items(), key=lambda kv: order.index(kv[0]))}
+
+
+def level_sentence(levels: Mapping[str, Mapping[str, Any]], system: str) -> str | None:
+    """The error at each traffic level, in words: "At busy traffic (4 intervals, 380 verified
+    crossings) RetailNext counted 6.0% too few; at normal traffic (...) 0.5% too many."."""
+    parts = []
+    for name, m in levels.items():
+        bias = m.get("bias_pct")
+        if bias is None:
+            continue
+        n, err = int(m["intervals"]), int(m["error"])
+        if int(m["truth"]) < MIN_VERIFIED_FOR_PCT:  # too few for a percentage: the difference
+            way = (f"{-err} fewer" if err < 0 else f"{err} more" if err > 0 else "exactly as many")
+            way += " (too few crossings for a percentage)" if err else ""
+        else:
+            way = (f"{abs(bias):.1f}% too many" if bias > 0 else f"{abs(bias):.1f}% too few"
+                   if bias < 0 else "exactly as many")
+        parts.append(f"at {name.lower()} ({n} interval{'s' if n != 1 else ''}, {m['truth']} "
+                     f"verified crossings) {system} counted {way}")
+    if not parts:
+        return None
+    text = "; ".join(parts) + "."
+    return text[0].upper() + text[1:]
+
+
+ROLE_WORDS = {"peak": ("peak window", "peak windows"),
+              "control": ("control window", "control windows"),
+              "stratum": ("window drawn from a traffic level", "windows drawn from traffic levels"),
+              "random": ("random window", "random windows"),
+              "chosen by hand": ("window chosen by hand", "windows chosen by hand")}
+
+
+def _role(v: Mapping[str, Any]) -> str:
+    return str((v.get("sampling") or {}).get("role") or "chosen by hand")
+
+
 def summary(validations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Validations of one system together: measures per direction with 95% ranges (by
-    validation and by store), and broken down by store and by traffic level.
+    validation and by store), broken down by traffic level, by store, and how the windows
+    were sampled.
 
-    Each validation: {"id", "store", "camera_hours", "rows": [...]}.
+    Each validation: {"id", "store", "camera_hours", "rows": [...], "sampling": its
+    sampling.brief() or None (chosen by hand)}.
     """
     rows = [{**r, "validation": v["id"]} for v in validations for r in v["rows"]]
     per_val = [[{**r, "validation": v["id"]} for r in v["rows"]] for v in validations]
@@ -139,24 +216,42 @@ def summary(validations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         m["ranges"] = {key: {"by_validation": bootstrap(per_val, stat_for(key)),
                              "by_store": bootstrap(list(per_store.values()), stat_for(key))}
                        for key in ("bias_pct", "wape_pct")}
-    by_traffic: dict[str, list[dict[str, Any]]] = {}
-    for r in select(rows, TOTAL):
-        hours = float(r.get("covered_s") or 0) / 3600 * max(1, int(r.get("cameras") or 1))
-        if hours:
-            by_traffic.setdefault(traffic_level(int(r["truth"]) / hours), []).append(r)
+    roles: dict[str, int] = {}
+    for v in validations:
+        roles[_role(v)] = roles.get(_role(v), 0) + 1
+    peak = {str(v["store"]) for v in validations if _role(v) == "peak"}
+    control = {str(v["store"]) for v in validations if _role(v) == "control"}
     return {
         "engine": ENGINE,
-        "settings": {"min_truth_for_pct": MIN_TRUTH_FOR_PCT, "min_clusters": MIN_CLUSTERS,
+        "settings": {"min_truth_for_pct": MIN_TRUTH_FOR_PCT,
+                     "min_verified_for_pct": MIN_VERIFIED_FOR_PCT, "min_clusters": MIN_CLUSTERS,
                      "bootstrap": BOOTSTRAP_N, "seed": SEED,
                      "traffic_thresholds": [limit for limit, _ in TRAFFIC]},
         "validations": len(validations), "stores": len(per_store),
         "camera_hours": round(sum(float(v.get("camera_hours") or 0) for v in validations), 2),
         "crossings": sum(int(r["truth"]) for r in rows),
         "by_direction": main,
+        "by_traffic": by_level(rows),
         "by_store": {s: by_direction(rs) for s, rs in sorted(per_store.items())},
-        "by_traffic": {TRAFFIC_NAMES[k]: metrics(v) for k, v in sorted(
-            by_traffic.items(), key=lambda kv: list(TRAFFIC_NAMES).index(kv[0]))},
+        "by_store_traffic": {s: by_level(rs) for s, rs in sorted(per_store.items())},
+        "scope": roles, "stores_without_control": sorted(peak - control),
     }
+
+
+def scope_text(s: Mapping[str, Any]) -> str:
+    """How the windows put together were sampled, and what that lets the result say."""
+    roles: Mapping[str, int] = s.get("scope") or {}
+    parts = [f"{n} {ROLE_WORDS.get(r, (r, r))[n != 1]}" for r, n in roles.items()]
+    if not parts:
+        return ""
+    text = "Sampled: " + (", ".join(parts[:-1]) + " and " + parts[-1] if len(parts) > 1
+                          else parts[0]) + "."
+    if set(roles) == {"peak"}:
+        text += " Every window was peak trading, so the result describes peak trading."
+    if missing := s.get("stores_without_control"):
+        text += (f" No control window yet at {', '.join(missing)}: whether the error there "
+                 f"comes from crowding cannot be told.")
+    return text
 
 
 def headline(s: Mapping[str, Any], system: str) -> str:
@@ -168,13 +263,18 @@ def headline(s: Mapping[str, Any], system: str) -> str:
     bias = m["bias_pct"]
     if bias is None:
         return f"{scope}, there were no crossings to compare {system}'s count with."
+    sampled = scope_text(s)
+    if int(m["truth"]) < MIN_VERIFIED_FOR_PCT:
+        q = quote(int(m["truth"]), int(m["system"]))
+        return (f"{scope}, {system} counted {m['system']}: {q['words']}. {q['reason']}."
+                + (f" {sampled}" if sampled else ""))
     way = "too many" if bias > 0 else "too few" if bias < 0 else "exactly as many"
     rng = m["ranges"]["bias_pct"]["by_validation"]
     sure = (f" (95% range {rng[0]:+.1f}% to {rng[1]:+.1f}%, resampling whole validations)" if rng
             else f" (no uncertainty range: fewer than {MIN_CLUSTERS} validations)")
     return (f"{scope}, {system} counted {abs(bias):.1f}% {way}{sure}. Its typical interval error "
             f"was {m['mae']} people (MAE), and its over- and undercounts together came to "
-            f"{m['wape_pct']}% of the verified count (WAPE).")
+            f"{m['wape_pct']}% of the verified count (WAPE)." + (f" {sampled}" if sampled else ""))
 
 
 # ---- results kept by validations -----------------------------------------------------------
@@ -231,13 +331,15 @@ def overview(root: Path, shared: Path | None = None, system: str | None = None) 
                  "store_name": (r.get("store") or {}).get("name"), "clock_start": r.get("clock_start"),
                  "cameras": r.get("cameras"), "mode": r.get("mode"), "by": r.get("by"),
                  "where": r.get("where"), "made_at": r.get("made_at"),
-                 "metrics": r.get("metrics")}
+                 "metrics": r.get("metrics"), "sampling": r.get("sampling"),
+                 "traffic": r.get("traffic")}
         why = exclusions(r)
         (left if why else used).append({**brief, "excluded": why})
     vals = [{"id": str(r.get("fingerprint")), "store": (r.get("store") or {}).get("code"),
              "camera_hours": float(r.get("duration_s") or 0) * len(r.get("cameras") or [1]) / 3600,
-             "rows": r["rows"]} for r in mine if not exclusions(r)]
+             "rows": r["rows"], "sampling": r.get("sampling")} for r in mine if not exclusions(r)]
     s = summary(vals) if vals else None
     return {"engine": ENGINE, "systems": systems, "system": chosen, "summary": s,
             "headline": headline(s, str(chosen)) if s else None,
+            "levels": level_sentence(s["by_traffic"], str(chosen)) if s else None,
             "validations": used, "excluded": left, "shared": str(shared) if shared else None}

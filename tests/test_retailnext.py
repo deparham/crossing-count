@@ -361,6 +361,7 @@ def test_the_app_finds_the_busiest_time_and_downloads_it(monkeypatch: pytest.Mon
     found = client.post("/api/retailnext/busiest", json={  # the brand chosen on the page
         "code": "acme/CN-123", "date": "2026-09-12", "minutes": 15, "direction": "out"}).json()
     assert (found["windows"][0]["start"], found["windows"][0]["out"]) == ("11:15", 9)
+    assert (found["sampling"]["mode"], found["considered"]) == ("peak", 3)  # the default: peak
     client.post("/api/retailnext/download", json={"code": "CN-123", "date": "2026-09-12",
                                                   "start": "11:15", "until": "11:30", "marks": True})
     job: dict[str, Any] = {}
@@ -373,6 +374,10 @@ def test_the_app_finds_the_busiest_time_and_downloads_it(monkeypatch: pytest.Mon
     assert Path(job["path"]).name == (
         "Export - CN-123 marked - 2026-09-12-111500 AEST to 2026-09-12-113000 AEST.mp4")
     assert exports == [(["v1", "v2"], True)]  # every camera; RetailNext's marks for a hand count
+    kept = rn.download_info(Path(job["path"]))  # which window of the day it is, and why
+    assert kept is not None and kept["sampling"]["role"] == "peak"
+    assert (kept["sampling"]["window"]["start"], kept["sampling"]["seed"]) == (
+        "11:15", found["sampling"]["seed"])
 
 
 def test_each_camera_is_asked_at_its_own_entrance(server: list[Any]) -> None:

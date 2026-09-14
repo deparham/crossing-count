@@ -52,6 +52,12 @@
     <div class="scroll" style="margin-top:10px"><table id="runs"></table></div>
   </div>
   <div class="card">
+    <div class="big">Put windows together</div>
+    <div class="muted">One short window rarely has enough verified crossings for a percentage (at least 30), and never a range: that needs at least 5 windows. Tick finalised windows of one store, peak and control alike, and they are put together: the difference per direction, the bias with its 95% range where there are enough windows, and the error at each traffic level.</div>
+    <div style="margin-top:10px"><button id="engGo">Put the ticked windows together</button> <button id="engKeep" hidden>Keep this engagement</button></div>
+    <div id="eng"></div>
+  </div>
+  <div class="card">
     <div class="big">Audit log</div>
     <div id="audit" class="muted"></div>
     <div class="scroll" style="margin-top:10px"><table id="recent"></table></div>
@@ -76,8 +82,8 @@ function integrity(r) {
   let G;
   try { G = await api("/api/runs"); } catch (e) { $("audit").innerHTML = `<span class="err">${esc(e.message)}</span>`; return; }
   $("runs").innerHTML = G.runs.length
-    ? `<tr><th>ID</th><th>Store</th><th>Footage from</th><th>Cameras</th><th>System</th><th>Verified / system</th><th>Status</th><th>By</th><th>Finalised</th><th>Files</th><th></th></tr>` +
-      G.runs.map((r) => `<tr><td><code>${esc(r.validation_id)}</code>${r.supersedes ? `<div class="muted" style="font-size:12px">replaces ${esc(r.supersedes)}</div>` : ""}</td>` +
+    ? `<tr><th></th><th>ID</th><th>Store</th><th>Footage from</th><th>Cameras</th><th>System</th><th>Verified / system</th><th>Status</th><th>By</th><th>Finalised</th><th>Files</th><th></th></tr>` +
+      G.runs.map((r) => `<tr><td>${r.problem ? "" : `<input type="checkbox" data-pick="${esc(r.validation_id)}">`}</td><td><code>${esc(r.validation_id)}</code>${r.supersedes ? `<div class="muted" style="font-size:12px">replaces ${esc(r.supersedes)}</div>` : ""}</td>` +
         `<td>${esc(r.store ? `${r.store.code} ${r.store.name || ""}` : "")}</td><td>${esc(when(r.clock_start))}</td><td>${(r.cameras || []).map(esc).join("<br>")}</td>` +
         `<td>${esc(r.system || "")}</td><td>${r.verified ?? "–"} / ${r.system_count ?? "–"}</td><td>${esc(r.status || "")}${r.mode ? ` <span class="muted">(${r.mode === "manual" ? "by hand" : "checked"})</span>` : ""}</td>` +
         `<td>${esc(r.operator || "")}</td><td>${esc(when(r.finalised_at))}</td><td>${integrity(r)}</td><td>${r.problem ? "" : `<button data-open="${esc(r.validation_id)}">Folder</button>`}</td></tr>`).join("")
@@ -96,7 +102,28 @@ function integrity(r) {
     const b = ev.target.closest("[data-open]");
     if (b) { try { await api("/api/runs/reveal", { id: b.dataset.open }); } catch (err) { alert(err.message); } }
   });
+  const picked = () => [...document.querySelectorAll("[data-pick]:checked")].map((x) => x.dataset.pick);
+  const show = async (path) => {
+    try { const e = await api(path, { ids: picked() }); $("eng").innerHTML = engHtml(e); $("engKeep").hidden = !!e.engagement_id; }
+    catch (err) { $("eng").innerHTML = `<div class="err" style="margin-top:10px">${esc(err.message)}</div>`; $("engKeep").hidden = true; }
+  };
+  $("engGo").addEventListener("click", () => show("/api/engagement"));
+  $("engKeep").addEventListener("click", () => show("/api/engagement/keep"));
 })();
+const DIR = { in: "In", out: "Out", total: "In and out together" };
+const ROLE = { peak: "peak", control: "control", stratum: "from a traffic level", random: "at random", "chosen by hand": "chosen by hand" };
+function engHtml(e) {
+  const sign = (v) => `${v > 0 ? "+" : ""}${v}`;
+  const dirs = Object.entries(e.directions).map(([d, q]) => `<tr><td>${DIR[d] || esc(d)}</td><td>${q.truth}</td><td>${q.system}</td><td>${esc(q.words)}</td><td>` +
+    (q.rate ? `${sign(q.bias_pct)}%${q.range ? ` <span class="muted">(95% range ${sign(q.range[0])}% to ${sign(q.range[1])}%)</span>` : ` <span class="muted">(${esc(q.range_note)})</span>`}`
+      : `<span class="muted">${esc(q.reason)}</span>`) + "</td></tr>").join("");
+  const wins = e.windows.map((w) => `<tr><td><code>${esc(w.id)}</code></td><td>${esc(when(w.clock_start))}</td><td>${esc(ROLE[w.role] || w.role)}</td><td>${esc(w.level || "")}</td><td>${w.verified} / ${w.system}</td></tr>`).join("");
+  return (e.engagement_id ? `<div class="ok" style="margin-top:10px">Kept as <code>${esc(e.engagement_id)}</code>, read-only.</div>` : "") +
+    `<div style="margin-top:10px;font-size:15px">${esc(e.headline)}</div>` + (e.levels ? `<div style="margin-top:6px">${esc(e.levels)}</div>` : "") +
+    `<div class="scroll"><table style="margin-top:8px"><tr><th></th><th>Verified</th><th>System</th><th>Difference</th><th>Bias</th></tr>${dirs}</table></div>` +
+    `<div class="scroll"><table style="margin-top:8px"><tr><th>Window</th><th>Footage from</th><th>Sampling</th><th>Traffic (verified)</th><th>Verified / system</th></tr>${wins}</table></div>` +
+    (e.left.length ? `<div class="warn" style="margin-top:8px">Not used: ${e.left.map((x) => `${esc(x.id)} (${x.why.map(esc).join("; ")})`).join(", ")}</div>` : "");
+}
 </script>
 </body>
 </html>

@@ -28,7 +28,7 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from . import __copyright__, auditlog, paths, provenance, runs, sensors, validation
+from . import __copyright__, auditlog, paths, provenance, runs, sampling, sensors, validation
 from . import video as vid
 from .candidates import MISS_KIND
 from .config import bind, load_config
@@ -62,7 +62,7 @@ def prompt_priority(why: str) -> int:
 CLIP_BEFORE_S = 2.5
 CLIP_AFTER_S = 1.5
 MIN_WATCHED_PCT = 99.0  # a hand count that watched less of a camera's footage is incomplete
-GROUND_TRUTH_SPEC = "1.0"  # docs/GROUND_TRUTH_SPECIFICATION.md: what a crossing is
+GROUND_TRUTH_SPEC = "1.1"  # docs/GROUND_TRUTH_SPECIFICATION.md: what a crossing is
 RULE_CHOICES = ("count", "exclude")  # what counts as a person: children, staff (spec section 4)
 MAX_GROUP = 9  # people one answer can count, when a group crosses together
 FOUND = {  # how each verified crossing came to be counted, for the report
@@ -440,7 +440,8 @@ class Wizard:
             self._save()
         for key, value in (("mode", None), ("marks", None), ("examples", None), ("people", {}),
                            ("decisions", []), ("sensor_intervals", {}), ("sensor_cameras", {}),
-                           ("sensor_source", None), ("rules", {"children": "count", "staff": "count"}),
+                           ("sensor_source", None), ("sampling", None),
+                           ("rules", {"children": "count", "staff": "count"}),
                            ("manual", {"counts": [], "watched": {}, "positions": {},
                                        "done": False, "next_id": 1})):
             self.state.setdefault(key, value)
@@ -684,7 +685,10 @@ class Wizard:
             return notes
         full = str(info.get("name") or "")
         with self._lock:
-            self.state["retailnext"] = {**(self.state.get("retailnext") or {}), **info}
+            self.state["retailnext"] = {**(self.state.get("retailnext") or {}),
+                                        **{k: v for k, v in info.items() if k != "sampling"}}
+            if info.get("sampling"):  # which window of the day this is, and why (sampling.py)
+                self.state["sampling"] = info["sampling"]
             store = self.state["store"]
             if store.get("code") != code:
                 if store.get("code"):
@@ -909,7 +913,19 @@ class Wizard:
                 "clock_start": st["clock_start"], "duration_s": st["duration_s"],
                 "dirs": self.dirs(), "unsure": c["unsure"], "rows": comp["rows"],
                 "metrics": comp["metrics"], "operator": st["store"].get("operator"),
+                "sampling": sampling.brief(st.get("sampling")), "traffic": self.traffic(c),
+                "by_level": validation.by_level(comp["rows"]),
             }
+
+    def traffic(self, c: dict[str, Any]) -> dict[str, Any] | None:
+        """How busy the footage was by the verified count, in crossings per camera-hour (the
+        directions validated), and its traffic level (validation.traffic_level)."""
+        hours = float(self.state["duration_s"]) / 3600 * max(1, len(self.state["cameras"]))
+        if not hours:
+            return None
+        rate = sum(int(c["verified"][d]) for d in self.dirs()) / hours
+        return {"per_camera_hour": round(rate, 1), "level": validation.traffic_level(rate),
+                "directions": self.dirs()}
 
     def _breakdown(self) -> dict[str, Any]:
         """The report's page of 15-minute intervals and cameras, from comparison()."""
@@ -932,16 +948,28 @@ class Wizard:
                          f"can differ from RetailNext's even when the total agrees. Compare "
                          f"the combined total.")
         m = (comp["metrics"] or {}).get("total") or next(iter((comp["metrics"] or {}).values()), None)
-        if ivs and m and m["intervals"] > 1 and m["wape_pct"] is not None:
+        few = validation.MIN_VERIFIED_FOR_PCT
+
+        def gate(acc: dict[str, Any] | None) -> dict[str, Any] | None:
+            """A row's difference as a percentage only on enough verified crossings."""
+            return {d: {**a, "error_pct": a["error_pct"] if a["verified"] >= few else None}
+                    for d, a in acc.items()} if acc else acc
+
+        if any(a["verified"] < few and a["error_pct"] is not None
+               for it in [*ivs, *cams] if it["accuracy"] for a in it["accuracy"].values()):
+            notes.append(f"Differences are given as a percentage only where at least {few} "
+                         f"crossings were verified; on fewer, one crossing moves it by several "
+                         f"points, so the difference is given in people.")
+        if ivs and m and m["intervals"] > 1 and m["wape_pct"] is not None and m["truth"] >= few:
             notes.append(f"Across the {m['intervals']} whole intervals, the system's typical error "
                          f"was {m['mae']} people per interval (MAE); its over- and undercounts "
                          f"together came to {m['wape_pct']}% of the verified count (WAPE).")
         return {"dirs": [{"key": d, "label": LABELS[d]} for d in self.dirs()],
                 "intervals": [{"label": i["label"], "partial": i["full"] is False,
                                "verified": i["verified"], "sensor": i["sensor"],
-                               "accuracy": i["accuracy"]} for i in ivs],
+                               "accuracy": gate(i["accuracy"])} for i in ivs],
                 "cameras": [{"label": c["camera"], "partial": False, "verified": c["verified"],
-                             "sensor": c["sensor"], "accuracy": c["accuracy"]} for c in cams],
+                             "sensor": c["sensor"], "accuracy": gate(c["accuracy"])} for c in cams],
                 "notes": notes}
 
     @_open_only
@@ -1578,6 +1606,9 @@ class Wizard:
         c["accuracy"] = {d: sensor_accuracy(sensor.get(d), c["verified"][d]) for d in self.dirs()}
         c["accuracy_range"] = {d: accuracy_range(sensor.get(d), c["verified"][d], c["unsure"][d])
                                for d in self.dirs()}
+        # what may be said: a percentage only on enough verified crossings (validation.quote)
+        c["quote"] = {d: validation.quote(int(c["verified"][d]), sensor.get(d))
+                      for d in self.dirs()}
         c["incomplete"] = problems
         c["status"] = "incomplete" if problems else "complete"
         c["checks"] = self.checklist(c)
@@ -1846,6 +1877,22 @@ class Wizard:
                 f"Share of the footage watched: {shares}.",
                 method[-1],
             ]
+        scope = sampling.scope(st.get("sampling"), f"{start:%H:%M}–{end:%H:%M} on "
+                               f"{start:%d/%m/%Y}" if start and end else "")
+        method.insert(1, scope)
+        levels = validation.by_level(self.comparison()["rows"])
+        system = (st.get("sensor_source") or {}).get("system") or "RetailNext"
+        sample_notes = []  # beside the headline number: how much it rests on
+        for d in [] if c["incomplete"] else self.dirs():
+            q = c["quote"][d]
+            if q["system"] is None:
+                continue
+            sample_notes.append(
+                f"{LABELS[d]}: from {q['truth']} verified crossings in one window, so no range is "
+                f"given (one window cannot show how the result would move at another time)."
+                if q["rate"] else
+                f"{LABELS[d]}: verified {q['truth']}, {system} counted {q['system']}: "
+                f"{q['words']}. {q['reason']}.")
         rules, said = self.state["rules"], {"count": "counted", "exclude": "not counted"}
         spec = self.state["manual"].get("specification") or GROUND_TRUTH_SPEC
         method.insert(len(method) - 1, f"Crossings as defined by CrossingCount's Ground Truth "
@@ -1885,6 +1932,7 @@ class Wizard:
             "time_range": f"{start:%H:%M}-{end:%H:%M}" if start and end else "",
             "directions": [{"key": d, "label": LABELS[d], "verified": c["verified"][d],
                             "unsure": c["unsure"][d], "system": st["sensor"][d],
+                            "rate": c["quote"][d]["rate"],
                             "accuracy": c["accuracy"][d]["accuracy_pct"],
                             "accuracy_range": c["accuracy_range"][d]} for d in self.dirs()],
             "complete": not c["incomplete"], "incomplete": c["incomplete"],
@@ -1893,7 +1941,12 @@ class Wizard:
             "crossings": [{"n": n, "time": self.clock(r["t"]), "camera": r["camera"],
                            "direction": LABELS[r["direction"]], "found": r["found"]}
                           for n, r in [*zip(row_numbers(rows), rows), *(("?", u) for u in unsure)]],
-            "thumbs": thumbs, "method": method,
+            "thumbs": thumbs, "method": method, "scope": scope, "sample_notes": sample_notes,
+            "levels": {"text": validation.level_sentence(levels, system),
+                       "rows": [{"level": k, **m, **({} if m["truth"] >= validation.MIN_VERIFIED_FOR_PCT
+                                                     else {"bias_pct": None, "wape_pct": None})}
+                                for k, m in levels.items()],
+                       "footage": self.traffic(c)},
         }
 
     @_open_only

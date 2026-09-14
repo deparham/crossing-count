@@ -24,7 +24,18 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 from starlette.routing import Mount
 
-from . import auditlog, gold, paths, releases, runs, sensors, updates, validation
+from . import (
+    auditlog,
+    engagement,
+    gold,
+    paths,
+    releases,
+    runs,
+    sampling,
+    sensors,
+    updates,
+    validation,
+)
 from . import overlay as ov
 from . import retailnext as rn
 from .examples import check_folder
@@ -108,6 +119,17 @@ class BusiestIn(BaseModel):
     date: str  # YYYY-MM-DD
     minutes: int = 15
     direction: str = "out"  # in, out or both: the busiest for the traffic validated
+    mode: str = sampling.DEFAULT_MODE  # peak (with a control window), stratified or random
+    seed: int | None = None  # the random draws' seed; a new one is drawn and recorded if none
+
+
+class EngagementIn(BaseModel):
+    ids: list[str]  # finalised validation IDs, all of one store
+
+
+def _bare(code: str) -> str:
+    """A store code without its brand ("rag/CN-123" -> "CN-123")."""
+    return code.rpartition("/")[2].strip().upper()
 
 
 class DownloadIn(BaseModel):
@@ -234,6 +256,7 @@ class _Current:
     draw: str | None = None
     rn_nodes: dict[str, list[dict[str, Any]]] | None = None  # per subscription, fetched once
     rn_job: dict[str, Any] | None = None  # the footage being exported and downloaded
+    rn_plan: dict[str, Any] | None = None  # the windows last found: a download records its own
     update_job: dict[str, Any] | None = None  # the installed app downloading its new version
     gold_job: dict[str, Any] | None = None  # the automatic count being scored on gold clips
 
@@ -490,17 +513,25 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     @app.post("/api/retailnext/busiest")
     def retailnext_busiest(b: BusiestIn) -> dict[str, Any]:
-        """The busiest windows of the day for the traffic validated, from RetailNext."""
+        """The windows of the day to validate, by the sampling rule chosen (sampling.py), from
+        RetailNext's traffic: by default the busiest for the traffic validated and a control
+        window of lower traffic. Remembered, so a download records which window it is."""
         day = rn_day(b.date)
         try:
-            conn, _, store = rn_store(b.code)
-            rows = rn.day_traffic(conn, str(store["uuid"]), day, store.get("time_zone"))
-            windows = rn.busiest(rows, b.minutes, b.direction)
-        except rn.RetailNextError as exc:
+            conn, nodes, store = rn_store(b.code)
+            uuid_ = str(store["uuid"])
+            rows = rn.day_traffic(conn, uuid_, day, store.get("time_zone"))
+            cameras = len(rn.video_channels(nodes, uuid_)) or len(rn.entrances(nodes, uuid_)) or 1
+            plan = sampling.plan(rn.windows(rows, b.minutes, b.direction), mode=b.mode,
+                                 length_min=b.minutes, direction=b.direction, cameras=cameras,
+                                 seed=b.seed, day=day.isoformat())
+        except (rn.RetailNextError, sampling.SamplingError) as exc:
             raise HTTPException(400, str(exc)) from exc
+        cur.rn_plan = {**plan, "request": [_bare(b.code), b.date]}
         return {"store": store.get("name"), "code": store.get("store_id"),
                 "subscription": conn.subscription, "time_zone": store.get("time_zone"),
-                "windows": windows}
+                "windows": plan["chosen"], "considered": len(plan["candidates"]),
+                "sampling": {k: v for k, v in plan.items() if k not in ("candidates", "chosen")}}
 
     @app.post("/api/retailnext/download")
     def retailnext_download(b: DownloadIn) -> dict[str, Any]:
@@ -530,6 +561,9 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         job: dict[str, Any] = {"state": "exporting", "message": "RetailNext is preparing the video…",
                                "done": 0, "total": None, "path": None, "cameras": sorted(channels)}
         cur.rn_job = job
+        plan = (cur.rn_plan if cur.rn_plan and cur.rn_plan["request"] == [_bare(b.code), b.date]
+                else None)
+        chosen_by = sampling.record(plan, b.start, b.until) if plan else None
 
         def work() -> None:
             try:
@@ -553,7 +587,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                 rn.download(info, dest, lambda done, total: job.update(done=done, total=total))
                 rn.remember_download(dest, {**rn.store_summary(conn.subscription, nodes, store),
                                             "marks": b.marks, "start": start.isoformat(),
-                                            "end": end.isoformat()})
+                                            "end": end.isoformat(), "sampling": chosen_by})
                 job.update(state="done", message="Downloaded.", path=str(dest))
             except rn.RetailNextError as exc:
                 job.update(state="failed", message=str(exc))
@@ -877,6 +911,22 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         elif sys.platform == "win32":
             subprocess.run(["explorer", str(folder)], check=False)
         return {"ok": True}
+
+    @app.post("/api/engagement")
+    def engagement_summary(e: EngagementIn) -> dict[str, Any]:
+        """Finalised windows of one store put together (engagement.py)."""
+        try:
+            return engagement.summarise(data(), e.ids)
+        except engagement.EngagementError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/engagement/keep")
+    def engagement_keep(e: EngagementIn) -> dict[str, Any]:
+        """Keep the engagement under its own ID, read-only."""
+        try:
+            return engagement.write(data(), e.ids, str(paths.load_settings().get("operator") or ""))
+        except engagement.EngagementError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.get("/api/gold/current")
     def gold_current() -> dict[str, Any]:

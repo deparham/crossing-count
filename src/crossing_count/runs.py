@@ -144,6 +144,9 @@ def write(w: Wizard, root: Path, shared: Path | None = None) -> dict[str, Any]:
                     "sha256": video_sha, "duration_s": st["duration_s"],
                     "clock_start": st["clock_start"], "clock_end": st.get("clock_end"),
                     "tz": st.get("tz")},
+        # how this footage was picked: mode, seed, every window considered, those chosen and
+        # the traffic level of each (sampling.py); None when it was chosen by hand
+        "sampling": st.get("sampling"), "traffic": result.get("traffic"),
         "cameras": [{"sensor": c["sensor"], "picture": c["picture"], "tile": c.get("tile"),
                      "config": c.get("config"), "line": geometry.get(c["sensor"], {}).get("line"),
                      "mask": geometry.get(c["sensor"], {}).get("mask")} for c in st["cameras"]],

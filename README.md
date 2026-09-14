@@ -141,6 +141,15 @@ footage was watched (manual). Anyone in that footage may be missing from the
 count. Crossings answered Unsure are never counted: the report lists them,
 and gives the count and the accuracy both ways they could go.
 
+**Too few crossings for a percentage.** Below 30 verified crossings the
+report prints no percentage: one crossing would move it by several points.
+The card says DIFFERENCE instead, with the counts beside it ("verified 11,
+RetailNext counted 9: an undercount of 2"); the per-interval and per-camera
+rows do the same. To get a percentage, finalise several windows of the store
+and put them together on the *Validation runs* page (an engagement): with at
+least 30 verified crossings it gives the percentage, and with at least 5
+windows its 95% range.
+
 A question is about a moment, not one person. When a group crosses and the
 tool counts only one of them, the others are not asked about separately, and
 their movement is not among the stretches to watch: answer with how many
@@ -379,12 +388,19 @@ queries: nothing about the footage is sent. Answers are kept as they came in
 from RetailNext*: pick the brand (subscription; the store list then shows only
 its stores, and the last brand is remembered), the store, the day, the length
 (15 minutes to an hour),
-the traffic you validate and how you will count. It asks RetailNext for that
-day's 15-minute traffic over opening hours and shows the busiest windows for
-that traffic (most out for an out validation, most in for an in one), on
-RetailNext's own 15-minute boundaries so the comparison is exact. The windows
-are shown by rank only: RetailNext's numbers stay hidden until the count is
-done, so they cannot sway it. Pick one and it exports every camera of the store
+the traffic you validate, how you will count, and which windows. It asks
+RetailNext for that day's 15-minute traffic over opening hours and picks
+windows by a stated rule, on RetailNext's own 15-minute boundaries so the
+comparison is exact: by default the busiest windows for that traffic (most
+out for an out validation, most in for an in one) and a **control window** of
+lower traffic drawn at random, so the results can tell crowding apart from a
+sensor that is simply off; or one window from each traffic level; or windows
+at random from the trading hours (docs/GROUND_TRUTH_SPECIFICATION.md, section
+9). The mode, the seed, every window considered and the one chosen are kept
+with the validation, and the report's first page says what its number
+describes ("peak trading", "a control window", "this period only"). The
+windows are shown by role and traffic level only: RetailNext's numbers stay
+hidden until the count is done, so they cannot sway it. Pick one and it exports every camera of the store
 for that window without RetailNext's marks (the sensor's own tracks on the
 picture can sway a count by hand too; "by hand on RetailNext's marked footage"
 is still there for a quick look, but never makes a gold clip), downloads it next to

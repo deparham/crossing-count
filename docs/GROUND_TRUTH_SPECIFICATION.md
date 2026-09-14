@@ -1,6 +1,7 @@
-# Ground Truth Specification v1.0
+# Ground Truth Specification v1.1
 
-Status: in force from 14 September 2026. Every count by hand records the version it
+Status: v1.1 in force from 15 September 2026 (v1.0 from 14 September 2026). Every count by
+hand records the version it
 followed (`specification` in the wizard's state and in each gold clip). Counts made
 under different versions are not scored together unless the change log below says the
 versions are compatible.
@@ -122,8 +123,51 @@ The automatic counter (rule.py) uses heuristics of its own: a mask zone a person
 reach, filter zones, and cancelling a crossing that the same track undoes. Those decide
 what the tool *proposes*. They do not define a crossing: this document does.
 
+## 9. Sampling: which footage is counted
+
+A validation measures the counting system during the footage that was counted, and nothing
+more. How that footage was picked decides what the result may be said to describe, so it is
+picked by a stated rule (`sampling.py`), and the rule is recorded with the validation.
+
+| Mode | Windows | What the result describes |
+|---|---|---|
+| **peak** (the default) | the busiest windows of the day for the traffic validated, and at least one **control window** of lower traffic, drawn at random | peak trading; with the control, whether the error comes from crowding |
+| **stratified** | one window drawn at random from each traffic level the day has | each traffic level |
+| **random** | windows drawn at random from the trading hours | the trading day, once enough are counted |
+
+None is a better sample than another: they answer different questions.
+
+- **Peak is the default.** Peak trading is what clients ask about, where occupancy
+  decisions are made, and where sensors fail; quiet periods measure the easy case. A peak
+  result is a valid accuracy measurement **of peak trading**, and is always worded that way:
+  "At peak trading (the busiest 15 minutes, busy traffic), RetailNext undercounts by 6%",
+  never "RetailNext is 94% accurate at this store".
+- **Control windows.** Every engagement that validates peak windows also validates at least
+  one window from a lower traffic level (normal traffic first, then quiet), drawn at random
+  clear of the peak windows. The control does not dilute the headline: it turns "the sensor
+  is 6% out" into "the sensor is accurate at normal traffic and undercounts 6% at peak",
+  which points at crowding as the cause. The Sensor results page names every store with peak
+  windows and no control window yet.
+- **Traffic levels.** Quiet under 40 crossings per camera-hour, normal under 120, busy under
+  240, heavy from 240 (the directions validated, together). When windows are chosen, the only
+  numbers there are the system's own, so a window's level at selection comes from them. The
+  result's level comes from the verified count, interval by interval, and the error is
+  reported per level (docs/METRICS_SPECIFICATION.md, section 5).
+- **Windows.** Whole consecutive 15-minute intervals of the system's own data, within trading
+  hours, so the comparison is exact. Intervals the system marked incomplete or imputed are
+  drawn last.
+- **Recorded.** Every validation's manifest records the mode, the seed of the random draws,
+  every candidate window considered, the windows chosen with the traffic level of each, and
+  which window this footage is. Footage picked any other way is recorded as **chosen by
+  hand**, and its report says it describes that period only.
+- **Said.** Every report states its sampling scope on its first page, in plain words, next
+  to the headline number, with the error at each traffic level.
+- **Independence.** While choosing, windows are shown by their role and traffic level only,
+  never with the system's numbers.
+
 ## Change log
 
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 14 Sep 2026 | First version. |
+| 1.1 | 15 Sep 2026 | Section 9: sampling protocol (peak with control windows, stratified, random), recorded with every validation and stated on every report. What a crossing is did not change: counts made under 1.0 and 1.1 are scored together. |

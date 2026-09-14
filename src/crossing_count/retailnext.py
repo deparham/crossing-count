@@ -355,12 +355,11 @@ def _clock(text: str) -> int | None:
     return int(m[1]) * 60 + int(m[2]) if m else None
 
 
-def busiest(rows: list[dict[str, Any]], length_min: int, direction: str, top: int = 3
-            ) -> list[dict[str, Any]]:
-    """The busiest windows of `length_min` minutes: most traffic out for an out validation,
-    most in for an in one ("both": in plus out). A window is whole consecutive rows, so it
-    compares exactly with RetailNext's own numbers. The busiest that do not overlap come
-    first; an equal one earlier in the day wins."""
+def windows(rows: list[dict[str, Any]], length_min: int, direction: str) -> list[dict[str, Any]]:
+    """Every window of `length_min` minutes in the day's rows, with its traffic in and out and
+    its score for the traffic validated (out for an out validation, in for an in one, in plus
+    out for both). A window is whole consecutive rows, so it compares exactly with
+    RetailNext's own numbers."""
     if direction not in ("in", "out", "both"):
         raise RetailNextError("The direction is in, out or both.")
     timed = sorted((c0, c1, r) for r in rows
@@ -385,8 +384,15 @@ def busiest(rows: list[dict[str, Any]], length_min: int, direction: str, top: in
                       "from_min": window[0][0], "until_min": window[-1][1], **sums,
                       "score": sum(sums[d] for d in keys),
                       "validity": bad[0] if bad else "complete"})
+    return found
+
+
+def busiest(rows: list[dict[str, Any]], length_min: int, direction: str, top: int = 3
+            ) -> list[dict[str, Any]]:
+    """The busiest windows (windows()) for the traffic validated. The busiest that do not
+    overlap come first; an equal one earlier in the day wins."""
     chosen: list[dict[str, Any]] = []
-    for w in sorted(found, key=lambda w: (-w["score"], w["from_min"])):
+    for w in sorted(windows(rows, length_min, direction), key=lambda w: (-w["score"], w["from_min"])):
         if len(chosen) < top and all(w["until_min"] <= c["from_min"] or w["from_min"] >= c["until_min"]
                                      for c in chosen):
             chosen.append(w)
