@@ -627,9 +627,16 @@ $("quitApp").addEventListener("click", async () => {
   try { await api("/api/quit", {}); } catch (e) { /* it is closing */ }
   document.body.innerHTML = '<p style="padding:48px;font:16px system-ui">CrossingCount is closed. Open it again from its icon.</p>';
 });
-function rnBrand() {  // a connected brand: its stores; one not connected yet: ask for its key
+async function rnBrand() {  // a connected brand: its stores; one not connected yet: ask for its key
   const sub = rnSubName($("rnSub").value);
-  const known = W.rnSubs.includes(sub);
+  let known = W.rnSubs.includes(sub);
+  if (sub && !known) {  // its key may be on this computer already (the other copy saved it): nothing to type
+    try {
+      const r = await api("/api/retailnext/reconnect", { subscription: sub });
+      if (r.connected) { rnSubs(r.subscriptions, r); known = true; }
+    } catch (e) { /* not a brand name yet, or no key: ask for it */ }
+    if (rnSubName($("rnSub").value) !== sub) return;  // changed meanwhile
+  }
   $("rnKey").hidden = !sub || known;
   if (!sub || !known) {
     $("rnStores").innerHTML = "";

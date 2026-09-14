@@ -36,7 +36,15 @@ import keyring.errors
 from . import builtin, paths
 from .util import write_json_atomic
 
-SERVICE = "CrossingCount RetailNext"  # the credential store's entry
+SERVICE = "CrossingCount RetailNext"  # the credential store's entries (the project folder's copy)
+APP_SERVICE = "CrossingCount app RetailNext"  # the installed app's own entries
+
+
+def _services() -> tuple[str, str]:
+    """Where keys are kept: this copy's own entries first, then the other copy's. macOS lets
+    an app replace only Keychain entries it made itself, so the installed app and the
+    project folder each write their own (and read the other's, once allowed to)."""
+    return (APP_SERVICE, SERVICE) if paths.FROZEN else (SERVICE, APP_SERVICE)
 TIMEOUT_S = 30
 RETRIES = 3
 _SUBSCRIPTION = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
@@ -120,8 +128,12 @@ def save_connection(subscription: str, access_key: str, secret_key: str) -> Conn
                       clean_key(secret_key))
     if not conn.access_key or not conn.secret_key:
         raise RetailNextError("Both the access key and the secret key are needed.")
-    keyring.set_password(SERVICE, conn.subscription, json.dumps(
-        {"access_key": conn.access_key, "secret_key": conn.secret_key}))
+    try:
+        keyring.set_password(_services()[0], conn.subscription, json.dumps(
+            {"access_key": conn.access_key, "secret_key": conn.secret_key}))
+    except keyring.errors.KeyringError as e:
+        raise RetailNextError(f"This computer's Keychain would not keep the key ({e}). "
+                              f"Nothing was saved.") from None
     subs = [s for s in saved_subscriptions() if s != conn.subscription] + [conn.subscription]
     paths.save_settings({"retailnext_subscriptions": subs, "retailnext_subscription": ""})
     return conn
@@ -134,12 +146,17 @@ def load_connection(subscription: str | None = None) -> Connection | None:
     sub = subscription or (subs[-1] if subs else "")
     if not sub:
         return None
-    try:
-        raw = keyring.get_password(SERVICE, sub)
-        data = json.loads(raw) if raw else None
-    except (keyring.errors.KeyringError, ValueError):
-        data = None
-    if not isinstance(data, dict) or not data.get("access_key") or not data.get("secret_key"):
+    data: Any = None
+    for service in _services():
+        try:
+            raw = keyring.get_password(service, sub)
+            found = json.loads(raw) if raw else None
+        except (keyring.errors.KeyringError, ValueError):
+            continue  # not there, or this copy may not read it
+        if isinstance(found, dict) and found.get("access_key") and found.get("secret_key"):
+            data = found
+            break
+    if data is None:
         data = builtin.retailnext().get(sub)
     if not data:
         return None
@@ -182,8 +199,9 @@ def forget_connection(subscription: str | None = None) -> None:
     subs = saved_subscriptions()
     gone = [subscription] if subscription else subs
     for sub in gone:
-        with contextlib.suppress(keyring.errors.PasswordDeleteError):
-            keyring.delete_password(SERVICE, sub)
+        for service in _services():  # the other copy's entry may refuse: it stays there
+            with contextlib.suppress(keyring.errors.KeyringError):
+                keyring.delete_password(service, sub)
     paths.save_settings({"retailnext_subscriptions": [s for s in subs if s not in gone],
                          "retailnext_subscription": ""})
 

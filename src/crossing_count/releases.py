@@ -100,7 +100,10 @@ def connect(tok: str) -> None:
     if not tok:
         raise ReleaseError("Enter the token.")
     _get(f"/repos/{info['repo']}/releases?per_page=1", tok)
-    keyring.set_password(SERVICE, ACCOUNT, tok)
+    try:
+        keyring.set_password(SERVICE, ACCOUNT, tok)
+    except keyring.errors.KeyringError as e:
+        raise ReleaseError(f"This computer's Keychain would not keep the token ({e}).") from None
 
 
 def forget_token() -> None:

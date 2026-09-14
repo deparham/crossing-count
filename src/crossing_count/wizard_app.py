@@ -335,6 +335,16 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
             cur.rn_nodes.pop(conn.subscription, None)  # a new key may see other stores
         return {"subscription": conn.subscription, **rn_lists()}
 
+    @app.post("/api/retailnext/reconnect")
+    def retailnext_reconnect(f: ForgetIn) -> dict[str, Any]:
+        """A brand whose key is already in this computer's credential store (saved before,
+        or by the other copy of CrossingCount): connected with nothing to type."""
+        try:
+            conn = rn.reconnect(f.subscription)
+        except rn.RetailNextError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"connected": conn is not None, **rn_lists()}
+
     @app.post("/api/retailnext/forget")
     def retailnext_forget(f: ForgetIn) -> dict[str, Any]:
         """Remove a brand's key from this computer."""

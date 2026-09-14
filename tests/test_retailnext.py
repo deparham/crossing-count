@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Self
 
 import keyring
+import keyring.errors
 import pytest
 from fastapi.testclient import TestClient
 
@@ -21,6 +22,15 @@ from crossing_count import retailnext as rn
 from crossing_count import video as vid
 from crossing_count import wizard_app
 from crossing_count.wizard_app import create_wizard_app
+
+
+def deleter(store: dict[tuple[str, str], str]) -> Any:
+    """keyring.delete_password over a dict, refusing a missing entry as the real one does."""
+    def delete(service: str, name: str) -> None:
+        if (service, name) not in store:
+            raise keyring.errors.PasswordDeleteError("Password not found")
+        del store[(service, name)]
+    return delete
 
 
 class Reply:
@@ -162,7 +172,7 @@ def credentials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[tuple[s
     store: dict[tuple[str, str], str] = {}
     monkeypatch.setattr(keyring, "set_password", lambda s, u, p: store.__setitem__((s, u), p))
     monkeypatch.setattr(keyring, "get_password", lambda s, u: store.get((s, u)))
-    monkeypatch.setattr(keyring, "delete_password", lambda s, u: store.pop((s, u)))
+    monkeypatch.setattr(keyring, "delete_password", deleter(store))
     return store
 
 
@@ -405,7 +415,7 @@ def test_the_key_lives_in_the_credential_store(monkeypatch: pytest.MonkeyPatch,
     store: dict[tuple[str, str], str] = {}
     monkeypatch.setattr(keyring, "set_password", lambda s, u, p: store.__setitem__((s, u), p))
     monkeypatch.setattr(keyring, "get_password", lambda s, u: store.get((s, u)))
-    monkeypatch.setattr(keyring, "delete_password", lambda s, u: store.pop((s, u)))
+    monkeypatch.setattr(keyring, "delete_password", deleter(store))
     assert rn.load_connection() is None
     rn.save_connection("https://acme.api.retailnext.net", " AK ", "SK")
     assert rn.load_connection() == CONN
