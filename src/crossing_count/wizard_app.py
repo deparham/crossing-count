@@ -218,12 +218,28 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         name = paths.load_settings().get("operator")
         if name and not w.state["store"].get("operator"):
             w.set_store(operator=str(name))
+        notes = identify_download(w, s, path) + w.tidy_on_open(len(s.tiles))
         draw = f"/draw/{uuid.uuid4().hex[:10]}"
         app.router.routes[:] = [r for r in app.router.routes
                                 if not (isinstance(r, Mount) and r.path.startswith("/draw/"))]
         app.mount(draw, create_app(w.video, sites, setup=s))
         cur.wizard, cur.setup, cur.draw = w, s, draw + "/"
-        return public()
+        return {**public(), "notes": notes}
+
+    def identify_download(w: Wizard, s: Setup, path: Path) -> list[str]:
+        """Footage downloaded from RetailNext: its brand, store and cameras are known, so the
+        wizard uses them, and only that store's drawings are offered."""
+        info = rn.download_info(path)
+        if info is None:
+            return []
+        if not info.get("subscription"):  # an earlier download: check the name's store code
+            try:
+                conn, nodes, store = rn_store(str(info["code"]))
+            except (HTTPException, rn.RetailNextError):
+                return []  # not one of ours, or RetailNext is out of reach
+            info = {**info, **rn.store_summary(conn.subscription, nodes, store)}
+        s.store = (str(info["code"]), str(info.get("name") or ""))
+        return w.use_download(info)
 
     @app.get("/api/state")
     def state() -> dict[str, Any]:
@@ -347,6 +363,9 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                     job["message"] = f"RetailNext is preparing the video… ({int(waited)} s)"
                 job.update(state="downloading", message="Downloading…")
                 rn.download(info, dest, lambda done, total: job.update(done=done, total=total))
+                rn.remember_download(dest, {**rn.store_summary(conn.subscription, nodes, store),
+                                            "marks": b.marks, "start": start.isoformat(),
+                                            "end": end.isoformat()})
                 job.update(state="done", message="Downloaded.", path=str(dest))
             except rn.RetailNextError as exc:
                 job.update(state="failed", message=str(exc))
@@ -368,8 +387,10 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         if start is None or end is None:
             raise HTTPException(400, "The video's name has no clock time, so RetailNext's "
                                      "numbers cannot be looked up.")
+        code = w.state["store"]["code"]
+        sub = (w.state.get("retailnext") or {}).get("subscription")  # the footage's own brand
         try:
-            conn, nodes, store = rn_store(w.state["store"]["code"])
+            conn, nodes, store = rn_store(f"{sub}/{code}" if sub else code)
             got = rn.camera_counts(conn, nodes, str(store.get("store_id") or w.state["store"]["code"]),
                                    [c["sensor"] for c in w.state["cameras"]], start, end)
         except rn.RetailNextError as exc:
@@ -389,6 +410,8 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
              "configs": [{"sensor": c["sensor"], "file": c["file"]} for c in cfgs
                          if c["picture"] == t.index and not c["problem"]]}
             for t in s.tiles],
+            # footage from RetailNext: its cameras' names, picture by picture
+            "suggested": (wiz().state.get("retailnext") or {}).get("cameras", []),
             # RetailNext's blue lines found on the people-free picture, or a saved drawing
             # whose recorded blue line matches this video
             "marks_guess": any(bool(m["marks"]) for m in marks) or any(

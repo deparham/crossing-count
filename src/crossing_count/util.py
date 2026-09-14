@@ -28,6 +28,14 @@ def default_run_dir(video: str | Path, sample_s: float | None) -> Path:
     return Path("runs") / name
 
 
+def same_store(site: str, store: tuple[str, ...]) -> bool:
+    """Does a drawing's site name one of the store's names (its code, its full name)? Either
+    written whole, or as the code followed by more ("392 Perri Cutten Armadale")."""
+    s = " ".join(site.lower().split())
+    names = [" ".join(n.lower().split()) for n in store if n.strip()]
+    return any(s == n or s.startswith(n + " ") for n in names)
+
+
 def fmt_hms(seconds: float) -> str:
     s = max(0.0, seconds)
     h, rem = divmod(s, 3600)

@@ -423,6 +423,51 @@ def export_status(conn: Connection, export_id: str) -> tuple[str, str]:
                           f"{body.decode('utf-8', 'replace')[:200]}")
 
 
+_DOWNLOAD_NAME = re.compile(r"^Export - (?P<code>.+?)(?P<marks> marked)? - \d{4}-\d{2}-\d{2}-\d{6}\b")
+
+
+def store_summary(subscription: str, nodes: list[dict[str, Any]], store: dict[str, Any]
+                  ) -> dict[str, Any]:
+    """What footage of this store is: brand, store and its cameras in export order."""
+    return {"subscription": subscription, "code": str(store.get("store_id") or ""),
+            "name": str(store.get("name") or ""), "store_uuid": str(store["uuid"]),
+            "time_zone": store.get("time_zone"),
+            "cameras": list(video_channels(nodes, str(store["uuid"])))}
+
+
+def _downloads_path() -> Path:
+    return paths.data_root() / "retailnext" / "downloads.json"
+
+
+def remember_download(video: Path, info: dict[str, Any]) -> None:
+    """Keep what a downloaded video is (store_summary and more), by its file name."""
+    try:
+        data = json.loads(_downloads_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    data[video.name] = info
+    _downloads_path().parent.mkdir(parents=True, exist_ok=True)
+    write_json_atomic(_downloads_path(), data)
+
+
+def download_info(video: Path) -> dict[str, Any] | None:
+    """What a video downloaded from RetailNext is: remembered when it was downloaded, or,
+    for an earlier download, read from the name the download gave it ("Export - 392 marked
+    - ..."). A name alone may also fit RetailNext's own exports (named by camera), so it only
+    gives a store code to be checked against RetailNext."""
+    try:
+        data = json.loads(_downloads_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if isinstance(data, dict) and isinstance(data.get(video.name), dict):
+        return dict(data[video.name])
+    m = _DOWNLOAD_NAME.match(video.name)
+    if not m or m["code"].strip().lower() == "multiple channels":
+        return None
+    return {"code": m["code"].strip(), "marks": bool(m["marks"])}
+
+
 def footage_name(code: str, start: datetime, end: datetime, marks: bool) -> str:
     """Named like RetailNext's own exports, so the store and the clock are read from it:
     "Export - CN-123 - 2026-09-12-113000 AEST to 2026-09-12-114500 AEST.mp4"."""

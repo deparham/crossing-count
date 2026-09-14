@@ -218,6 +218,18 @@ def test_a_store_whose_entrances_are_not_named_like_its_cameras(server: list[Any
                          at("2026-09-12T11:00:00"), at("2026-09-12T11:15:00"))
 
 
+def test_what_a_downloaded_video_is(credentials: dict[tuple[str, str], str],
+                                    tmp_path: Path) -> None:
+    video = tmp_path / "Export - 392 marked - 2026-09-13-124500 AEST to 2026-09-13-130000 AEST.mp4"
+    assert rn.download_info(video) == {"code": "392", "marks": True}  # from the name only
+    assert rn.download_info(tmp_path / "Export - Multiple Channels - 2026-09-12-113000 AEST to "
+                                       "2026-09-12-114500 AEST.mp4") is None
+    rn.remember_download(video, rn.store_summary("rag", NODES, NODES[0]))
+    info = rn.download_info(video)
+    assert info is not None and info["subscription"] == "rag" and info["code"] == "CN-123"
+    assert info["cameras"] == ["CN-123-PB1", "CN-123-R2"]
+
+
 def test_the_busiest_window_for_the_traffic_validated() -> None:
     def row(start: str, finish: str, i: int, o: int, validity: str = "complete") -> dict[str, Any]:
         return {"start": start, "finish": finish, "in": i, "out": o, "validity": validity}

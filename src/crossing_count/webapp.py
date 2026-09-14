@@ -25,7 +25,7 @@ from . import overlay as ov
 from . import tracing
 from . import video as vid
 from .config import ConfigError, aspect_matches, bind, load_config, parse_config
-from .util import slugify, write_json_atomic
+from .util import same_store, slugify, write_json_atomic
 
 WEB_DIR = Path(__file__).parent / "web"
 Pt = list[float]
@@ -66,6 +66,10 @@ class Setup:
         self.tiles = lay.detect_tiles_in(self.median)
         self._frames: dict[float, NDArray[np.uint8]] = {}
         self._marks: list[dict[str, Any]] | None = None
+        # The store the footage is known to be from (a RetailNext download: its code and
+        # name): only its own drawings are offered. RetailNext's blue line looks alike in
+        # every store, so a drawing of another store's camera can fit this footage's line.
+        self.store: tuple[str, ...] = ()
 
     def marks(self) -> list[dict[str, Any]]:
         """Per picture: does it show the sensor's burned-in lines (not a clean export)?"""
@@ -113,6 +117,8 @@ class Setup:
                 cfg = load_config(p)
             except (ConfigError, ValueError, KeyError):
                 continue
+            if self.store and not same_store(cfg.site, self.store):
+                continue  # another store's camera
             scores: dict[int, float] = {}
             if cfg.overlay_hsv is not None:
                 for t in self.tiles:

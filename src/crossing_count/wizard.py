@@ -35,7 +35,7 @@ from .export import sensor_accuracy
 from .gating import camera_dir
 from .manual import intervals_for, merge_ranges, unwatched_ranges
 from .report_pptx import build_report
-from .util import default_run_dir, fmt_hms, write_json_atomic
+from .util import default_run_dir, fmt_hms, same_store, write_json_atomic
 from .version import app_version
 
 ROOT = paths.SOURCE_ROOT  # the project folder, when running from source
@@ -596,6 +596,88 @@ class Wizard:
             self._save()
         return warnings
 
+    def use_download(self, info: dict[str, Any]) -> list[str]:
+        """Footage downloaded from RetailNext (retailnext.store_summary): its store is known,
+        so it is used, and a camera filed under another store's drawing is corrected: named
+        as RetailNext names that picture's camera, its hand counts moved with it, the other
+        store's line no longer shown. Returns what was corrected, in words."""
+        notes: list[str] = []
+        code = str(info.get("code") or "")
+        if not code:
+            return notes
+        full = str(info.get("name") or "")
+        with self._lock:
+            self.state["retailnext"] = {**(self.state.get("retailnext") or {}), **info}
+            store = self.state["store"]
+            if store.get("code") != code:
+                if store.get("code"):
+                    notes.append(f"This footage is RetailNext's store {code}, not {store['code']}.")
+                store["code"] = code
+                # RetailNext's names carry the code ("392 Perri Cutten Armadale"): the report
+                # shows it beside the name already
+                store["name"] = (" ".join(full.replace(code, " ").split())
+                                 or self._stores().get(code, ""))
+            names = [str(n) for n in info.get("cameras") or []]
+            for cam in list(self.state["cameras"]):
+                site = str(cam.get("site") or "")
+                if not site or same_store(site, (code, full)):
+                    continue
+                old, i = cam["sensor"], int(cam["picture"])
+                new = names[i] if i < len(names) else old
+                cam.update(site=code, config=None)
+                if new != old and all(c["sensor"] != new for c in self.state["cameras"]):
+                    self._rename_camera(old, new)
+                notes.append(f"Picture {i + 1} was using {old}, a camera of store {site}: it is "
+                             f"now {new if new != old else old} of {code}"
+                             + (", with its counts." if self.manual() else
+                                ". Draw this store's camera and run the count again."))
+                self._decide("corrected", picture=i, was=old, now=new, was_store=site, store=code)
+            self._save()
+        return notes
+
+    def _rename_camera(self, old: str, new: str) -> None:
+        """A camera's new name everywhere it is kept: counts, watched time, additions."""
+        m = self.state["manual"]
+        for c in m.get("counts", []):
+            if c["camera"] == old:
+                c["camera"] = new
+        if old in m.get("watched", {}):
+            m["watched"][new] = merge_ranges([*m["watched"].get(new, []), *m["watched"].pop(old)])
+        if old in m.get("positions", {}):
+            m["positions"].setdefault(new, m["positions"].pop(old))
+        for a in self.state["added"]:
+            if a["camera"] == old:
+                a["camera"] = new
+        if old in self.state["sensor_cameras"]:
+            self.state["sensor_cameras"][new] = self.state["sensor_cameras"].pop(old)
+        for cam in self.state["cameras"]:
+            if cam["sensor"] == old:
+                cam["sensor"] = new
+
+    def tidy_on_open(self, pictures: int) -> list[str]:
+        """Put right what earlier versions left behind, logged: hand counts under a camera's
+        earlier name (a rename did not move them) go back to the camera, when the footage has
+        one picture and so its counts are that camera's."""
+        notes: list[str] = []
+        with self._lock:
+            m, cams = self.state["manual"], self.state["cameras"]
+            names = {c["sensor"] for c in cams}
+            left = sorted({c["camera"] for c in m.get("counts", []) if c["camera"] not in names}
+                          | {k for k in m.get("watched", {}) if k not in names})
+            if pictures == 1 and len(cams) == 1 and len(left) == 1:
+                new = cams[0]["sensor"]
+                n = sum(1 for c in m["counts"] if c["camera"] == left[0])
+                self._rename_camera(left[0], new)
+                self._decide("reattached", was=left[0], now=new, counts=n)
+                notes.append(f"{n} hand count(s) made when this camera was called {left[0]} "
+                             f"count again, as {new}.")
+                self._save()
+        return notes
+
+    def marked(self) -> bool:
+        """A hand count on footage showing RetailNext's own line: no drawing is shown over it."""
+        return self.manual() and bool(self.state.get("marks"))
+
     def period(self) -> tuple[datetime | None, datetime | None]:
         """The footage's clock period, from its name."""
         return self._period()
@@ -733,7 +815,9 @@ class Wizard:
     def set_named_cameras(self, existing: list[dict[str, Any]], tiles: list[dict[str, Any]],
                           chosen: list[dict[str, Any]]) -> None:
         """Cameras of footage that shows the sensor's line: a name per picture, no drawing
-        needed. A saved drawing of the picture, if any, is still used to show the line."""
+        needed. A saved drawing of the picture (only ever the store's own: see Setup.store)
+        keeps the line's position for the learning examples, but is not drawn over
+        RetailNext's own line (see marked())."""
         drawn = {c["picture"]: c for c in existing
                  if c.get("picture") is not None and not c.get("problem")}
         cams: list[dict[str, Any]] = []
@@ -754,6 +838,11 @@ class Wizard:
         if len(set(names)) != len(names):
             raise WizardError("Two cameras have the same name.")
         with self._lock:
+            before = {c["picture"]: c["sensor"] for c in self.state["cameras"]}
+            for c in cams:  # a picture's camera renamed: its hand counts go with it
+                old = before.get(c["picture"])
+                if old and old != c["sensor"] and old not in names:
+                    self._rename_camera(old, c["sensor"])
             self.state["cameras"] = cams
             store = self.state["store"]
             if not store["code"]:
@@ -1257,9 +1346,8 @@ class Wizard:
             raise WizardError(f"could not read the video at {t:.1f} s")
         return frames[0].image
 
-    @staticmethod
-    def _draw_geometry(img: Image, g: dict[str, Any]) -> None:
-        if not g["line"]:
+    def _draw_geometry(self, img: Image, g: dict[str, Any]) -> None:
+        if not g["line"] or self.marked():  # RetailNext's own line is in the picture already
             return
         if g["mask"]:
             shade = img.copy()

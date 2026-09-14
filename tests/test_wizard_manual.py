@@ -36,12 +36,60 @@ def manual(two_tile_video: dict[str, Any], tmp_path: Path) -> Wizard:
 
 def test_cameras_are_named_without_drawing(manual: Wizard) -> None:
     (cam,) = manual.state["cameras"]
-    assert cam["sensor"] == "CN-9-PB1" and cam["config"]  # a saved drawing still shows the line
+    assert cam["sensor"] == "CN-9-PB1" and cam["site"] == "SYN"
+    assert cam["config"] and manual.marked()  # kept for the line's position, but not drawn
     assert manual.state["store"]["code"] == "SYN"
     with pytest.raises(WizardError, match="Name the camera"):
         manual.set_named_cameras([], [{"x0": 0}], [{"picture": 0, "name": " "}])
     with pytest.raises(WizardError, match="nothing to run"):
         manual.start()
+
+
+def test_footage_from_retailnext_takes_its_store_and_cameras(manual: Wizard) -> None:
+    manual.manual_add("CN-9-PB1", 21.0, "in")
+    manual.manual_watched("CN-9-PB1", 0.0, 60.0)
+    notes = manual.use_download({"subscription": "gazman", "code": "392",
+                                 "name": "392 Perri Cutten Armadale",
+                                 "cameras": ["Armadale_Entrance", "Back_Door"]})
+    store = manual.state["store"]
+    assert (store["code"], store["name"]) == ("392", "Perri Cutten Armadale")  # no code twice
+    (cam,) = manual.state["cameras"]
+    assert (cam["sensor"], cam["site"], cam["config"]) == ("Armadale_Entrance", "392", None)
+    assert [c["camera"] for c in manual.state["manual"]["counts"]] == ["Armadale_Entrance"]
+    assert "Armadale_Entrance" in manual.state["manual"]["watched"]  # the counts kept, moved
+    assert "a camera of store SYN" in notes[-1]
+    assert manual.state["decisions"][-1]["action"] == "corrected"
+    assert manual.use_download({"code": "392", "cameras": ["Armadale_Entrance"]}) == []
+
+
+def test_only_the_footages_own_store_drawings_are_offered(two_tile_video: dict[str, Any]) -> None:
+    s = Setup(two_tile_video["video"], two_tile_video["dir"])
+    assert {c["site"] for c in s.existing()} == {"SYN"}
+    s.store = ("392", "392 Perri Cutten Armadale")  # footage known to be from store 392
+    assert s.existing() == []
+    s.store = ("syn", "")  # its own store's drawings, however the site was written
+    assert {c["site"] for c in s.existing()} == {"SYN"}
+
+
+def test_a_renamed_camera_keeps_its_hand_counts(manual: Wizard) -> None:
+    manual.manual_add("CN-9-PB1", 21.0, "in")
+    manual.manual_watched("CN-9-PB1", 0.0, 30.0)
+    tiles = [c["tile"] for c in manual.state["cameras"]]
+    manual.set_named_cameras([], tiles, [{"picture": 0, "name": "Armadale_Entrance"}])
+    assert [c["camera"] for c in manual.state["manual"]["counts"]] == ["Armadale_Entrance"]
+    assert list(manual.state["manual"]["watched"]) == ["Armadale_Entrance"]
+
+
+def test_counts_left_under_an_old_name_come_back(manual: Wizard) -> None:
+    manual.manual_add("CN-9-PB1", 21.0, "in")
+    manual.manual_watched("CN-9-PB1", 0.0, 30.0)
+    manual.state["cameras"][0].update(sensor="Armadale_Entrance")  # renamed by an older version
+    assert manual.tidy_on_open(pictures=2) == []  # two pictures: whose counts is not known
+    notes = manual.tidy_on_open(pictures=1)
+    assert notes == [("1 hand count(s) made when this camera was called CN-9-PB1 count again, "
+                      "as Armadale_Entrance.")]
+    assert manual.manual_summary()["cameras"][0]["in"] == 1
+    assert manual.state["decisions"][-1]["action"] == "reattached"
 
 
 def test_hand_count_and_report(manual: Wizard, tmp_path: Path) -> None:

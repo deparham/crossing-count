@@ -339,7 +339,11 @@ ENTER.footage = async (folder) => {
 };
 async function openVideo(path) {
   msg("Opening the video and finding its cameras…");
-  try { setState(await api("/api/open", { path })); msg(""); W.hcam = null; go(nextKey()); }
+  try {
+    const r = await api("/api/open", { path });
+    setState(r); W.hcam = null; go(nextKey());
+    msg((r.notes || []).join(" "), (r.notes || []).length ? "warn" : undefined);  // what was corrected
+  }
   catch (e) { msg(e.message, "err"); }
 }
 // ---------- footage from RetailNext ----------
@@ -447,7 +451,7 @@ function showNames() {
   const current = Object.fromEntries(W.st.cameras.map((c) => [c.picture, c.sensor]));
   $("names").innerHTML = W.st.pictures.map((p, i) => {
     const drawn = W.drawn && W.drawn.pictures[i] && W.drawn.pictures[i].configs[0];
-    const name = current[i] || (drawn ? drawn.sensor : "");
+    const name = current[i] || (drawn ? drawn.sensor : "") || ((W.drawn && W.drawn.suggested) || [])[i] || "";
     const include = W.st.cameras.length ? i in current : true;
     return `<figure><img src="${pic(i)}" alt="Picture ${i + 1}"><label>Camera name <input type="text" data-pic="${i}" value="${esc(name)}" placeholder="e.g. RW-128-PB1"></label>` +
       `<label style="flex-direction:row;align-items:center;gap:6px" class="muted"><input type="checkbox" data-inc="${i}" ${include ? "checked" : ""}> Count this camera</label></figure>`;
@@ -835,7 +839,7 @@ function drawHand() {
   const sc = Math.max(0.5, Math.min(2.2, (HC.parentElement.clientWidth - 4) / w, (window.innerHeight - 280) / h));
   if (HC.width !== Math.round(w * sc)) { HC.width = Math.round(w * sc); HC.height = Math.round(h * sc); }
   if (V.readyState >= 2) hctx.drawImage(V, t.x0, t.y0, w, h, 0, 0, HC.width, HC.height);
-  overlay(hctx, g, sc);
+  if (!W.st.marks) overlay(hctx, g, sc);  // on marked footage RetailNext's own line is already there
   const f = W.flash;
   if (f && performance.now() < f.until) {
     hctx.font = "bold 46px system-ui, sans-serif"; hctx.lineWidth = 6; hctx.strokeStyle = "rgba(0,0,0,.7)";
