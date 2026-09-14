@@ -199,6 +199,37 @@ detector: on a store it never saw it found 28 of 234 heads, where the current
 one found 166. Most frames were marked footage, and it learned the sensor's
 height bubbles rather than heads. It is not used.
 
+## Finalised validations and the audit log
+
+**Finalise** on the report page gives a validation an ID, `CC-VAL-<year>-<computer>-<number>`
+(the computer's four characters keep a team's IDs apart), and keeps it in
+`validations/<ID>/` in the data folder, never changed again:
+
+- `manifest.json`: everything needed to reproduce and trust the result: CrossingCount's
+  and its libraries' versions, the engines' versions, the Ground Truth Specification
+  version and what counted as a person, the footage's name, fingerprint and SHA-256 and
+  its clock, each camera's line and mask, the system's numbers with their source and a
+  checksum, the detector, its weights' SHA-256 and settings (automatic counts), the
+  computer (OS, processor, memory, GPU), the audit log's latest hash, and the SHA-256 of
+  every other file in the folder;
+- `result.json`, `intervals.csv` (verified against the system, interval by interval),
+  `crossings.csv` (every verified crossing, and every unsure one marked not counted),
+  `decisions.json` and the report as it was made.
+
+The files are read-only, and the **Validation runs** page (header) checks every one
+against its manifest each time it opens. A finalised validation refuses any change; to
+correct it, **Start a new version**: the finalised one stays as it was, and the new one
+gets its own ID when finalised, naming the one it replaces. With a shared folder set,
+finalised runs are copied to `<shared>/runs/<ID>/`.
+
+**The audit log** (`audit/audit.jsonl`) records every meaningful action: answers, crossings
+added and removed, counts by hand, the traffic, cameras and store details, the rules, the
+system's numbers, reports made, finalising and new versions: when, who (the name typed and
+the computer's login), on which footage, the value before and after. Each entry carries
+the SHA-256 of the one before, so a changed, removed or inserted entry breaks the chain,
+and the Validation runs page says where. Names are typed, not accounts: the log shows what
+was done under which name, not proof of who sat at the computer.
+
 ## Sensor results: how far the counting system is from the truth
 
 Most people counters, RetailNext among them, give a count per interval, not the

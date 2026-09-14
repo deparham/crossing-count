@@ -8,6 +8,7 @@ child processes, and their progress is read from what they print.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import pickle
@@ -21,13 +22,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Concatenate, ParamSpec, TypeVar
 
 import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from . import __copyright__, paths, sensors, validation
+from . import __copyright__, auditlog, paths, provenance, runs, sensors, validation
 from . import video as vid
 from .candidates import MISS_KIND
 from .config import bind, load_config
@@ -378,6 +379,19 @@ def pipeline_commands(w: Wizard) -> list[list[str]]:
 
 # ---- the count ---------------------------------------------------------------------------
 
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def _open_only(fn: Callable[Concatenate[Wizard, P], R]) -> Callable[Concatenate[Wizard, P], R]:
+    """A change a finalised validation refuses: it is corrected in a new version (runs.py)."""
+    @functools.wraps(fn)
+    def wrapper(self: Wizard, /, *args: P.args, **kwargs: P.kwargs) -> R:
+        self._check_open()
+        return fn(self, *args, **kwargs)
+    return wrapper
+
+
 class Wizard:
     """One video's guided count, saved on every change to runs/<video>/wizard/state.json."""
 
@@ -393,6 +407,7 @@ class Wizard:
         self.dir = self.run_dir / "wizard"
         self.path = self.dir / "state.json"
         self.stores_path = root / "runs" / "stores.json"
+        self.root = root  # the data folder: runs, the audit log, finalised validations
         self._commands = commands or pipeline_commands
         self._lock = threading.RLock()
         self._job: _Job | None = None
@@ -466,6 +481,7 @@ class Wizard:
 
     # ---- steps before counting ---------------------------------------------------------
 
+    @_open_only
     def set_cameras(self, existing: list[dict[str, Any]], tiles: list[dict[str, Any]]) -> None:
         """Use the saved drawing of each picture (the newest, if a picture has several)."""
         chosen: dict[int, dict[str, Any]] = {}
@@ -482,9 +498,12 @@ class Wizard:
         if len(set(names)) != len(names):
             raise WizardError("Two pictures have drawings with the same camera name; rename one.")
         with self._lock:
+            before = [c["sensor"] for c in self.state["cameras"]]
             self.state["cameras"] = [
                 {"picture": i, "sensor": c["sensor"], "site": c["site"], "config": c["path"],
                  "tile": tiles[i]} for i, c in sorted(chosen.items())]
+            self._decide("cameras", before=before, after={
+                c["sensor"]: c["config"] for c in self.state["cameras"]})
             store = self.state["store"]
             if not store["code"]:
                 store["code"] = next(iter(chosen.values()))["site"]
@@ -492,13 +511,17 @@ class Wizard:
                 store["name"] = self._stores().get(store["code"], "")
             self._save()
 
+    @_open_only
     def set_direction(self, direction: str) -> None:
         if direction not in CHOICES:
             raise WizardError("Choose Traffic In, Traffic Out or both.")
         with self._lock:
+            if self.state["direction"] != direction:
+                self._decide("traffic", before=self.state["direction"], after=direction)
             self.state["direction"] = direction
             self._save()
 
+    @_open_only
     def set_rules(self, children: str, staff: str) -> None:
         """What counts as a person (Ground Truth Specification, section 4), set to match
         what the sensor is set up to count."""
@@ -510,6 +533,7 @@ class Wizard:
             self._decide("rules", children=children, staff=staff)
             self._save()
 
+    @_open_only
     def set_sensor(self, values: dict[str, int | None] | None = None,
                    intervals: dict[str, dict[str, int | None]] | None = None,
                    cameras: dict[str, dict[str, int | None]] | None = None) -> None:
@@ -557,6 +581,7 @@ class Wizard:
             src = self.state.get("sensor_source")
             if src and src.get("numbers") != self._sensor_numbers():
                 self.state["sensor_source"] = None  # changed by hand: no longer RetailNext's own
+            self._decide("system_numbers_set", after=self._sensor_numbers())
             self._save()
 
     def _sensor_numbers(self) -> dict[str, Any]:
@@ -577,6 +602,7 @@ class Wizard:
             raise WizardError(str(exc)) from exc
         return self.use_sensor(data)
 
+    @_open_only
     def use_sensor(self, data: sensors.SensorData) -> list[str]:
         """A counting system's numbers in the normalised form (sensors.py), whatever the
         system: the cameras' sum per 15-minute interval, and each camera's own. Every
@@ -645,6 +671,7 @@ class Wizard:
             self._save()
         return warnings
 
+    @_open_only
     def use_download(self, info: dict[str, Any]) -> list[str]:
         """Footage downloaded from RetailNext (retailnext.store_summary): its store is known,
         so it is used, and a camera filed under another store's drawing is corrected: named
@@ -708,6 +735,8 @@ class Wizard:
         earlier name (a rename did not move them) go back to the camera, when the footage has
         one picture and so its counts are that camera's."""
         notes: list[str] = []
+        if self.state.get("final"):  # a finalised validation is never changed
+            return notes
         with self._lock:
             m, cams = self.state["manual"], self.state["cameras"]
             names = {c["sensor"] for c in cams}
@@ -726,6 +755,45 @@ class Wizard:
     def marked(self) -> bool:
         """A hand count on footage showing RetailNext's own line: no drawing is shown over it."""
         return self.manual() and bool(self.state.get("marks"))
+
+    def _check_open(self) -> None:
+        final = self.state.get("final")
+        if final:
+            raise WizardError(f"This validation is finalised as {final['id']} and can no longer "
+                              f"change. To correct it, start a new version: the finalised one "
+                              f"stays as it is.")
+
+    def finalise(self, shared: Path | None = None) -> dict[str, Any]:
+        """Give this validation an ID and keep it, with everything needed to reproduce it,
+        in a folder that is never changed again (runs.py). Its report must be made first."""
+        with self._lock:
+            self._check_open()
+            try:
+                run = runs.write(self, self.root, shared)
+            except runs.RunError as exc:
+                raise WizardError(str(exc)) from exc
+            self.state["final"] = {"id": run["validation_id"], "at": run["finalised_at"],
+                                   "folder": run["folder"],
+                                   "manifest_sha256": run["manifest_sha256"]}
+            self._decide("finalised", after={"validation_id": run["validation_id"],
+                                             "manifest_sha256": run["manifest_sha256"]})
+            self._save()
+            return run
+
+    def new_version(self) -> None:
+        """Open a finalised validation again, as a new version, to correct it. The finalised
+        one stays exactly as it was; the new one names it, and gets its own ID when it is
+        finalised."""
+        with self._lock:
+            final = self.state.get("final")
+            if not final:
+                raise WizardError("This validation is not finalised.")
+            self._archive(f"finalised {final['id']}")
+            self.state.pop("final")
+            self.state.pop("result", None)
+            self.state.update(supersedes=final["id"], report=None)
+            self._decide("new_version", before=final["id"])
+            self._save()
 
     def period(self) -> tuple[datetime | None, datetime | None]:
         """The footage's clock period, from its name."""
@@ -875,6 +943,7 @@ class Wizard:
                              "sensor": c["sensor"], "accuracy": c["accuracy"]} for c in cams],
                 "notes": notes}
 
+    @_open_only
     def set_model(self, model: str) -> None:
         if model not in MODELS:
             raise WizardError(f"unknown detector {model!r}")
@@ -882,15 +951,21 @@ class Wizard:
             self.state["model"] = model
             self._save()
 
+    @_open_only
     def set_store(self, name: str | None = None, code: str | None = None,
                   location: str | None = None, report_date: str | None = None,
                   operator: str | None = None) -> None:
         with self._lock:
             store = self.state["store"]
+            was = dict(store)
             for key, value in (("name", name), ("code", code), ("location", location),
                                ("report_date", report_date), ("operator", operator)):
                 if value is not None:
                     store[key] = value.strip()
+            changed = [k for k in store if store.get(k) != was.get(k)]
+            if changed:
+                self._decide("store_details", before={k: was.get(k) for k in changed},
+                             after={k: store.get(k) for k in changed})
             if store["name"] and store["code"]:  # remembered for the next video of this store
                 stores = self._stores()
                 stores[store["code"]] = store["name"]
@@ -902,18 +977,25 @@ class Wizard:
     def manual(self) -> bool:
         return self.state.get("mode") == "manual"
 
+    @_open_only
     def set_mode(self, mode: str) -> None:
         if mode not in ("auto", "manual"):
             raise WizardError("Choose automatic or manual counting.")
         with self._lock:
+            if self.state.get("mode") != mode:
+                self._decide("mode", before=self.state.get("mode"), after=mode)
             self.state["mode"] = mode
             self._save()
 
+    @_open_only
     def set_marks(self, marks: bool) -> None:
         with self._lock:
+            if self.state.get("marks") != bool(marks):
+                self._decide("marked_footage", before=self.state.get("marks"), after=bool(marks))
             self.state["marks"] = bool(marks)
             self._save()
 
+    @_open_only
     def set_named_cameras(self, existing: list[dict[str, Any]], tiles: list[dict[str, Any]],
                           chosen: list[dict[str, Any]]) -> None:
         """Cameras of footage that shows the sensor's line: a name per picture, no drawing
@@ -945,6 +1027,7 @@ class Wizard:
                 old = before.get(c["picture"])
                 if old and old != c["sensor"] and old not in names:
                     self._rename_camera(old, c["sensor"])
+            self._decide("cameras", before=list(before.values()), after=names)
             self.state["cameras"] = cams
             store = self.state["store"]
             if not store["code"]:
@@ -955,6 +1038,7 @@ class Wizard:
                 store["name"] = self._stores().get(store["code"], "")
             self._save()
 
+    @_open_only
     def manual_add(self, sensor: str, t: float, direction: str) -> dict[str, Any]:
         self._camera(sensor)
         if direction not in self.dirs():
@@ -968,18 +1052,23 @@ class Wizard:
             m["next_id"] += 1
             m["counts"].append(c)
             m["done"] = False
+            self._decide("hand_count_added", after=dict(c))
             self._save()
             return c
 
+    @_open_only
     def manual_delete(self, count_id: int) -> None:
         with self._lock:
             m = self.state["manual"]
             kept = [c for c in m["counts"] if c["id"] != count_id]
             if len(kept) == len(m["counts"]):
                 raise WizardError("There is no such count.")
+            gone = next(c for c in m["counts"] if c["id"] == count_id)
             m["counts"], m["done"] = kept, False
+            self._decide("hand_count_removed", before=dict(gone))
             self._save()
 
+    @_open_only
     def manual_undo(self, sensor: str) -> dict[str, Any] | None:
         """Remove the count most recently added on this camera."""
         with self._lock:
@@ -991,6 +1080,8 @@ class Wizard:
             return dict(last)
 
     def manual_watched(self, sensor: str, start: float, end: float) -> None:
+        if self.state.get("final"):
+            return  # the player still reports what was watched: nothing to keep once finalised
         self._camera(sensor)
         dur = float(self.state["duration_s"])
         a, b = max(0.0, min(start, end)), min(dur, max(start, end))
@@ -1008,13 +1099,17 @@ class Wizard:
                 min(float(self.state["duration_s"]), max(0.0, t)), 2)
             self._save()
 
+    @_open_only
     def manual_done(self, done: bool = True) -> None:
         with self._lock:
             self.state["manual"]["done"] = bool(done)
             if done:  # the definition this count was finished under
                 self.state["manual"]["specification"] = GROUND_TRUTH_SPEC
+            self._decide("counting_finished" if done else "counting_reopened",
+                         after={"counts": len(self.state["manual"]["counts"])})
             self._save()
 
+    @_open_only
     def recount(self) -> None:
         """Start a second, independent count by hand of the same footage, by someone else:
         the first is kept in the history folder (and in the gold set, if it was kept there),
@@ -1083,9 +1178,17 @@ class Wizard:
         return str(self.state["store"].get("operator") or "")
 
     def _decide(self, action: str, **info: Any) -> None:
-        """The audit trail of the current check: every decision, who made it and when."""
+        """The audit trail of this validation: every decision, who made it and when. It also
+        goes to the computer's audit log (auditlog.py), which shows if it is ever edited."""
         self.state["decisions"].append({"at": _now(), "by": self._reviewer(), "action": action,
                                         **info})
+        auditlog.append(action, user=self._reviewer(),
+                        obj={"video": self.state["filename"],
+                             "fingerprint": self.state["fingerprint"],
+                             "store": self.state["store"].get("code"),
+                             "validation": (self.state.get("final") or {}).get("id")},
+                        before=info.pop("before", None), after=info.pop("after", None),
+                        reason=info.pop("reason", None), root=self.root, **info)
 
     def _archive(self, reason: str) -> Path | None:
         """Keep the current check (or count by hand), and a copy of its report, before it is
@@ -1128,6 +1231,7 @@ class Wizard:
 
     # ---- counting ----------------------------------------------------------------------
 
+    @_open_only
     def start(self, confirm: bool = False) -> None:
         """Run the automatic count. Running a checked count again needs confirm: the check
         starts afresh, and the old one is kept in the history folder first."""
@@ -1274,6 +1378,7 @@ class Wizard:
         out.sort(key=lambda r: (r["start"], r["picture"]))
         return out
 
+    @_open_only
     def answer(self, item_id: str, answer: str | None, people: int = 1) -> None:
         """The checker's answer. A question is about a moment, not one person: "yes" with
         people above 1 means a group crossed together there, each of them counted."""
@@ -1297,6 +1402,7 @@ class Wizard:
                          item={k: item[k] for k in ("kind", "why", "camera", "t", "direction")})
             self._save()
 
+    @_open_only
     def add(self, sensor: str, t: float, direction: str, range_id: str | None = None) -> None:
         self._camera(sensor)
         if direction not in self.dirs():
@@ -1311,6 +1417,7 @@ class Wizard:
                          range=range_id)
             self._save()
 
+    @_open_only
     def remove_added(self, index: int) -> None:
         with self._lock:
             if not 0 <= index < len(self.state["added"]):
@@ -1319,6 +1426,7 @@ class Wizard:
             self._decide("remove_added", entry=removed)
             self._save()
 
+    @_open_only
     def set_watch(self, mode: str | None) -> None:
         if mode not in ("doing", "done", "skipped", None):
             raise WizardError("watch mode must be doing, done or skipped")
@@ -1327,6 +1435,7 @@ class Wizard:
             self._decide("watch", mode=mode)
             self._save()
 
+    @_open_only
     def mark_watched(self, range_id: str, done: bool = True) -> None:
         with self._lock:
             watched = [r for r in self.state["watched"] if r != range_id]
@@ -1731,6 +1840,7 @@ class Wizard:
             "thumbs": thumbs, "method": method,
         }
 
+    @_open_only
     def make_report(self, logo: Path | None = None) -> Path:
         with self._lock:
             c = self.counts()
@@ -1760,5 +1870,7 @@ class Wizard:
             build_report(data, out, logo)
             self.state["report"] = {"path": str(out), "made_at": _now()}
             self.state["result"] = self.result()  # for putting validations together
+            self._decide("report_made", after={"file": out.name,
+                                               "sha256": provenance.file_sha256(out)})
             self._save()
             return out

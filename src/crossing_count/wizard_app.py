@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 from starlette.routing import Mount
 
-from . import gold, paths, releases, sensors, updates, validation
+from . import auditlog, gold, paths, releases, runs, sensors, updates, validation
 from . import overlay as ov
 from . import retailnext as rn
 from .examples import check_folder
@@ -65,6 +65,10 @@ class GoldSaveIn(BaseModel):
 
 class GoldFreezeIn(BaseModel):
     note: str = ""
+
+
+class RunRef(BaseModel):
+    id: str  # a validation's ID, CC-VAL-...
 
 
 class CsvIn(BaseModel):
@@ -272,9 +276,10 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         except (WizardError, ValueError, OSError, FFmpegError) as exc:
             raise HTTPException(400, f"Could not open {path.name}: {exc}") from exc
         name = paths.load_settings().get("operator")
-        if name and not w.state["store"].get("operator"):
+        final = w.state.get("final")  # a finalised validation opens as it was kept
+        if name and not w.state["store"].get("operator") and not final:
             w.set_store(operator=str(name))
-        notes = identify_download(w, s, path) + w.tidy_on_open(len(s.tiles))
+        notes = [] if final else identify_download(w, s, path) + w.tidy_on_open(len(s.tiles))
         draw = f"/draw/{uuid.uuid4().hex[:10]}"
         app.router.routes[:] = [r for r in app.router.routes
                                 if not (isinstance(r, Mount) and r.path.startswith("/draw/"))]
@@ -814,6 +819,43 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     def sensors_overview(system: str | None = None) -> dict[str, Any]:
         """Every validation's result for one counting system, put together."""
         return validation.overview(data(), shared(), system)
+
+    @app.post("/api/finalise")
+    def finalise() -> dict[str, Any]:
+        """Give this validation its ID and keep it, locked (runs.py)."""
+        w = wiz()
+        try:
+            got = w.finalise(shared())
+        except WizardError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {**public(), "run": got}
+
+    @app.post("/api/new-version")
+    def new_version() -> dict[str, Any]:
+        return run(wiz().new_version)
+
+    @app.get("/runs", response_class=HTMLResponse)
+    @app.get("/runs/", response_class=HTMLResponse)
+    def runs_page() -> str:
+        return (WEB_DIR / "runs.html").read_text(encoding="utf-8")
+
+    @app.get("/api/runs")
+    def runs_list() -> dict[str, Any]:
+        """Every finalised validation, checked against its manifest; and the audit log."""
+        root = data()
+        return {"runs": runs.listing(root), "audit": auditlog.verify(root),
+                "recent": auditlog.recent(40, root)}
+
+    @app.post("/api/runs/reveal")
+    def runs_reveal(r: RunRef) -> dict[str, bool]:
+        folder = runs.runs_dir(data()) / Path(r.id).name
+        if not runs.ID_RE.match(folder.name) or not folder.is_dir():
+            raise HTTPException(404, "There is no such validation on this computer.")
+        if sys.platform == "darwin":
+            subprocess.run(["/usr/bin/open", str(folder)], check=False)
+        elif sys.platform == "win32":
+            subprocess.run(["explorer", str(folder)], check=False)
+        return {"ok": True}
 
     @app.get("/api/gold/current")
     def gold_current() -> dict[str, Any]:

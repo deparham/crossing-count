@@ -42,5 +42,7 @@ sites/
 src/crossing_count/build.json
 src/crossing_count/builtin.dat
 
-# Gold set: counts of a retailer's footage
+# Gold set, finalised validations and the audit log: counts of a retailer's footage
 gold/
+validations/
+audit/

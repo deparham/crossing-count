@@ -159,6 +159,7 @@
   <div class="tools">
     <a href="#" id="shareLink" hidden>Colleagues' apps</a>
     <a href="#" id="updToken" hidden>Get update notices</a>
+    <a href="/runs/" target="_blank" rel="noopener">Validation runs</a>
     <a href="/sensors/" target="_blank" rel="noopener">Sensor results</a>
     <a href="/gold/" target="_blank" rel="noopener">Gold set</a>
     <a href="/label/" target="_blank" rel="noopener">Mark heads (train the detector)</a>
@@ -369,6 +370,7 @@
     <div id="logoInfo" class="muted" style="margin-top:6px"></div>
     <div style="margin-top:12px"><button id="make" class="primary">Make PowerPoint</button></div>
     <div id="made" style="margin-top:12px"></div>
+    <div id="finalBox" class="sub" hidden></div>
   </div>
   <div class="card" id="goldCard" hidden>
     <div class="big">Gold set</div>
@@ -433,7 +435,7 @@ async function api(path, body) {
 }
 function setState(s) {
   W.st = s;
-  $("vname").textContent = s ? s.filename : "No footage chosen yet";
+  $("vname").textContent = s ? s.filename + (s.final ? ` · finalised as ${s.final.id}` : "") : "No footage chosen yet";
   if (s && W.videoKey !== s.fingerprint) { W.videoKey = s.fingerprint; V.src = `/video?v=${s.fingerprint}`; }
   renderSteps();
 }
@@ -1287,7 +1289,7 @@ ENTER.report = async () => {
   $("numbers").innerHTML += `<ul class="checks">${(c.checks || []).map((k) =>
     `<li><b class="${k.ok === false ? "err" : k.ok ? "ok" : "muted"}">${k.ok === false ? "✗" : k.ok ? "✓" : "–"}</b>${esc(k.name)}${k.detail ? ` <span class="muted">(${esc(k.detail)})</span>` : ""}</li>`).join("")}</ul>`;
   $("logoInfo").textContent = s.logo ? `Logo: ${s.logo}` : "No logo file found (assets/logo.png): the report header will show the company name as text.";
-  showGold();
+  showGold(); renderFinal();
   W.settings = await api("/api/settings").catch(() => ({ examples_dir: "" }));
   $("exDir").value = W.settings.examples_dir || "";
   showExamples(s.examples);
@@ -1331,6 +1333,32 @@ $("goldDone").addEventListener("click", async (e) => {
   if (!confirm("Start a second count by hand of this footage, by someone else?\n\nThe first count is kept (in the gold set and the history folder) and is not shown. The second person types their own name on the report page.")) return;
   try { setState(await api("/api/gold/recount", {})); $("goldNotes").value = ""; go("hand"); } catch (err) { msg(err.message, "err"); }
 });
+function renderFinal() {  // finalise: an ID, and a folder that never changes again
+  const s = W.st, f = s && s.final, box = $("finalBox");
+  box.hidden = !s || (!s.report && !f);
+  if (box.hidden) return;
+  box.innerHTML = f
+    ? `<b>Finalised as ${esc(f.id)}</b> <span class="muted">on ${esc(new Date(f.at).toLocaleString("en-AU"))}. It can no longer change: its folder keeps the manifest, the result, CSV files and the report, each with a checksum.</span>
+       <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><button id="finalShow">Show its folder</button><button id="newVersion">Start a new version</button></div>`
+    : `<b>Finalise this validation</b><div class="muted">Gives it an ID and keeps it, with everything needed to reproduce it, in a folder that is never changed again. A correction afterwards becomes a new version.${s.supersedes ? ` This is a new version of ${esc(s.supersedes)}.` : ""}</div>
+       <button id="finalise" class="primary" style="margin-top:8px">Finalise</button>`;
+}
+$("finalBox").addEventListener("click", async (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  try {
+    if (b.id === "finalise") {
+      if (!confirm("Finalise this validation? It gets an ID and can no longer change; a correction becomes a new version.")) return;
+      const r = await api("/api/finalise", {});
+      setState(r); renderFinal(); msg(`Finalised as ${r.run.validation_id}${r.run.shared ? ", and copied to the shared folder" : ""}.`, "ok");
+    } else if (b.id === "newVersion") {
+      if (!confirm("Start a new version to correct this validation? The finalised one stays as it is; the new one gets its own ID when you finalise it.")) return;
+      setState(await api("/api/new-version", {})); ENTER.report(); msg("A new version: correct what is needed, make the report, then finalise it.", "ok");
+    } else if (b.id === "finalShow") {
+      await api("/api/runs/reveal", { id: W.st.final.id });
+    }
+  } catch (err) { msg(err.message, "err"); }
+});
 function showExamples(ex) {
   $("exStatus").innerHTML = !ex ? ($("exDir").value.trim() ? "" : '<span class="muted">No examples folder set: learning examples will not be saved.</span>')
     : ex.status === "saving" ? '<span class="muted">Saving learning examples…</span>'
@@ -1351,7 +1379,7 @@ $("make").addEventListener("click", async () => {
     setState(await api("/api/store", { name: $("storeName").value, code: $("storeCode").value, location: $("storeLoc").value,
                                          report_date: $("repDate").value, operator: $("operator").value }));
     const r = await api("/api/report", {});
-    setState(r); $("made").innerHTML = madeHtml(r.path); msg(""); showExamples(r.examples);
+    setState(r); $("made").innerHTML = madeHtml(r.path); msg(""); showExamples(r.examples); renderFinal();
     while (W.st.examples && W.st.examples.status === "saving") {
       await new Promise((ok) => setTimeout(ok, 2000));
       const ex = (await api("/api/examples")).examples; W.st.examples = ex; showExamples(ex);

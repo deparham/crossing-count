@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CrossingCount · Validation runs</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f2f5f8; --panel: #ffffff; --panel2: #f3f6f9; --border: #dce3ea; --border2: #c9d3dc;
+    --text: #1b2536; --title: #101d3b; --muted: #637083; --accent: #1f9bb3; --soft: #e4f3f6;
+    --navy: #101d3b; --navy2: #1b2d55; --ok: #15803d; --warn: #b45309; --err: #c53030;
+    --shadow: 0 1px 2px rgba(16,29,59,.05), 0 6px 20px rgba(16,29,59,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #0b1222; --panel: #121b2e; --panel2: #18233a; --border: #243150; --border2: #30406a;
+      --text: #e4e9f1; --title: #f3f6fa; --muted: #92a0b5; --accent: #27a9c2; --soft: rgba(39,169,194,.14);
+      --ok: #3ecf8e; --warn: #f5b942; --err: #ff6b6b;
+      --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px rgba(0,0,0,.25);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+         background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+  header { display: flex; gap: 14px; align-items: center; padding: 12px 20px; color: #fff;
+           background: linear-gradient(100deg, var(--navy) 0%, var(--navy2) 100%); }
+  header b { font-size: 16px; } header b span { color: #5cc8dc; }
+  header .sep { width: 1px; height: 22px; background: rgba(255,255,255,.2); }
+  header h1 { font-size: 14px; margin: 0; font-weight: 500; }
+  main { padding: 20px; max-width: 1360px; margin: 0 auto; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px;
+          margin-bottom: 14px; box-shadow: var(--shadow); }
+  .big { font-size: 18px; font-weight: 650; color: var(--title); margin-bottom: 4px; }
+  .muted { color: var(--muted); } .ok { color: var(--ok); } .warn { color: var(--warn); } .err { color: var(--err); }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  code { font: 12px ui-monospace, Menlo, monospace; }
+  button { background: var(--panel); color: var(--text); border: 1px solid var(--border2); border-radius: 9px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  footer { text-align: center; font-size: 12px; margin: 24px 0 16px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header><b>Crossing<span>Count</span></b><span class="sep"></span><h1>Validation runs</h1></header>
+<main>
+  <div class="card">
+    <div class="big">Finalised validations</div>
+    <div class="muted">Each finalised validation has an ID and a folder that never changes: its manifest (software, rules, footage checksum, lines, the system's numbers and their source, detector and weights, the computer), the result, CSV files and the report. Every file is checked against the checksum in the manifest each time this page opens.</div>
+    <div class="scroll" style="margin-top:10px"><table id="runs"></table></div>
+  </div>
+  <div class="card">
+    <div class="big">Audit log</div>
+    <div id="audit" class="muted"></div>
+    <div class="scroll" style="margin-top:10px"><table id="recent"></table></div>
+  </div>
+</main>
+<footer>CrossingCount · © 2026 Parham Forozan. All rights reserved.</footer>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+function esc(x) { return String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`); return j;
+}
+const when = (iso) => (iso ? new Date(iso).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" }) : "");
+function integrity(r) {
+  if (r.problem) return `<span class="err">${esc(r.problem)}</span>`;
+  if (!r.intact) return `<span class="err">changed since finalised: ${[...r.changed, ...r.missing.map((m) => m + " (missing)")].map(esc).join(", ")}</span>`;
+  return r.audit_log_ok === false ? '<span class="warn">files intact; its audit-log entry is no longer in the log</span>' : '<span class="ok">intact</span>';
+}
+(async () => {
+  let G;
+  try { G = await api("/api/runs"); } catch (e) { $("audit").innerHTML = `<span class="err">${esc(e.message)}</span>`; return; }
+  $("runs").innerHTML = G.runs.length
+    ? `<tr><th>ID</th><th>Store</th><th>Footage from</th><th>Cameras</th><th>System</th><th>Verified / system</th><th>Status</th><th>By</th><th>Finalised</th><th>Files</th><th></th></tr>` +
+      G.runs.map((r) => `<tr><td><code>${esc(r.validation_id)}</code>${r.supersedes ? `<div class="muted" style="font-size:12px">replaces ${esc(r.supersedes)}</div>` : ""}</td>` +
+        `<td>${esc(r.store ? `${r.store.code} ${r.store.name || ""}` : "")}</td><td>${esc(when(r.clock_start))}</td><td>${(r.cameras || []).map(esc).join("<br>")}</td>` +
+        `<td>${esc(r.system || "")}</td><td>${r.verified ?? "–"} / ${r.system_count ?? "–"}</td><td>${esc(r.status || "")}${r.mode ? ` <span class="muted">(${r.mode === "manual" ? "by hand" : "checked"})</span>` : ""}</td>` +
+        `<td>${esc(r.operator || "")}</td><td>${esc(when(r.finalised_at))}</td><td>${integrity(r)}</td><td>${r.problem ? "" : `<button data-open="${esc(r.validation_id)}">Folder</button>`}</td></tr>`).join("")
+    : `<tr><td class="muted">None yet: finalise a validation on its report page.</td></tr>`;
+  const a = G.audit;
+  $("audit").innerHTML = a.intact
+    ? `<span class="ok">${a.entries} entries, the chain intact</span> (each entry carries the checksum of the one before, so a changed, removed or inserted entry shows).`
+    : `<span class="err">The chain breaks at line ${a.broken_at}: ${esc(a.problem)}.</span> Entries after it cannot be trusted as written.`;
+  $("recent").innerHTML = G.recent.length
+    ? `<tr><th>#</th><th>When</th><th>Who</th><th>What</th><th>Footage</th><th>Before</th><th>After</th></tr>` +
+      G.recent.map((e) => `<tr><td>${e.seq}</td><td>${esc(when(e.at))}</td><td>${esc(e.user || "")}<div class="muted" style="font-size:12px">${esc(e.login || "")}</div></td>` +
+        `<td>${esc(e.action)}</td><td class="muted">${esc(e.object ? e.object.video || "" : "")}</td>` +
+        `<td><code>${esc(e.before == null ? "" : JSON.stringify(e.before)).slice(0, 160)}</code></td><td><code>${esc(e.after == null ? "" : JSON.stringify(e.after)).slice(0, 160)}</code></td></tr>`).join("")
+    : "";
+  $("runs").addEventListener("click", async (ev) => {
+    const b = ev.target.closest("[data-open]");
+    if (b) { try { await api("/api/runs/reveal", { id: b.dataset.open }); } catch (err) { alert(err.message); } }
+  });
+})();
+</script>
+</body>
+</html>
