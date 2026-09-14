@@ -6,6 +6,7 @@ video and shown in a frame.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
@@ -44,6 +45,22 @@ class RunIn(BaseModel):
 
 EXPORT_POLL_S = 5.0  # how often to ask RetailNext whether an export is ready
 EXPORT_WAIT_S = 1800.0  # and for how long, before giving up
+
+
+class ForgetIn(BaseModel):
+    subscription: str
+
+
+def _stop_server() -> None:
+    """Close the app from its page. Everything is saved as it happens, so there is nothing
+    left to write; a count or download still running stops with it."""
+    os._exit(0)
+
+
+class ConnectIn(BaseModel):
+    subscription: str
+    access_key: str
+    secret_key: str  # kept in the credential store only; never sent back or logged
 
 
 class BusiestIn(BaseModel):
@@ -278,6 +295,36 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     @app.get("/api/retailnext")
     def retailnext_status() -> dict[str, Any]:
         return {"connected": bool(rn.subscriptions()), "subscriptions": rn.subscriptions()}
+
+    @app.post("/api/retailnext/connect")
+    def retailnext_connect(c: ConnectIn) -> dict[str, Any]:
+        """A brand not connected yet: its key, typed on the page, tried and then kept in this
+        computer's credential store. Only the brand's name comes back."""
+        try:
+            conn = rn.connect(c.subscription, c.access_key, c.secret_key)
+        except rn.RetailNextError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if cur.rn_nodes is not None:
+            cur.rn_nodes.pop(conn.subscription, None)  # a new key may see other stores
+        return {"subscription": conn.subscription, "subscriptions": rn.subscriptions()}
+
+    @app.post("/api/retailnext/forget")
+    def retailnext_forget(f: ForgetIn) -> dict[str, Any]:
+        """Remove a brand's key from this computer."""
+        try:
+            sub = rn.subscription_name(f.subscription)
+        except rn.RetailNextError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        rn.forget_connection(sub)
+        if cur.rn_nodes is not None:
+            cur.rn_nodes.pop(sub, None)
+        return {"subscriptions": rn.subscriptions()}
+
+    @app.post("/api/quit")
+    def quit_app() -> dict[str, Any]:
+        """Close CrossingCount from the page (after answering, so the page hears back)."""
+        threading.Timer(0.5, _stop_server).start()
+        return {"ok": True}
 
     @app.get("/api/retailnext/stores")
     def retailnext_stores(subscription: str | None = None) -> dict[str, Any]:

@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from crossing_count import retailnext as rn
 from crossing_count import video as vid
+from crossing_count import wizard_app
 from crossing_count.wizard_app import create_wizard_app
 
 
@@ -179,6 +180,20 @@ def test_every_connected_subscription_is_kept(credentials: dict[tuple[str, str],
     assert rn.subscriptions() == ["old", "gazman"] and (rn.SERVICE, "rag") not in credentials
 
 
+def test_a_key_from_the_page_is_kept_only_if_retailnext_accepts_it(
+        server: list[Any], credentials: dict[tuple[str, str], str]) -> None:
+    server.pop(0)
+    server.append(http_error(401, "401 bad password"))
+    with pytest.raises(rn.RetailNextError, match="refused the key") as e:
+        rn.connect("gazman", "fb38f55f-0000-11f1-997f-0000dea53117", "Abc]defAbcdefAbcdef")
+    assert "position 4" in str(e.value) and "Abc]def" not in str(e.value)
+    assert not credentials and rn.subscriptions() == []  # nothing kept
+    server.append({"nodes": [[{"uuid": "s1", "location_type": "store"}]]})
+    conn = rn.connect("https://gazman.cloud.retailnext.net", " AK ", "SK")
+    assert conn.subscription == "gazman" and rn.subscriptions() == ["gazman"]
+    assert rn.load_connection("gazman") == rn.Connection("gazman", "AK", "SK")
+
+
 def test_a_store_is_found_in_whichever_subscription_has_it() -> None:
     gazman = [{"uuid": "g1", "location_type": "store", "store_id": "GZ-001", "name": "Gazman One"}]
     assert rn.find_store_in({"rag": NODES, "gazman": gazman}, "GZ-001")[0] == "gazman"
@@ -310,6 +325,23 @@ def test_the_app_finds_the_busiest_time_and_downloads_it(monkeypatch: pytest.Mon
     footage.mkdir()
     client = TestClient(create_wizard_app(tmp_path, tmp_path / "runs", [footage]))
     assert client.get("/api/retailnext").json() == {"connected": True, "subscriptions": ["acme"]}
+    monkeypatch.setattr(rn, "connect", lambda sub, access, secret: CONN)
+    added = client.post("/api/retailnext/connect", json={
+        "subscription": "acme", "access_key": "AK-typed", "secret_key": "SK-typed"})
+    assert added.status_code == 200 and added.json()["subscription"] == "acme"
+    assert "SK-typed" not in added.text and "AK-typed" not in added.text  # never sent back
+    forgotten: list[str | None] = []
+    monkeypatch.setattr(rn, "forget_connection", lambda sub=None: forgotten.append(sub))
+    assert client.post("/api/retailnext/forget", json={"subscription": "Acme"}).status_code == 200
+    assert forgotten == ["acme"]
+    stopped: list[int] = []
+    monkeypatch.setattr(wizard_app, "_stop_server", lambda: stopped.append(1))
+    assert client.post("/api/quit").json() == {"ok": True}
+    for _ in range(50):
+        if stopped:
+            break
+        time.sleep(0.05)
+    assert stopped == [1]  # the app closes itself, after answering
     assert client.get("/api/retailnext/stores").json()["stores"] == [
         {"code": "CN-123", "name": "Tweed Heads CN-123", "subscription": "acme"}]
     assert [s["code"] for s in client.get(

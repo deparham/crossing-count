@@ -78,7 +78,8 @@
 </head>
 <body>
 <header><h1>Count wizard</h1><span id="vname" class="muted">No footage chosen yet</span>
-  <a href="/label/" target="_blank" rel="noopener" style="margin-left:auto;color:var(--accent)">Mark heads (train the detector)</a></header>
+  <a href="/label/" target="_blank" rel="noopener" style="margin-left:auto;color:var(--accent)">Mark heads (train the detector)</a>
+  <button id="quitApp" style="margin-left:12px" title="Close CrossingCount; everything is saved">Quit</button></header>
 <nav id="steps" aria-label="Steps"></nav>
 <main>
 
@@ -87,7 +88,7 @@
     <div class="big">Get footage from RetailNext</div>
     <div class="muted">Pick the store and the day: the tool finds the busiest stretch for the traffic you validate, then downloads it, clean for an automatic count, with RetailNext's marks for a count by hand.</div>
     <div class="grid2" style="margin-top:10px">
-      <label>Brand <select id="rnSub"></select></label>
+      <label>Brand <input id="rnSub" list="rnSubs" placeholder="e.g. rag, from rag.cloud.retailnext.net" autocomplete="off" spellcheck="false"></label>
       <label>Store <input id="rnStore" list="rnStores" placeholder="type the code or the name" autocomplete="off"></label>
       <label>Day <input type="date" id="rnDay"></label>
       <label>Length <select id="rnMinutes"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">1 hour</option></select></label>
@@ -95,6 +96,17 @@
       <label>Count <select id="rnMode"><option value="auto">Automatic (clean footage)</option><option value="manual">By hand (with RetailNext's marks)</option></select></label>
     </div>
     <datalist id="rnStores"></datalist>
+    <datalist id="rnSubs"></datalist>
+    <div id="rnBrands" class="muted" style="margin-top:6px"></div>
+    <div id="rnKey" hidden style="margin-top:10px;padding:10px;border:1px solid var(--line, #333);border-radius:8px">
+      <div id="rnKeyHint" class="muted"></div>
+      <div class="grid2" style="margin-top:8px">
+        <label>Access key <input id="rnAccess" autocomplete="off" spellcheck="false"></label>
+        <label>Secret key <input id="rnSecret" type="password" autocomplete="off" spellcheck="false"></label>
+      </div>
+      <button id="rnConnect" style="margin-top:8px">Connect</button>
+      <span class="muted">Kept in this computer's Keychain (Credential Manager on Windows), never in a file.</span>
+    </div>
     <button id="rnFind" class="primary" style="margin-top:10px">Find the busiest time</button>
     <div id="rnWindows"></div>
   </div>
@@ -351,20 +363,58 @@ async function openVideo(path) {
 }
 // ---------- footage from RetailNext ----------
 const RN_DIR = { in: "traffic in", out: "traffic out", both: "traffic in and out" };
+const rnSubName = (v) => v.trim().toLowerCase().replace(/^https?:\/\//, "").split("/")[0].split(".")[0];
 async function rnSetup() {
   let st;
   try { st = await api("/api/retailnext"); } catch (e) { return; }
-  $("rnCard").hidden = !st.connected;
-  if (!st.connected) return;
+  $("rnCard").hidden = false;  // asks for the brand; a brand not connected yet asks for its key
   if (!$("rnDay").value) $("rnDay").value = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
-  const sel = $("rnSub"), subs = st.subscriptions || [];
-  if ([...sel.options].map((o) => o.value).join() !== subs.join()) {
+  rnSubs(st.subscriptions || []);
+  if (!$("rnSub").value) {
     let last = "";
     try { last = localStorage.getItem("rnSub") || ""; } catch (e) { /* no storage here */ }
-    sel.innerHTML = subs.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
-    sel.value = subs.includes(last) ? last : subs[0];
+    $("rnSub").value = W.rnSubs.includes(last) ? last : (W.rnSubs[0] || "");
   }
-  rnStoresFor(sel.value);
+  rnBrand();
+}
+function rnSubs(subs) {
+  W.rnSubs = subs;
+  $("rnSubs").innerHTML = subs.map((s) => `<option value="${esc(s)}"></option>`).join("");
+  $("rnBrands").innerHTML = subs.length
+    ? "Brands connected on this computer: " + subs.map((s) => `${esc(s)} <a href="#" data-forget="${esc(s)}">remove</a>`).join(" · ")
+    : "No brand connected yet: type one above and enter its API key.";
+}
+$("rnBrands").addEventListener("click", async (e) => {
+  const a = e.target.closest("[data-forget]");
+  if (!a) return;
+  e.preventDefault();
+  const sub = a.dataset.forget;
+  if (!confirm(`Remove ${sub}'s API key from this computer? You can connect it again with its key.`)) return;
+  try {
+    const r = await api("/api/retailnext/forget", { subscription: sub });
+    if (W.rnStores) delete W.rnStores[sub];
+    rnSubs(r.subscriptions);
+    if (rnSubName($("rnSub").value) === sub) $("rnSub").value = "";
+    rnBrand(); msg(`${sub}'s key is no longer on this computer.`, "ok");
+  } catch (err) { msg(err.message, "err"); }
+});
+$("quitApp").addEventListener("click", async () => {
+  const busy = (W.st && W.st.job && W.st.job.status === "running") || $("rnJob");
+  if (!confirm(busy ? "A count or download is still running and will stop. Quit CrossingCount?" : "Quit CrossingCount? Everything is saved.")) return;
+  try { await api("/api/quit", {}); } catch (e) { /* it is closing */ }
+  document.body.innerHTML = '<p style="padding:48px;font:16px system-ui">CrossingCount is closed. Open it again from its icon.</p>';
+});
+function rnBrand() {  // a connected brand: its stores; one not connected yet: ask for its key
+  const sub = rnSubName($("rnSub").value);
+  const known = W.rnSubs.includes(sub);
+  $("rnKey").hidden = !sub || known;
+  if (!sub || !known) {
+    $("rnStores").innerHTML = "";
+    if (sub) $("rnKeyHint").textContent = `${sub} is not connected on this computer yet. Enter its API key (in RetailNext: Admin Settings > System Access Tokens; a key for Data is enough).`;
+    return;
+  }
+  try { localStorage.setItem("rnSub", sub); } catch (e) { /* no storage here */ }
+  rnStoresFor(sub);
 }
 async function rnStoresFor(sub) {  // only the chosen brand's stores
   W.rnStores = W.rnStores || {};
@@ -373,13 +423,25 @@ async function rnStoresFor(sub) {  // only the chosen brand's stores
     $("rnStores").innerHTML = W.rnStores[sub].map((s) => `<option value="${esc(s.code)}">${esc(s.name)}</option>`).join("");
   } catch (e) { msg(e.message, "err"); }
 }
-$("rnSub").addEventListener("change", () => {
-  try { localStorage.setItem("rnSub", $("rnSub").value); } catch (e) { /* no storage here */ }
-  $("rnStore").value = ""; $("rnWindows").innerHTML = ""; W.rnPick = null;
-  rnStoresFor($("rnSub").value);
-});
-const rnCode = (code) => (code.includes("/") ? code : `${$("rnSub").value}/${code}`);  // in the chosen brand
+$("rnSub").addEventListener("change", () => { $("rnStore").value = ""; $("rnWindows").innerHTML = ""; W.rnPick = null; rnBrand(); });
+async function rnConnect() {
+  const sub = rnSubName($("rnSub").value);
+  if (!$("rnAccess").value.trim() || !$("rnSecret").value.trim()) { msg("Enter both the access key and the secret key.", "warn"); return; }
+  $("rnConnect").disabled = true; msg("Trying the key with RetailNext…");
+  try {
+    const r = await api("/api/retailnext/connect", { subscription: sub, access_key: $("rnAccess").value, secret_key: $("rnSecret").value });
+    $("rnAccess").value = ""; $("rnSecret").value = "";
+    rnSubs(r.subscriptions); $("rnSub").value = r.subscription;
+    msg(`${r.subscription} connected. Its key is kept in this computer's credential store.`, "ok");
+    rnBrand();
+  } catch (e) { msg(e.message, "err"); }
+  finally { $("rnConnect").disabled = false; }
+}
+$("rnConnect").addEventListener("click", rnConnect);
+$("rnSecret").addEventListener("keydown", (e) => { if (e.key === "Enter") rnConnect(); });
+const rnCode = (code) => (code.includes("/") ? code : `${rnSubName($("rnSub").value)}/${code}`);  // in the chosen brand
 $("rnFind").addEventListener("click", async () => {
+  if (!W.rnSubs.includes(rnSubName($("rnSub").value))) { msg("Choose a connected brand first (or connect it with its API key).", "warn"); return; }
   const typed = $("rnStore").value.trim();
   const pick = { code: typed && rnCode(typed), date: $("rnDay").value, minutes: +$("rnMinutes").value, direction: $("rnDir").value };
   if (!typed || !pick.date) { msg("Pick the store and the day.", "warn"); return; }
@@ -509,7 +571,7 @@ ENTER.retail = () => {
   $("sensorInputs").innerHTML = html;
   const src = s.sensor_source;
   $("rnFetch").hidden = !s.retailnext;
-  $("rnStatus").innerHTML = !s.retailnext ? "To fill these in from RetailNext itself, connect once with <kbd>retailnext.py connect</kbd>."
+  $("rnStatus").innerHTML = !s.retailnext ? "To fill these in from RetailNext itself, connect the brand on the first page, under Get footage from RetailNext."
     : src ? `Fetched from RetailNext: ${esc(src.store)}, ${src.cameras.map(esc).join(" + ")}.` +
       (src.warnings.length ? ` <span class="warn">${src.warnings.map(esc).join(" ")}</span>` : " Every interval fully counted. Check them, then Next.")
     : "Fills in RetailNext's numbers for these cameras and this period.";

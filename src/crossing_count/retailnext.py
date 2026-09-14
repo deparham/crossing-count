@@ -132,6 +132,20 @@ def load_connection(subscription: str | None = None) -> Connection | None:
     return Connection(sub, str(data["access_key"]), str(data["secret_key"]))
 
 
+def connect(subscription: str, access_key: str, secret_key: str) -> Connection:
+    """Add a brand's key, from the page: tried against RetailNext first and kept only if
+    RetailNext accepts it. A refusal also says what looks wrong with the key."""
+    conn = Connection(subscription_name(subscription), clean_key(access_key),
+                      clean_key(secret_key))
+    if not conn.access_key or not conn.secret_key:
+        raise RetailNextError("Both the access key and the secret key are needed.")
+    try:
+        locations(conn, ["store"])
+    except RetailNextError as e:
+        raise RetailNextError(" ".join([str(e), *key_problems(conn)])) from None
+    return save_connection(conn.subscription, conn.access_key, conn.secret_key)
+
+
 def reconnect(subscription: str) -> Connection | None:
     """Connect a subscription whose key is already in the credential store: nothing to
     type. None if its key is not there."""
@@ -231,8 +245,7 @@ def request(conn: Connection, path: str, body: dict[str, Any]) -> Any:
                 raise RetailNextError(
                     f"RetailNext ({conn.base}) refused the key (HTTP {e.code})"
                     f"{f': {said}' if said else ''}. The key may be mistyped, swapped with the "
-                    f"secret, revoked, or for another subscription. 'retailnext.py check' "
-                    f"looks for the usual mistakes; 'retailnext.py connect' enters it again.") from None
+                    f"secret, revoked, or for another subscription.") from None
             if e.code >= 500 and not last:
                 time.sleep(2 ** attempt)
                 continue

@@ -36,6 +36,15 @@ cd crossing-count
 uv sync
 ```
 
+## Opening and closing it (no terminal needed)
+
+On the Mac, double-click **CrossingCount** in your Applications folder (drag it
+to the Dock for one click). It starts the app if needed and opens it in your
+browser; **Quit** at the top of the page closes it, and everything is saved as
+you go. `packaging/mac/build_launcher.sh` builds that launcher. RetailNext
+brands are connected and removed on the first page too: type the brand, and
+if it is not connected yet, enter its API key there.
+
 ## Easiest: the count wizard (`wizard.py`)
 
 ```bash
