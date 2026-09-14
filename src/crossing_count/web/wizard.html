@@ -49,6 +49,8 @@
   .checkgrid { display: grid; grid-template-columns: minmax(0, 1fr) 370px; gap: 16px; align-items: start; }
   @media (max-width: 960px) { .checkgrid { grid-template-columns: minmax(0, 1fr); } }
   canvas.player { display: block; background: #000; border-radius: 6px; max-width: 100%; }
+  .stage { position: relative; overflow: hidden; background: #000; border-radius: 6px; max-width: 100%; }
+  .stage canvas.player { position: relative; background: transparent; border-radius: 0; max-width: none; }
   #timeline { display: block; width: 100%; height: 26px; margin-top: 8px; cursor: pointer; border-radius: 3px; }
   .controls { display: flex; gap: 6px 10px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
   .controls button { padding: 3px 10px; }
@@ -190,7 +192,7 @@
 <section id="s-check" hidden>
   <div class="checkgrid">
     <div>
-      <canvas id="canvas" class="player" width="960" height="720" aria-label="The crossing being checked"></canvas>
+      <div class="stage" id="cstage"><canvas id="canvas" class="player" width="960" height="720" aria-label="The crossing being checked"></canvas></div>
       <div class="muted" style="margin-top:6px"><kbd>Space</kbd> play/pause · <kbd>R</kbd> replay · <kbd>←</kbd>/<kbd>→</kbd> 1 s · <kbd>↑</kbd>/<kbd>↓</kbd> speed · <kbd>Z</kbd> back · <span id="clock"></span></div>
     </div>
     <div class="card" id="panel"></div>
@@ -201,7 +203,7 @@
   <div class="checkgrid">
     <div>
       <div id="handCams" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"></div>
-      <canvas id="hcanvas" class="player" width="960" height="720" aria-label="The camera being counted"></canvas>
+      <div class="stage" id="hstage"><canvas id="hcanvas" class="player" width="960" height="720" aria-label="The camera being counted"></canvas></div>
       <canvas id="timeline" height="26" aria-label="Watched stretches and your counts; click to jump"></canvas>
       <div class="controls"><button id="hplay">Play</button><span class="muted">Speed</span><span id="speeds"></span><span id="hclock" class="muted"></span></div>
       <div class="muted" id="hkeys" style="margin-top:6px"></div>
@@ -242,6 +244,7 @@
 <video id="video" preload="auto" muted playsinline style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"></video>
 <div id="msg"></div>
 </main>
+<footer class="muted" style="text-align:center;font-size:12px;margin:24px 0 16px">CrossingCount · © 2026 Parham Forozan. All rights reserved.</footer>
 
 <script>
 "use strict";
@@ -707,13 +710,28 @@ function showDone() {
     <button id="toReport" class="primary">Make the report →</button>`;
   $("toReport").addEventListener("click", () => go("report"));
 }
+// The video itself is shown, cropped to the camera and scaled, under a see-through canvas
+// that carries only the line and marks: the browser plays it smoothly at any speed.
+// (Copying every frame of a hidden video onto a canvas dropped and repeated frames, most
+// at high speed, where a person crossing could be missed.)
+function mount(stage, cv, t, sc) {
+  const w = Math.round((t.x1 - t.x0) * sc), h = Math.round((t.y1 - t.y0) * sc);
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  if (stage.style.width !== `${w}px` || stage.style.height !== `${h}px`) { stage.style.width = `${w}px`; stage.style.height = `${h}px`; }
+  if (V.parentElement !== stage) { stage.insertBefore(V, cv); V.dataset.fit = ""; }
+  const fit = `${t.x0},${t.y0},${sc}`;
+  if (V.videoWidth && V.dataset.fit !== fit) {
+    V.dataset.fit = fit;
+    V.style.cssText = `position:absolute;left:${-t.x0 * sc}px;top:${-t.y0 * sc}px;width:${V.videoWidth * sc}px;height:${V.videoHeight * sc}px;max-width:none;pointer-events:none`;
+  }
+}
 function drawCheck() {
   const it = W.cur, g = it && W.ch && W.ch.cameras[it.camera];
   if (!g) return;
   const t = g.tile, w = t.x1 - t.x0, h = t.y1 - t.y0;
-  const sc = Math.max(0.5, Math.min(2.2, (C.parentElement.clientWidth - 4) / w, (window.innerHeight - 190) / h));
-  if (C.width !== Math.round(w * sc)) { C.width = Math.round(w * sc); C.height = Math.round(h * sc); }
-  if (V.readyState >= 2) ctx.drawImage(V, t.x0, t.y0, w, h, 0, 0, C.width, C.height);
+  const sc = Math.max(0.5, Math.min(2.2, ($("cstage").parentElement.clientWidth - 4) / w, (window.innerHeight - 190) / h));
+  mount($("cstage"), C, t, sc);
+  ctx.clearRect(0, 0, C.width, C.height);
   overlay(ctx, g, sc);
   if (W.mode === "item") {
     const color = it.direction === "in" ? "#3ecf8e" : "#ff7a59";
@@ -836,9 +854,9 @@ $("handDone").addEventListener("click", async () => {
 function drawHand() {
   const g = W.h && W.h.geometry[W.hcam]; if (!g) return;
   const t = g.tile, w = t.x1 - t.x0, h = t.y1 - t.y0;
-  const sc = Math.max(0.5, Math.min(2.2, (HC.parentElement.clientWidth - 4) / w, (window.innerHeight - 280) / h));
-  if (HC.width !== Math.round(w * sc)) { HC.width = Math.round(w * sc); HC.height = Math.round(h * sc); }
-  if (V.readyState >= 2) hctx.drawImage(V, t.x0, t.y0, w, h, 0, 0, HC.width, HC.height);
+  const sc = Math.max(0.5, Math.min(2.2, ($("hstage").parentElement.clientWidth - 4) / w, (window.innerHeight - 280) / h));
+  mount($("hstage"), HC, t, sc);
+  hctx.clearRect(0, 0, HC.width, HC.height);
   if (!W.st.marks) overlay(hctx, g, sc);  // on marked footage RetailNext's own line is already there
   const f = W.flash;
   if (f && performance.now() < f.until) {

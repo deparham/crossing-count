@@ -10,6 +10,7 @@ AppId={{41744A5A-201C-4C45-9B79-DF3C1B32DAAA}
 AppName=Crossing Count
 AppVersion={#AppVersion}
 AppPublisher=iTOi Solutions
+AppCopyright=Copyright (C) 2026 Parham Forozan. All rights reserved.
 DefaultDirName={autopf}\Crossing Count
 DefaultGroupName=Crossing Count
 DisableProgramGroupPage=yes

@@ -1,0 +1,8 @@
+CrossingCount
+Copyright © 2026 Parham Forozan. All rights reserved.
+
+No part of this software may be copied, modified or distributed without the
+written permission of the copyright holder.
+
+It uses open-source components under their own licences, among them
+Ultralytics YOLO, OpenCV, PyAV, FastAPI, python-pptx and keyring.

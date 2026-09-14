@@ -620,3 +620,7 @@ uv run pytest
 ```
 
 The tests use synthetic videos only.
+
+## Copyright
+
+Copyright © 2026 Parham Forozan. All rights reserved. See `NOTICE`.

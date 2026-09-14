@@ -27,7 +27,7 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from . import paths
+from . import __copyright__, paths
 from . import video as vid
 from .candidates import MISS_KIND
 from .config import bind, load_config
@@ -1542,7 +1542,7 @@ class Wizard:
         if c["incomplete"]:
             method.insert(0, "VALIDATION INCOMPLETE. " + " ".join(c["incomplete"]) + " No accuracy "
                           "is given: people in footage nobody watched may be missing from the count.")
-        method.append(f"Report made with CrossingCount {app_version()}.")
+        method.append(f"Report made with CrossingCount {app_version()}, {__copyright__}.")
         return {
             "count_label": "MANUAL COUNT" if self.manual() else "VERIFIED COUNT",
             "frames_title": ("VALIDATION FRAMES — BUSIEST MOMENT" if self.manual()

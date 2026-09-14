@@ -2,6 +2,7 @@
 name = "crossing-count"
 version = "0.1.0"
 description = "Assisted, human-verified crossing counts for validating people-counting sensors"
+authors = [{ name = "Parham Forozan" }]
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
