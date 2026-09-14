@@ -27,11 +27,11 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from . import __copyright__, paths
+from . import __copyright__, paths, sensors, validation
 from . import video as vid
 from .candidates import MISS_KIND
 from .config import bind, load_config
-from .export import sensor_accuracy
+from .export import INTERVAL_MIN, sensor_accuracy
 from .gating import camera_dir
 from .manual import intervals_for, merge_ranges, unwatched_ranges
 from .report_pptx import build_report
@@ -543,7 +543,7 @@ class Wizard:
                 missing = [label for key, label in known.items()
                            if any(d not in ivs.get(key, {}) for d in self.dirs())]
                 if missing:
-                    raise WizardError(f"Enter RetailNext's number for {missing[0]}.")
+                    raise WizardError(f"Enter the system's number for {missing[0]}.")
                 self.state["sensor_intervals"] = ivs
                 totals = {d: sum(per[d] for per in ivs.values()) for d in self.dirs()}
             elif values is not None:
@@ -565,35 +565,70 @@ class Wizard:
                 "cameras": dict(self.state["sensor_cameras"])}
 
     def use_retailnext(self, got: dict[str, Any]) -> list[str]:
-        """RetailNext's numbers from its API (retailnext.camera_counts): the cameras' sum
-        per 15-minute interval, and each camera's own. Returns warnings for intervals
-        RetailNext marked incomplete or imputed, which are not full counts."""
-        keys = [i["key"] for i in self.intervals()]
-        if keys == ["all"]:
+        """RetailNext's numbers from its API (retailnext.camera_counts), through its adapter
+        (on the footage's own day when the answer does not say which)."""
+        start, _ = self._period()
+        if start is None:
             raise WizardError("The video's name has no clock time, so RetailNext's numbers "
-                              "cannot be looked up.")
+                              "cannot be lined up with it.")
+        try:
+            data = sensors.from_retailnext(got, start.date())
+        except sensors.SensorError as exc:
+            raise WizardError(str(exc)) from exc
+        return self.use_sensor(data)
+
+    def use_sensor(self, data: sensors.SensorData) -> list[str]:
+        """A counting system's numbers in the normalised form (sensors.py), whatever the
+        system: the cameras' sum per 15-minute interval, and each camera's own. Every
+        interval must be covered exactly once. Returns warnings for numbers the source
+        marked as not full counts."""
+        ivs = self.intervals()
+        keys = [i["key"] for i in ivs]
+        if keys == ["all"]:
+            raise WizardError(f"The video's name has no clock time, so {data.system}'s numbers "
+                              f"cannot be lined up with it.")
         dirs = self.dirs()
+        names = {c["sensor"].lower(): c["sensor"] for c in self.state["cameras"]}
+        by_cam: dict[str, list[sensors.IntervalCount]] = {}
+        for c in data.counts:
+            key = names.get(c.camera.lower()) if c.camera else ""
+            if key is not None and c.direction in dirs:  # not another camera of the store
+                by_cam.setdefault(key, []).append(c)
+        own = {k: v for k, v in by_cam.items() if k}
+        if own and len(own) < len(names) and "" not in by_cam:
+            gone = [n for n in names.values() if n not in own]
+            raise WizardError(f"{data.system} has no numbers for {', '.join(gone)}.")
+        sources = own if own and len(own) == len(names) else {"": by_cam.get("", [])}
         per_iv = {k: dict.fromkeys(dirs, 0) for k in keys}
         per_cam: dict[str, dict[str, int]] = {}
-        warnings: list[str] = [str(got["note"])] if got.get("note") else []
-        # each camera's rows, or the store's total when its entrances are not the cameras
-        sources = got["cameras"] or {"": got.get("total") or []}
-        for cam, rows in sources.items():
-            by_start = {str(r["start"]): r for r in rows}
-            label = cam or str(got.get("store") or "the store")
+        warnings = list(data.notes)
+        step = timedelta(minutes=INTERVAL_MIN)
+        for cam, counts in sources.items():
+            label = cam or str(data.detail.get("store") or "the cameras together")
             if cam:
                 per_cam[cam] = dict.fromkeys(dirs, 0)
-            for k in keys:
-                r = by_start.get(k)
-                if r is None:
-                    raise WizardError(f"RetailNext gave no number for {label} at {k}.")
-                if r["validity"] != "complete":
-                    warnings.append(f"RetailNext marked {label} {r['start']}–{r['finish']} as "
-                                    f"{r['validity']}: its number there is not a full count.")
+            for i in ivs:  # wall-clock times: the footage's clock may carry a time zone
+                s = datetime.fromisoformat(i["start"]).replace(tzinfo=None)
+                inside = [c for c in counts if c.start >= s and c.end <= s + step]
                 for d in dirs:
-                    per_iv[k][d] += int(r.get(d) or 0)
+                    mine = [c for c in inside if c.direction == d]
+                    covered = sum((c.end - c.start).total_seconds() for c in mine)
+                    if covered < step.total_seconds() - 1:
+                        raise WizardError(f"{data.system} gave no number for {label} at "
+                                          f"{i['key']}.")
+                    if covered > step.total_seconds() + 1:
+                        raise WizardError(f"{data.system} gave {label} at {i['key']} more than "
+                                          f"one number for {LABELS[d]}.")
+                    n = sum(c.count for c in mine)
+                    per_iv[i["key"]][d] += n
                     if cam:
-                        per_cam[cam][d] += int(r.get(d) or 0)
+                        per_cam[cam][d] += n
+                for c in inside:
+                    if c.validity != "complete":
+                        warnings.append(f"{data.system} marked {label} {c.start:%H:%M}–"
+                                        f"{c.end:%H:%M} as {c.validity}: its number there is "
+                                        f"not a full count.")
+        warnings = list(dict.fromkeys(warnings))  # once per interval, not per direction
         if len(keys) > 1:
             self.set_sensor(intervals={k: dict(v) for k, v in per_iv.items()},
                             cameras={c: dict(v) for c, v in per_cam.items()})
@@ -602,10 +637,11 @@ class Wizard:
                             cameras={c: dict(v) for c, v in per_cam.items()})
         with self._lock:
             self.state["sensor_source"] = {
-                "source": "RetailNext API", "subscription": got.get("subscription"),
-                "store": got.get("store"),
-                "cameras": list(got["cameras"]) or ["the store's total"],
+                "source": data.source, "system": data.system, **data.detail,
+                "cameras": list(per_cam) or list(data.detail.get("cameras") or [])
+                or ["all cameras together"],
                 "fetched_at": _now(), "warnings": warnings, "numbers": self._sensor_numbers()}
+            self._decide("sensor_numbers", source=data.source, system=data.system)
             self._save()
         return warnings
 
@@ -697,12 +733,18 @@ class Wizard:
 
     def _system_line(self) -> str:
         src = self.state.get("sensor_source")
+        system = (src or {}).get("system") or "RetailNext"
         sub = f", subscription {src['subscription']}" if src and src.get("subscription") else ""
-        how = (f"fetched from RetailNext's API ({src['store']}{sub}: "
-               f"{' + '.join(src['cameras'])}) on {str(src['fetched_at'])[:10]}"
-               if src else "typed in from RetailNext")
-        text = (f"System count: RetailNext, same cameras and period, {how}. Accuracy = 100% "
-                f"minus the system's error as a share of the verified count.")
+        if src and src.get("source") == "RetailNext API":
+            how = (f"fetched from RetailNext's API ({src['store']}{sub}: "
+                   f"{' + '.join(src['cameras'])}) on {str(src['fetched_at'])[:10]}")
+        elif src:
+            how = (f"imported from {src.get('file') or 'a file'} ({' + '.join(src['cameras'])}) "
+                   f"on {str(src['fetched_at'])[:10]}")
+        else:
+            how = f"typed in from {system}"
+        text = (f"System count: {system}, same cameras and period, {how}. Sensor accuracy = "
+                f"100% minus the system's error as a share of the verified count.")
         return text + "".join(f" {w}" for w in (src or {}).get("warnings", []))
 
     def intervals(self) -> list[dict[str, Any]]:
@@ -756,7 +798,49 @@ class Wizard:
             size, label, d, acc = max(diffs, key=lambda x: x[0])
             if size > 0:
                 largest = {"interval": label, "direction": d, **acc}
-        return {"intervals": intervals, "cameras": cameras, "overlap": overlap, "largest": largest}
+        out = {"intervals": intervals, "cameras": cameras, "overlap": overlap, "largest": largest}
+        rows = self._rows(intervals)
+        return {**out, "rows": rows, "metrics": validation.by_direction(rows) if rows else None}
+
+    def _rows(self, intervals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Verified against the system as the validation engine reads it: each whole 15-minute
+        interval with the system's number (one only partly in the footage does not compare
+        like for like), or the whole footage when there is one number for it."""
+        dirs, cams = self.dirs(), len(self.state["cameras"])
+        if self.state["sensor_intervals"] and len(intervals) > 1:
+            return [{"interval": i["label"], "start": i["start"], "covered_s": i["covered_s"],
+                     "cameras": cams, "direction": d, "truth": int(i["verified"][d]),
+                     "system": int(i["sensor"][d])}
+                    for i in intervals if i["sensor"] and i["full"] is not False
+                    for d in dirs if i["sensor"].get(d) is not None]
+        sensor = self.state["sensor"]
+        return [{"interval": "whole footage", "start": self.state["clock_start"],
+                 "covered_s": float(self.state["duration_s"]), "cameras": cams, "direction": d,
+                 "truth": sum(int(i["verified"][d]) for i in intervals),
+                 "system": int(sensor[d])} for d in dirs if sensor.get(d) is not None]
+
+    def result(self) -> dict[str, Any]:
+        """This validation's outcome as data, saved with its report: what was compared with
+        what, under which rules, and how complete it was. validation.py puts many together."""
+        with self._lock:
+            c, comp, st = self.counts(), self.comparison(), self.state
+            src = st.get("sensor_source") or {}
+            return {
+                "schema": "result/1", "engine": validation.ENGINE, "made_at": _now(),
+                "app_version": app_version(), "status": c["status"],
+                "incomplete": c["incomplete"], "checks": c["checks"],
+                "mode": st.get("mode") or "auto", "marked": self.marked(),
+                "rules": st.get("rules"), "specification": st["manual"].get("specification")
+                if self.manual() else GROUND_TRUTH_SPEC,
+                "system": src.get("system") or "RetailNext",
+                "source": src.get("source") or "typed in", "subscription": src.get("subscription"),
+                "store": {k: st["store"].get(k) for k in ("code", "name", "location")},
+                "cameras": [cam["sensor"] for cam in st["cameras"]],
+                "fingerprint": st["fingerprint"], "filename": st["filename"],
+                "clock_start": st["clock_start"], "duration_s": st["duration_s"],
+                "dirs": self.dirs(), "unsure": c["unsure"], "rows": comp["rows"],
+                "metrics": comp["metrics"], "operator": st["store"].get("operator"),
+            }
 
     def _breakdown(self) -> dict[str, Any]:
         """The report's page of 15-minute intervals and cameras, from comparison()."""
@@ -778,6 +862,11 @@ class Wizard:
                          f"{TWIN_WINDOW_S:g} s: the cameras overlap, so each camera's number "
                          f"can differ from RetailNext's even when the total agrees. Compare "
                          f"the combined total.")
+        m = (comp["metrics"] or {}).get("total") or next(iter((comp["metrics"] or {}).values()), None)
+        if ivs and m and m["intervals"] > 1 and m["wape_pct"] is not None:
+            notes.append(f"Across the {m['intervals']} whole intervals, the system's typical error "
+                         f"was {m['mae']} people per interval (MAE); its over- and undercounts "
+                         f"together came to {m['wape_pct']}% of the verified count (WAPE).")
         return {"dirs": [{"key": d, "label": LABELS[d]} for d in self.dirs()],
                 "intervals": [{"label": i["label"], "partial": i["full"] is False,
                                "verified": i["verified"], "sensor": i["sensor"],
@@ -1670,5 +1759,6 @@ class Wizard:
             out = self.dir / (re.sub(r"[^A-Za-z0-9 ._-]+", "-", words).strip() + ".pptx")
             build_report(data, out, logo)
             self.state["report"] = {"path": str(out), "made_at": _now()}
+            self.state["result"] = self.result()  # for putting validations together
             self._save()
             return out

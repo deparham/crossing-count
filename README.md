@@ -36,6 +36,10 @@ which only downloads numbers.
   is, for the people who count.
 - [Dataset specification](docs/DATASET_SPECIFICATION.md): the gold set, its sets and
   versions.
+- [Metrics specification](docs/METRICS_SPECIFICATION.md): every number, its formula,
+  edge cases and uncertainty.
+- [Sensor data](docs/SENSOR_DATA.md): getting a counting system's numbers in (RetailNext,
+  or a CSV from any counter).
 
 ## Setup
 
@@ -194,6 +198,30 @@ A first try (1,009 heads on 180 pictures, 2026-09-13) did not beat the current
 detector: on a store it never saw it found 28 of 234 heads, where the current
 one found 166. Most frames were marked footage, and it learned the sensor's
 height bubbles rather than heads. It is not used.
+
+## Sensor results: how far the counting system is from the truth
+
+Most people counters, RetailNext among them, give a count per interval, not the
+individual crossings, so a system under test is judged by its **count error**,
+15-minute interval by 15-minute interval (never by precision or recall, which need
+individual crossings). The wizard's system step takes the numbers from RetailNext's
+API, from a CSV exported by any other counter (Xovis, V-Count, FootfallCam, a
+spreadsheet: format in [docs/SENSOR_DATA.md](docs/SENSOR_DATA.md)), or typed in.
+
+Each report keeps its result as data. The **Sensor results** page (header) puts every
+complete validation counted on clean footage together, on this computer and in the
+team's shared folder, per counting system:
+
+- bias (net error as a share of the verified count), over- and undercount, MAE and RMSE
+  per interval, WAPE (over- and undercounts that do not cancel) and MAPE on busy
+  intervals, per direction and together, by store and by traffic level;
+- 95% ranges that resample whole validations and whole stores (intervals of one clip are
+  not independent), with none below five;
+- a sentence that says what was measured, on how much, and how sure: "Across 3 stores,
+  12 validations, 6.5 hours of camera footage and 1,480 independently verified
+  crossings, RetailNext counted 3.1% too few (95% range ...)".
+
+Definitions in [docs/METRICS_SPECIFICATION.md](docs/METRICS_SPECIFICATION.md).
 
 ## Gold set: measuring the automatic count against full hand counts
 

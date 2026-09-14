@@ -30,6 +30,8 @@ import math
 from collections.abc import Iterable, Sequence
 from typing import Any
 
+ENGINE = "crossing-evaluation/1.0"
+MATCHING = "one-to-one time sweep, same direction first/1.0"
 TOLERANCE_S = 2.0
 MIN_SAMPLE = 30
 DIRS = ("in", "out")

@@ -253,7 +253,7 @@ def test_retailnext_per_interval_and_per_camera(two_tile_video: dict[str, Any],
     w.state["clock_start"] = "2026-09-12T11:59:40+10:00"  # the 60 s clip spans two intervals
     w.set_direction("in")
     assert [(i["key"], i["full"]) for i in w.intervals()] == [("11:45", False), ("12:00", False)]
-    with pytest.raises(WizardError, match="Enter RetailNext's number for 12:00"):
+    with pytest.raises(WizardError, match="Enter the system's number for 12:00"):
         w.set_sensor(intervals={"11:45": {"in": 1}})
     with pytest.raises(WizardError, match="not one of this footage's 15-minute intervals"):
         w.set_sensor(intervals={"09:00": {"in": 1}})

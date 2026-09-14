@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CrossingCount · Sensor results</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f2f5f8; --panel: #ffffff; --panel2: #f3f6f9; --border: #dce3ea; --border2: #c9d3dc;
+    --text: #1b2536; --title: #101d3b; --muted: #637083;
+    --accent: #1f9bb3; --accent2: #17829a; --soft: #e4f3f6;
+    --navy: #101d3b; --navy2: #1b2d55;
+    --ok: #15803d; --warn: #b45309; --err: #c53030;
+    --shadow: 0 1px 2px rgba(16,29,59,.05), 0 6px 20px rgba(16,29,59,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #0b1222; --panel: #121b2e; --panel2: #18233a; --border: #243150; --border2: #30406a;
+      --text: #e4e9f1; --title: #f3f6fa; --muted: #92a0b5;
+      --accent: #27a9c2; --accent2: #45bdd4; --soft: rgba(39,169,194,.14);
+      --ok: #3ecf8e; --warn: #f5b942; --err: #ff6b6b;
+      --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px rgba(0,0,0,.25);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+         background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+  header { display: flex; gap: 14px; align-items: center; padding: 12px 20px; color: #fff;
+           background: linear-gradient(100deg, var(--navy) 0%, var(--navy2) 100%); }
+  header b { font-size: 16px; } header b span { color: #5cc8dc; }
+  header .sep { width: 1px; height: 22px; background: rgba(255,255,255,.2); }
+  header h1 { font-size: 14px; margin: 0; font-weight: 500; }
+  main { padding: 20px; max-width: 1360px; margin: 0 auto; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px;
+          margin-bottom: 14px; box-shadow: var(--shadow); }
+  .big { font-size: 18px; font-weight: 650; color: var(--title); margin-bottom: 4px; }
+  .lead { font-size: 16px; color: var(--title); margin-top: 8px; }
+  .muted { color: var(--muted); } .ok { color: var(--ok); } .warn { color: var(--warn); } .err { color: var(--err); }
+  select { background: var(--panel); color: var(--text); border: 1px solid var(--border2); border-radius: 9px; padding: 7px 10px; font: inherit; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  td.n { font-variant-numeric: tabular-nums; }
+  h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 0 6px; }
+  footer { text-align: center; font-size: 12px; margin: 24px 0 16px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header><b>Crossing<span>Count</span></b><span class="sep"></span><h1>Sensor results</h1></header>
+<main>
+  <div class="card">
+    <div class="big">How far the counting system's numbers are from the verified counts</div>
+    <div class="muted">Every validation whose report was made, on this computer and in the team's shared folder, compared 15-minute interval by 15-minute interval. Only complete validations counted on clean footage are used; the others are listed below with the reason.</div>
+    <div style="margin-top:10px"><label class="muted">Counting system <select id="system"></select></label></div>
+    <div id="headline" class="lead"></div>
+  </div>
+  <div class="card">
+    <div class="big">By direction</div>
+    <div class="scroll"><table id="dirs"></table></div>
+    <div class="muted" style="font-size:12px;margin-top:8px">Error = the system's count minus the verified count (positive: too many). Bias = the net error as a share of the verified count; WAPE = over- and undercounts together, which do not cancel; MAE and RMSE are per interval, in people; MAPE only over intervals with at least 10 verified crossings. 95% ranges resample whole validations (and, second, whole stores), with no range below 5. See docs/METRICS_SPECIFICATION.md.</div>
+  </div>
+  <div class="card">
+    <div class="big">By store, and by traffic level</div>
+    <div class="scroll"><table id="stores"></table></div>
+    <h3>By traffic level (verified crossings per camera-hour in the interval)</h3>
+    <div class="scroll"><table id="traffic"></table></div>
+  </div>
+  <div class="card">
+    <div class="big">Validations</div>
+    <div class="scroll"><table id="vals"></table></div>
+    <h3>Not used</h3>
+    <div class="scroll"><table id="left"></table></div>
+  </div>
+</main>
+<footer>CrossingCount · © 2026 Parham Forozan. All rights reserved.</footer>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+function esc(x) { return String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+async function api(path) { const r = await fetch(path); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`); return j; }
+const NAMES = { in: "In", out: "Out", total: "In and out together" };
+const pct = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v}%`);
+const plain = (v) => (v == null ? "–" : `${v}%`);
+const range = (r) => (r ? ` <span class="muted">(${r[0] > 0 ? "+" : ""}${r[0]} to ${r[1] > 0 ? "+" : ""}${r[1]})</span>` : "");
+function row(label, m, ranges) {
+  const rb = ranges ? ranges.bias_pct : null, rw = ranges ? ranges.wape_pct : null;
+  return `<tr><td>${esc(label)}</td><td class="n">${m.intervals}</td><td class="n">${m.truth}</td><td class="n">${m.system}</td><td class="n">${m.error > 0 ? "+" : ""}${m.error}</td>` +
+    `<td class="n">${pct(m.bias_pct)}${rb ? range(rb.by_validation) : ""}${rb && rb.by_store ? `<div class="muted">stores:${range(rb.by_store)}</div>` : ""}</td>` +
+    `<td class="n">${m.overcount}</td><td class="n">${m.undercount}</td><td class="n">${m.mae ?? "–"}</td><td class="n">${m.rmse ?? "–"}</td>` +
+    `<td class="n">${plain(m.wape_pct)}${rw ? range(rw.by_validation) : ""}</td><td class="n">${plain(m.mape_pct)} <span class="muted">(${m.mape_intervals})</span></td></tr>`;
+}
+const HEAD = `<tr><th></th><th>Intervals</th><th>Verified</th><th>System</th><th>Error</th><th>Bias (95%)</th><th>Over</th><th>Under</th><th>MAE</th><th>RMSE</th><th>WAPE (95%)</th><th>MAPE (n)</th></tr>`;
+function render(G) {
+  $("system").innerHTML = G.systems.map((s) => `<option${s === G.system ? " selected" : ""}>${esc(s)}</option>`).join("") || "<option>none yet</option>";
+  const s = G.summary;
+  $("headline").textContent = G.headline || "No validation to put together yet: make a report for a complete validation, and its result is kept.";
+  $("dirs").innerHTML = s ? HEAD + Object.entries(s.by_direction).map(([d, m]) => row(NAMES[d] || d, m, m.ranges)).join("") : "";
+  const pick = (byDir) => byDir.total || Object.values(byDir)[0];
+  $("stores").innerHTML = s ? HEAD + Object.entries(s.by_store).map(([k, v]) => row(k, pick(v))).join("") : "";
+  $("traffic").innerHTML = s && Object.keys(s.by_traffic).length ? HEAD + Object.entries(s.by_traffic).map(([k, m]) => row(k, m)).join("") : "";
+  const when = (iso) => (iso ? new Date(iso).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" }) : "");
+  const brief = (v) => { const m = v.metrics && pick(v.metrics); return m ? `${m.truth} verified, ${m.system} by the system (${pct(m.bias_pct)})` : ""; };
+  $("vals").innerHTML = G.validations.length
+    ? `<tr><th>Store</th><th>Footage from</th><th>Cameras</th><th>How</th><th>Numbers</th><th>By</th><th>Kept</th></tr>` +
+      G.validations.map((v) => `<tr><td>${esc(v.store)} ${esc(v.store_name || "")}</td><td>${esc(when(v.clock_start))}</td><td>${(v.cameras || []).map(esc).join("<br>")}</td>` +
+        `<td>${v.mode === "manual" ? "by hand" : "checked"}</td><td>${brief(v)}</td><td>${esc(v.by || "")}</td><td class="muted">${esc(v.where)}</td></tr>`).join("")
+    : `<tr><td class="muted">None yet.</td></tr>`;
+  $("left").innerHTML = G.excluded.length
+    ? `<tr><th>Store</th><th>Footage from</th><th>Why not used</th></tr>` + G.excluded.map((v) =>
+        `<tr><td>${esc(v.store)} ${esc(v.store_name || "")}</td><td>${esc(when(v.clock_start))}</td><td class="warn">${v.excluded.map(esc).join("; ")}</td></tr>`).join("")
+    : `<tr><td class="muted">None.</td></tr>`;
+}
+async function load(system) {
+  try { render(await api(`/api/sensors${system ? `?system=${encodeURIComponent(system)}` : ""}`)); }
+  catch (e) { $("headline").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+$("system").addEventListener("change", () => load($("system").value));
+load();
+</script>
+</body>
+</html>

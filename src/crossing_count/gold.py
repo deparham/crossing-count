@@ -43,10 +43,22 @@ from av.error import FFmpegError
 from . import bench, paths
 from . import video as vid
 from .config import ConfigError
-from .evaluate import MIN_SAMPLE, TOLERANCE_S, add, agreement, consensus, match, score, summary
+from .evaluate import ENGINE as CROSSING_ENGINE
+from .evaluate import (
+    MATCHING,
+    MIN_SAMPLE,
+    TOLERANCE_S,
+    add,
+    agreement,
+    consensus,
+    match,
+    score,
+    summary,
+)
 from .gating import camera_dir
 from .manual import merge_ranges
 from .util import write_json_atomic
+from .validation import TRAFFIC, TRAFFIC_NAMES, traffic_level
 from .version import app_version
 from .wizard import (
     CHOICES,
@@ -74,9 +86,6 @@ LIGHTING = {"normal": "Normal light", "low": "Low light", "glare": "Glare or str
             "mixed": "Changing light"}
 OCCLUSION = {"none": "People hardly ever hidden", "some": "People sometimes hidden",
              "heavy": "People often hidden"}
-TRAFFIC = ((40.0, "quiet"), (120.0, "normal"), (240.0, "busy"))  # crossings per camera-hour
-TRAFFIC_NAMES = {"quiet": "Quiet traffic", "normal": "Normal traffic", "busy": "Busy traffic",
-                 "heavy": "Heavy traffic"}
 CONVENTION = "In = into the store: the side the counting line's triangles point to."
 CLOCK_SLACK_S = 1.0  # an automatic count's footage must cover the clip to within this
 FEW_STORES = 3  # fewer stores than this in a set: results may not carry over to others
@@ -120,10 +129,6 @@ def split_of(code: str) -> str:
     store in five goes to test, one in five to validation, the rest to train."""
     bucket = int(hashlib.sha256(code.strip().upper().encode("utf-8")).hexdigest(), 16) % 100
     return "test" if bucket < 20 else "validation" if bucket < 40 else "train"
-
-
-def traffic_level(per_camera_hour: float) -> str:
-    return next((name for limit, name in TRAFFIC if per_camera_hour < limit), "heavy")
 
 
 # ---- keeping a count by hand as a gold clip ------------------------------------------------
@@ -631,7 +636,8 @@ def evaluate(which: str, root: Path | None = None, note: str = "",
                        "clips": [{k: c[k] for k in ("id", "split", "sha256")}
                                  for c in current["clips"] if c["id"] in ids]},
            "app_version": app_version(),
-           "settings": {**bench.settings(), "tolerance_s": TOLERANCE_S, "min_sample": MIN_SAMPLE,
+           "settings": {**bench.settings(), "engine": CROSSING_ENGINE, "matching": MATCHING,
+                        "tolerance_s": TOLERANCE_S, "min_sample": MIN_SAMPLE,
                         "ground_truth_specification": GROUND_TRUTH_SPEC},
            "detectors": sorted({d["model"]: d for c in scored for d in c["detectors"]}.values(),
                                key=lambda d: str(d["model"])),

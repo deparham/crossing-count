@@ -159,6 +159,7 @@
   <div class="tools">
     <a href="#" id="shareLink" hidden>Colleagues' apps</a>
     <a href="#" id="updToken" hidden>Get update notices</a>
+    <a href="/sensors/" target="_blank" rel="noopener">Sensor results</a>
     <a href="/gold/" target="_blank" rel="noopener">Gold set</a>
     <a href="/label/" target="_blank" rel="noopener">Mark heads (train the detector)</a>
     <button id="updateApp" class="primary" hidden>Update</button>
@@ -284,9 +285,14 @@
 
 <section id="s-retail" hidden>
   <div class="card">
-    <div class="big">What did RetailNext count?</div>
+    <div class="big">What did the counting system count?</div>
     <div class="muted" id="sensorHint"></div>
-    <div style="margin:10px 0"><button id="rnFetch" hidden>Fetch from RetailNext</button> <span id="rnStatus" class="muted"></span></div>
+    <div style="margin:10px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button id="rnFetch" hidden>Fetch from RetailNext</button>
+      <label class="muted" style="display:inline-flex;gap:6px;align-items:center">Import a CSV from any counter <input type="file" id="csvFile" accept=".csv,text/csv"></label>
+      <a href="https://github.com/deparham/crossing-count/blob/main/docs/SENSOR_DATA.md" target="_blank" rel="noopener" class="muted" style="font-size:12px">(its format)</a>
+    </div>
+    <div id="rnStatus" class="muted" style="margin-bottom:8px"></div>
     <div id="sensorInputs" class="grid2"></div>
     <button id="sensorNext" class="primary">Next →</button>
   </div>
@@ -394,7 +400,7 @@ const FLOW = {
   auto: ["footage", "mode", "draw", "traffic", "count", "check", "retail", "report"],
   manual: ["footage", "mode", "draw", "traffic", "hand", "retail", "report"],
 };
-const NAMES = { footage: "Footage", mode: "How", draw: "Cameras", traffic: "Traffic", retail: "RetailNext",
+const NAMES = { footage: "Footage", mode: "How", draw: "Cameras", traffic: "Traffic", retail: "Sensor",
                 count: "Count", check: "Check", hand: "Count by hand", report: "Report" };
 const LABEL = { in: "Traffic In", out: "Traffic Out" };
 const RATES = [0.5, 1, 1.5, 2, 3, 4];
@@ -806,11 +812,11 @@ ENTER.retail = () => {
   const head = (first) => `<tr><th>${first}</th>${s.dirs.map((d) => `<th>${LABEL[d]}</th>`).join("")}</tr>`;
   let html;
   if (ivs.length > 1) {  // footage longer than one of RetailNext's 15-minute intervals
-    $("sensorHint").textContent = `RetailNext's 15-minute numbers for ${cams} together, as in its table.${yours}`;
+    $("sensorHint").textContent = `The system's 15-minute numbers for ${cams} together, as in its own table.${yours}`;
     html = `<table class="ivs">${head("Time")}` + ivs.map((i) => `<tr><td>${esc(i.label)}${i.full === false ? ' <span class="muted">(partly in this footage)</span>' : ""}</td>` +
       s.dirs.map((d) => `<td>${num(`data-iv="${esc(i.key)}" data-dir="${d}"`, ((s.sensor_intervals || {})[i.key] || {})[d])}</td>`).join("") + "</tr>").join("") + "</table>";
   } else {
-    $("sensorHint").textContent = `RetailNext's number for ${cams} together, ${period()}.${yours}`;
+    $("sensorHint").textContent = `The system's number for ${cams} together, ${period()}.${yours}`;
     html = s.dirs.map((d) => `<label>${LABEL[d]} ${num(`data-dir="${d}"`, s.sensor[d])}</label>`).join("");
   }
   if (s.cameras.length > 1) {
@@ -822,10 +828,12 @@ ENTER.retail = () => {
   $("sensorInputs").innerHTML = html;
   const src = s.sensor_source;
   $("rnFetch").hidden = !s.retailnext;
-  $("rnStatus").innerHTML = !s.retailnext ? "To fill these in from RetailNext itself, connect the brand on the first page, under Get footage from RetailNext."
-    : src ? `Fetched from RetailNext: ${esc(src.store)}, ${src.cameras.map(esc).join(" + ")}.` +
+  $("rnStatus").innerHTML = src
+    ? `${src.source === "RetailNext API" ? "Fetched from RetailNext" : `Imported from ${esc(src.file || "a file")} (${esc(src.system)})`}: ` +
+      `${src.store ? esc(src.store) + ", " : ""}${(src.cameras || []).map(esc).join(" + ")}.` +
       (src.warnings.length ? ` <span class="warn">${src.warnings.map(esc).join(" ")}</span>` : " Every interval fully counted. Check them, then Next.")
-    : "Fills in RetailNext's numbers for these cameras and this period.";
+    : !s.retailnext ? "Type the system's numbers, or import a CSV from any counter. To fetch RetailNext's own, connect the brand on the first page."
+    : "Fetch RetailNext's numbers for these cameras and this period, import a CSV from another counter, or type them.";
   const first = $("sensorInputs").querySelector("input"); if (first) first.focus();
   $("sensorInputs").querySelectorAll("input").forEach((el) => el.addEventListener("keydown", (e) => { if (e.key === "Enter") $("sensorNext").click(); }));
 };
@@ -835,9 +843,19 @@ $("rnFetch").addEventListener("click", async () => {
   catch (e) { $("rnStatus").textContent = ""; msg(e.message, "err"); }
   finally { $("rnFetch").disabled = false; }
 });
+$("csvFile").addEventListener("change", async () => {  // any counter's numbers, as a CSV
+  const f = $("csvFile").files[0];
+  if (!f) return;
+  try {
+    const r = await api("/api/sensor/csv", { name: f.name, text: await f.text() });
+    setState(r); ENTER.retail();
+    msg(r.sensor_warnings.length ? r.sensor_warnings.join(" ") : `Imported ${f.name}. Check the numbers, then Next.`, r.sensor_warnings.length ? "warn" : "ok");
+  } catch (e) { msg(e.message, "err"); }
+  finally { $("csvFile").value = ""; }
+});
 $("sensorNext").addEventListener("click", async () => {
   const box = $("sensorInputs"), body = {}, n = (el) => Math.max(0, Math.round(+el.value));
-  const need = (el, what) => { msg(`Enter RetailNext's ${what}.`, "warn"); el.focus(); };
+  const need = (el, what) => { msg(`Enter the system's ${what}.`, "warn"); el.focus(); };
   const perInterval = [...box.querySelectorAll("input[data-iv]")];
   if (perInterval.length) {
     body.intervals = {};
@@ -1264,6 +1282,8 @@ ENTER.report = async () => {
     $("numbers").innerHTML += (cmp.intervals.length > 1 ? `<table class="ivs">${head("Time")}${rows(cmp.intervals, "label")}</table>` : "") +
       (cmp.cameras.length > 1 ? `<table class="ivs">${head("Camera")}${rows(cmp.cameras, "camera")}</table>` : "");
   }
+  const m = cmp && cmp.metrics && (cmp.metrics.total || Object.values(cmp.metrics)[0]);
+  if (m && m.intervals > 1 && m.wape_pct != null) $("numbers").innerHTML += `<div class="muted" style="margin-top:6px">Across ${m.intervals} whole 15-minute intervals: the system's typical error was ${m.mae} people per interval (MAE); over- and undercounts together came to ${m.wape_pct}% of the verified count (WAPE); net ${m.bias_pct > 0 ? "+" : ""}${m.bias_pct}%.</div>`;
   $("numbers").innerHTML += `<ul class="checks">${(c.checks || []).map((k) =>
     `<li><b class="${k.ok === false ? "err" : k.ok ? "ok" : "muted"}">${k.ok === false ? "✗" : k.ok ? "✓" : "–"}</b>${esc(k.name)}${k.detail ? ` <span class="muted">(${esc(k.detail)})</span>` : ""}</li>`).join("")}</ul>`;
   $("logoInfo").textContent = s.logo ? `Logo: ${s.logo}` : "No logo file found (assets/logo.png): the report header will show the company name as text.";

@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 from starlette.routing import Mount
 
-from . import gold, paths, releases, updates
+from . import gold, paths, releases, sensors, updates, validation
 from . import overlay as ov
 from . import retailnext as rn
 from .examples import check_folder
@@ -65,6 +65,11 @@ class GoldSaveIn(BaseModel):
 
 class GoldFreezeIn(BaseModel):
     note: str = ""
+
+
+class CsvIn(BaseModel):
+    name: str  # the file's name, as the report names the source
+    text: str
 
 
 class RulesIn(BaseModel):
@@ -553,14 +558,32 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         sub = (w.state.get("retailnext") or {}).get("subscription")  # the footage's own brand
         try:
             conn, nodes, store = rn_store(f"{sub}/{code}" if sub else code)
-            got = rn.camera_counts(conn, nodes, str(store.get("store_id") or w.state["store"]["code"]),
-                                   [c["sensor"] for c in w.state["cameras"]], start, end)
+            adapter = sensors.RetailNextAdapter(conn, nodes, str(store.get("store_id") or code))
+            data = adapter.fetch([c["sensor"] for c in w.state["cameras"]], start, end)
         except rn.RetailNextError as exc:
             raise HTTPException(400, str(exc)) from exc
-        got["subscription"] = conn.subscription
         warnings: list[str] = []
-        return {**run(lambda: warnings.extend(w.use_retailnext(got))),
+        return {**run(lambda: warnings.extend(w.use_sensor(data))),
                 "retailnext_warnings": warnings}
+
+    @app.post("/api/sensor/csv")
+    def sensor_csv(c: CsvIn) -> dict[str, Any]:
+        """Another counting system's numbers, from a CSV file (docs/SENSOR_DATA.md)."""
+        w = wiz()
+        start, end = w.period()
+        if start is None or end is None:
+            raise HTTPException(400, "The video's name has no clock time, so the file's numbers "
+                                     "cannot be lined up with it.")
+        if len(c.text) > 20_000_000:
+            raise HTTPException(400, "The file is too large (more than 20 MB).")
+        try:
+            data = sensors.CsvAdapter(c.text, Path(c.name).name or "numbers.csv").fetch(
+                [cam["sensor"] for cam in w.state["cameras"]], start.replace(tzinfo=None),
+                end.replace(tzinfo=None))
+        except sensors.SensorError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        warnings: list[str] = []
+        return {**run(lambda: warnings.extend(w.use_sensor(data))), "sensor_warnings": warnings}
 
     @app.get("/api/drawn")
     def drawn() -> dict[str, Any]:
@@ -781,6 +804,16 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     @app.get("/api/gold")
     def gold_overview() -> dict[str, Any]:
         return gold.overview(data(), shared())
+
+    @app.get("/sensors", response_class=HTMLResponse)
+    @app.get("/sensors/", response_class=HTMLResponse)
+    def sensors_page() -> str:
+        return (WEB_DIR / "sensors.html").read_text(encoding="utf-8")
+
+    @app.get("/api/sensors")
+    def sensors_overview(system: str | None = None) -> dict[str, Any]:
+        """Every validation's result for one counting system, put together."""
+        return validation.overview(data(), shared(), system)
 
     @app.get("/api/gold/current")
     def gold_current() -> dict[str, Any]:

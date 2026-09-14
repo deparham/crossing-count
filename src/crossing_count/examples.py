@@ -125,6 +125,7 @@ def validation_record(w: Wizard) -> dict[str, Any]:
         "added": st["added"], "watched": st["watched"], "watch": st.get("watch"),
         "manual": {k: st["manual"].get(k) for k in ("counts", "watched", "done", "specification")},
         "decisions": st.get("decisions", []), "report": st.get("report"),
+        "result": w.result(),
     }
 
 
