@@ -6,8 +6,23 @@
 <title>Camera setup · crossing-count</title>
 <style>
   :root {
-    --bg: #101317; --panel: #181d23; --panel2: #20262e; --border: #2b333d;
-    --text: #e7eaee; --muted: #97a1ad; --accent: #4da3ff; --ok: #3ecf8e; --warn: #f5b942; --err: #ff6b6b;
+    color-scheme: light;
+    --bg: #f2f5f8; --panel: #ffffff; --panel2: #f3f6f9; --border: #dce3ea; --border2: #c9d3dc;
+    --text: #1b2536; --title: #101d3b; --muted: #637083;
+    --accent: #1f9bb3; --accent2: #17829a; --soft: #e4f3f6; --ring: rgba(31,155,179,.28);
+    --navy: #101d3b; --navy2: #1b2d55;
+    --ok: #15803d; --warn: #b45309; --err: #c53030; --in: #16a34a; --out: #e8590c;
+    --shadow: 0 1px 2px rgba(16,29,59,.05), 0 6px 20px rgba(16,29,59,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #0b1222; --panel: #121b2e; --panel2: #18233a; --border: #243150; --border2: #30406a;
+      --text: #e4e9f1; --title: #f3f6fa; --muted: #92a0b5;
+      --accent: #27a9c2; --accent2: #45bdd4; --soft: rgba(39,169,194,.14); --ring: rgba(39,169,194,.35);
+      --ok: #3ecf8e; --warn: #f5b942; --err: #ff6b6b; --in: #3ecf8e; --out: #ff8a5c;
+      --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px rgba(0,0,0,.25);
+    }
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
@@ -53,7 +68,7 @@
   .err { color: var(--err); } .warn { color: var(--warn); } .ok { color: var(--ok); }
   #save { margin-top: 10px; width: 100%; padding: 9px; border-radius: 6px; border: 0; font: inherit; font-weight: 600;
           background: var(--accent); color: #fff; cursor: pointer; }
-  #save:disabled { background: #34404d; color: var(--muted); cursor: not-allowed; }
+  #save:disabled { background: var(--border2); color: var(--muted); cursor: not-allowed; }
   #saved { margin-top: 6px; font-size: 13px; word-break: break-all; }
   details { margin-top: 14px; color: var(--muted); font-size: 13px; }
   details li { margin: 2px 0; }

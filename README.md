@@ -25,6 +25,7 @@ which only downloads numbers.
 | – | Manual counting page (`count.py`), no detection at all | built |
 | – | Count wizard (`wizard.py`): automatic or manual count, then a PowerPoint report | built |
 | – | Windows installer (PyInstaller + Inno Setup, built by GitHub Actions) | built on GitHub |
+| – | Mac app (`CrossingCount.app` in a `.dmg`, built by GitHub Actions) | built on GitHub |
 | – | Benchmark (`bench.py`): what the automatic count finds, on checked clips | built |
 | – | RetailNext API (`retailnext.py`): connect, list locations, fetch traffic | connect and fetch built; reading the answer into the wizard waits for a real answer |
 
@@ -40,8 +41,10 @@ uv sync
 
 On the Mac, double-click **CrossingCount** in your Applications folder (drag it
 to the Dock for one click). It starts the app if needed and opens it in your
-browser; **Quit** at the top of the page closes it, and everything is saved as
-you go. `packaging/mac/build_launcher.sh` builds that launcher. RetailNext
+browser; opened again while it runs, it just shows the page. **Quit** at the
+top of the page closes it, and everything is saved as you go. On a Mac without
+this project, install the Mac app (below). On this one,
+`packaging/mac/build_launcher.sh` builds a launcher that runs this folder. RetailNext
 brands are connected and removed on the first page too: type the brand, and
 if it is not connected yet, enter its API key there.
 
@@ -271,14 +274,39 @@ off with the camera drawings in `sites/`. Automatic counting runs on the
 processor, so no graphics card is needed, but it is slower than on a recent
 Mac. Manual counting is unaffected.
 
-To build the program folder yourself, on a Mac or on Windows:
+To build the program yourself, on a Mac or on Windows:
 
 ```bash
 uv run --group build pyinstaller packaging/crossing_count.spec --noconfirm
 ```
 
-On a Mac this folder is about 950 MB; `dist/CrossingCount/CrossingCount --self-test`
-checks that it loads everything.
+On a Mac this also makes `dist/CrossingCount.app`, about 950 MB;
+`dist/CrossingCount.app/Contents/MacOS/CrossingCount --self-test` checks that it
+loads everything.
+
+## Mac app
+
+`CrossingCount.app` is the same program for Macs with Apple silicon (M1 or
+later, macOS 12 or newer): Python and the detection models are inside, so it
+needs no uv, terminal or project folder. GitHub's Macs build it with
+`.github/workflows/mac-app.yml` on every push to `main`, or a tag such as
+`v1.0.0`: the tests, the same pinned YOLO weights, PyInstaller, the app's own
+self-test, then `CrossingCount-<version>.dmg` under the run's **Artifacts**.
+
+1. Open the `.dmg` and drag **CrossingCount** onto **Applications**.
+2. The app is not signed with an Apple Developer ID, so the first time macOS
+   refuses to open it. Open **System Settings → Privacy & Security**, scroll to
+   the message about CrossingCount and press **Open Anyway**. After that it opens
+   normally.
+3. Double-click it: the count wizard opens in your browser. It has no window or
+   Dock icon of its own; **Quit** on the page closes it, and opening the app
+   again while it runs brings the page back.
+
+Your drawings, runs, reports and settings live in
+`~/Library/Application Support/CrossingCount` (its log in `logs/wizard.log`
+there), so a new version never touches them. RetailNext keys stay in the
+Keychain. The app is updated by installing a newer `.dmg`: the page's
+**Update** button is for the project folder only.
 
 Licences: YOLO (Ultralytics) is under AGPL-3.0. Check with whoever handles
 licensing before giving the program to anyone outside the company: that needs

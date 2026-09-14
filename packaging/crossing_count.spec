@@ -3,6 +3,8 @@
 # installer.iss on Windows). Build from the project folder:
 #     uv run --group build pyinstaller packaging/crossing_count.spec --noconfirm
 # models/ must hold the weights (yolo11s.pt, yolo11m.pt) before building.
+import re
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
@@ -31,12 +33,35 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure)
+MAC = sys.platform == "darwin"
+ICON = str(ROOT / "packaging" / "mac" / "CrossingCount.icns")
+VERSION = re.search(r'__version__ = "([^"]+)"',
+                    (ROOT / "src" / "crossing_count" / "__init__.py").read_text()).group(1)
+
 exe = EXE(
     pyz,
     a.scripts,
     [],
     exclude_binaries=True,
     name="CrossingCount",
-    console=True,  # a small window that says the app is running; closing it quits
+    # Windows: a small window that says the app is running; closing it quits.
+    # Mac: an app without one, closed with Quit on its page.
+    console=not MAC,
+    icon=ICON if MAC else None,
 )
 coll = COLLECT(exe, a.binaries, a.datas, name="CrossingCount")
+if MAC:
+    app = BUNDLE(
+        coll,
+        name="CrossingCount.app",
+        icon=ICON,
+        bundle_identifier="com.parhamforozan.crossingcount",
+        version=VERSION,
+        info_plist={
+            "CFBundleDisplayName": "CrossingCount",
+            "CFBundleShortVersionString": VERSION,
+            "NSHumanReadableCopyright": "© 2026 Parham Forozan. All rights reserved.",
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "12.0",
+        },
+    )

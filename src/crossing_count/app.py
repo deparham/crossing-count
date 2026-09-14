@@ -11,11 +11,15 @@ from __future__ import annotations
 
 import importlib
 import multiprocessing
+import socket
+import subprocess
 import sys
+import webbrowser
 from typing import Any
 
-from .paths import FROZEN, SOURCE_ROOT, models_dirs, prepare_data_root
+from .paths import FROZEN, SOURCE_ROOT, data_root, models_dirs, prepare_data_root
 
+PORT = 8780
 COMMANDS = {
     "gate": "gate", "detect": "detect", "count": "count", "review": "review",
     "export": "export", "setup": "setup_ui", "proposed": "proposed", "trace": "trace_line",
@@ -29,6 +33,31 @@ def script(name: str) -> Any:
     if not FROZEN and str(SOURCE_ROOT) not in sys.path:
         sys.path.insert(0, str(SOURCE_ROOT))
     return importlib.import_module(name)
+
+
+def serving(port: int = PORT) -> bool:
+    """True when a program on this computer already listens on the port: CrossingCount, opened before."""
+    with socket.socket() as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def open_mac_app() -> int:
+    """The Mac app: show the page if CrossingCount already runs, else start it in the background.
+
+    The app itself ends at once, so opening it again from its icon always brings the page
+    back (a Mac app that stays open is only brought to the front, and this one has no
+    window). Quit on the page stops it.
+    """
+    if serving():
+        webbrowser.open(f"http://127.0.0.1:{PORT}/")
+        return 0
+    log = data_root() / "logs" / "wizard.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("ab") as out:
+        subprocess.Popen([sys.executable, "wizard"], stdin=subprocess.DEVNULL, stdout=out,
+                         stderr=subprocess.STDOUT, start_new_session=True)
+    return 0
 
 
 def self_test() -> int:
@@ -64,4 +93,6 @@ def main(argv: list[str] | None = None) -> int:
         return self_test()
     if args and args[0] in COMMANDS:
         return int(script(COMMANDS[args[0]]).main(args[1:]) or 0)
+    if FROZEN and sys.platform == "darwin" and not args:
+        return open_mac_app()
     return int(script("wizard").main(args) or 0)

@@ -15,18 +15,29 @@ from __future__ import annotations
 import argparse
 import sys
 import threading
+import time
 import webbrowser
 from pathlib import Path
 
 import uvicorn
 
 from crossing_count import paths
+from crossing_count.app import PORT, serving
 from crossing_count.wizard_app import create_wizard_app
+
+
+def _open_when_up(server: uvicorn.Server, url: str) -> None:
+    """Open the page once the server answers: the app's first start can take a while."""
+    while not server.started:
+        if server.should_exit:
+            return
+        time.sleep(0.1)
+    webbrowser.open(url)
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
-    ap.add_argument("--port", type=int, default=8780)
+    ap.add_argument("--port", type=int, default=PORT)
     ap.add_argument("--logo", type=Path, help="logo image for the report (default assets/logo.*)")
     ap.add_argument("--sites", type=Path, help="camera drawings folder (default sites/)")
     ap.add_argument("--runs-root", type=Path, help="folder holding runs/ (default: the data folder)")
@@ -34,14 +45,20 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     paths.prepare_data_root()
     url = f"http://127.0.0.1:{args.port}/"
+    if serving(args.port):  # opened again while it runs: show the page instead of failing
+        print(f"Crossing Count is already running at {url}", flush=True)
+        if not args.no_browser:
+            webbrowser.open(url)
+        return 0
     print(f"Crossing Count is running at {url}\n"
           f"Your data: {paths.data_root()}\n"
-          f"Keep this window open while you work; close it to quit.", flush=True)
-    if not args.no_browser:
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+          f"Quit on the page, or close this window, to stop it.", flush=True)
     app = create_wizard_app(args.sites or paths.sites_dir(), args.runs_root or paths.data_root(),
                             logo=args.logo or paths.logo_path())
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning"))
+    if not args.no_browser:
+        threading.Thread(target=_open_when_up, args=(server, url), daemon=True).start()
+    server.run()
     return 0
 
 

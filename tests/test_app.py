@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import sys
 from pathlib import Path
 
@@ -54,3 +55,12 @@ def test_the_wizard_starts_steps_as_scripts_or_as_sub_commands(
     assert wz.tool("gate") == [sys.executable, str(paths.SOURCE_ROOT / "gate.py")]
     monkeypatch.setattr(paths, "FROZEN", True)
     assert wz.tool("detect") == [sys.executable, "detect"]
+
+
+def test_opening_it_again_finds_the_one_already_running() -> None:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        s.listen()
+        port = s.getsockname()[1]
+        assert app.serving(port)
+    assert not app.serving(port)
