@@ -325,7 +325,7 @@
   <div class="checkgrid">
     <div>
       <div class="stage" id="cstage"><canvas id="canvas" class="player" width="960" height="720" aria-label="The crossing being checked"></canvas></div>
-      <div class="muted" style="margin-top:6px"><kbd>Space</kbd> play/pause · <kbd>R</kbd> replay · <kbd>←</kbd>/<kbd>→</kbd> 1 s · <kbd>↑</kbd>/<kbd>↓</kbd> speed · <kbd>Z</kbd> back · <span id="clock"></span></div>
+      <div class="muted" style="margin-top:6px"><kbd>Space</kbd> play/pause · <kbd>R</kbd> replay · <kbd>←</kbd>/<kbd>→</kbd> 1 s · <kbd>↑</kbd>/<kbd>↓</kbd> speed · <kbd>,</kbd>/<kbd>.</kbd> one frame · <kbd>Z</kbd> back · <span id="clock"></span></div>
     </div>
     <div class="card" id="panel"></div>
   </div>
@@ -344,6 +344,7 @@
       <div class="nums" id="hnums"></div>
       <div id="hwatched" class="muted"></div>
       <div id="hmsg" style="margin:8px 0;min-height:1.4em"></div>
+      <div id="hdisputes"></div>
       <div class="muted" style="margin-top:8px">Your counts on this camera (click a time to replay it)</div>
       <div id="hlist"></div>
       <button id="handDone" class="primary" style="margin-top:12px">I've finished counting →</button>
@@ -1093,7 +1094,7 @@ ENTER.hand = async () => {
   const pos = W.h.sum.positions[W.hcam] || 0;
   if (V.readyState >= 1) V.currentTime = pos; else V.addEventListener("loadedmetadata", () => (V.currentTime = pos), { once: true });
   setRate(W.hrate);
-  renderHand();
+  renderHand(); loadDisputes();
   hmsg(`Press <kbd>Space</kbd> to play, and ${keysText()} as each person crosses the line.`);
 };
 function keysText() { return W.st.dirs.map((d) => `<kbd>${d === "in" ? "I" : "O"}</kbd> for ${d.toUpperCase()}`).join(" and "); }
@@ -1112,22 +1113,27 @@ function renderHand() {
   });
   $("hnums").innerHTML = dirs.map((d) => `<div class="${d}">${LABEL[d]}<b>${cs[d]}</b></div>`).join("");
   const gaps = cs.unwatched.slice(0, 5).map(([a, b]) => `<a data-seek="${a}">${clock(a)}–${clock(b)}</a>`).join(", ");
-  $("hwatched").innerHTML = `Watched ${cs.watched_pct}% of this camera` + (cs.unwatched.length ? `. Not watched yet: ${gaps}${cs.unwatched.length > 5 ? " …" : ""}` : ": all of it.");
+  $("hwatched").innerHTML = `Watched ${cs.watched_pct}% of this camera` + (cs.unwatched.length ? `. Not watched yet: ${gaps}${cs.unwatched.length > 5 ? " …" : ""}` : ": all of it.")
+    + (cs.uncertain ? ` <span class="warn">${cs.uncertain} marked uncertain: not counted.</span>` : "");
   const mine = W.h.sum.counts.filter((c) => c.camera === W.hcam).sort((a, b) => b.t - a.t || b.id - a.id);
   $("hlist").innerHTML = mine.length ? mine.map((c) =>
-    `<div><span class="pill ${c.direction}">${c.direction.toUpperCase()}</span><a data-t="${c.t}">${clock(c.t)}</a><span style="flex:1"></span><a data-hdel="${c.id}">remove</a></div>`).join("")
+    `<div><span class="pill ${c.direction}">${c.direction.toUpperCase()}</span>${c.uncertain ? '<span class="warn" title="Uncertain: listed, not counted">uncertain</span>' : ""}` +
+    `<a data-t="${c.t}">${clock(c.t)}</a>${c.note ? `<span class="muted" title="${esc(c.note)}">· ${esc(c.note.slice(0, 40))}</span>` : ""}` +
+    `<span style="flex:1"></span><a data-hedit="${c.id}">edit</a><a data-hdel="${c.id}">remove</a></div>` +
+    (W.hedit === c.id ? hEditor(c) : "")).join("")
     : '<span class="muted">none yet</span>';
   $("speeds").innerHTML = HR.map((r) => `<button data-rate="${r}" class="${V.playbackRate === r ? "on" : ""}">${r}×</button>`).join("");
-  $("hkeys").innerHTML = `${keysText()} · <kbd>Z</kbd> undo · <kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> 2 s (<kbd>⇧</kbd> 0.1 s) · <kbd>↑</kbd>/<kbd>↓</kbd> speed` + (W.st.cameras.length > 1 ? ` · <kbd>1</kbd>–<kbd>${W.st.cameras.length}</kbd> camera` : "");
+  $("hkeys").innerHTML = `${keysText()} (with <kbd>⇧</kbd>: uncertain, not counted) · <kbd>U</kbd> mark the last uncertain · <kbd>E</kbd> edit the last · <kbd>Z</kbd> undo · <kbd>Space</kbd> play/pause · <kbd>,</kbd>/<kbd>.</kbd> one frame · <kbd>←</kbd>/<kbd>→</kbd> 2 s (<kbd>⇧</kbd> 0.1 s) · <kbd>↑</kbd>/<kbd>↓</kbd> speed` + (W.st.cameras.length > 1 ? ` · <kbd>1</kbd>–<kbd>${W.st.cameras.length}</kbd> camera` : "");
 }
 function setRate(r) { W.hrate = r; V.playbackRate = r; V.defaultPlaybackRate = r; document.querySelectorAll("#speeds [data-rate]").forEach((b) => b.classList.toggle("on", +b.dataset.rate === r)); }
-async function hcount(direction) {
+async function hcount(direction, uncertain = false) {
   if (!W.st.dirs.includes(direction)) return;
   const t = +V.currentTime.toFixed(2), cam = W.hcam;
   const twin = W.h.sum.counts.some((c) => c.camera === cam && c.direction === direction && Math.abs(c.t - t) < 0.3);
-  W.flash = { text: `${direction.toUpperCase()} +1`, dir: direction, until: performance.now() + 700 };
+  W.flash = { text: `${direction.toUpperCase()} ${uncertain ? "?" : "+1"}`, dir: direction, until: performance.now() + 700 };
   try {
-    applyHand(await api("/api/hand/add", { camera: cam, t, direction }));
+    applyHand(await api("/api/hand/add", { camera: cam, t, direction, uncertain }));
+    if (uncertain) { hmsg(`Uncertain ${direction.toUpperCase()} at ${clock(t)} kept, not counted. <a data-hedit-last="1">Add a note</a>`, "warn"); return; }
     if (twin) hmsg(`That is a second ${direction.toUpperCase()} at the same moment. Two people together? Keep it. A double press? Press <kbd>Z</kbd>.`, "warn");
     else hmsg(`${direction.toUpperCase()} at ${clock(t)} saved.`, "ok");
   } catch (e) { hmsg(esc(e.message), "err"); }
@@ -1207,11 +1213,79 @@ function drawHand() {
   if (W.hseg && W.hseg.cam === W.hcam) tctx.fillRect(W.hseg.from / d * tw, 7, Math.max(1, (W.hseg.last - W.hseg.from) / d * tw), th - 14);
   for (const c of W.h.sum.counts) {
     if (c.camera !== W.hcam) continue;
-    tctx.fillStyle = c.direction === "in" ? "#3ecf8e" : "#ff7a59"; tctx.fillRect(c.t / d * tw - 1, 0, 2, th);
+    tctx.fillStyle = c.uncertain ? "#f5b942" : c.direction === "in" ? "#3ecf8e" : "#ff7a59"; tctx.fillRect(c.t / d * tw - 1, 0, 2, th);
   }
   tctx.fillStyle = "#ffffff"; tctx.fillRect(V.currentTime / d * tw - 1, 0, 3, th);
 }
 async function hdelete(id) { try { applyHand(await api("/api/hand/delete", { id })); hmsg("Count removed.", "ok"); } catch (e) { hmsg(esc(e.message), "err"); } }
+function hLast() { return W.h.sum.counts.filter((c) => c.camera === W.hcam).sort((a, b) => b.id - a.id)[0]; }
+function hEditor(c) {  // correct one count: direction, moment, certainty, note, and why
+  const at = W.hnewT != null ? W.hnewT : c.t;
+  return `<div class="sub" data-edit="${c.id}" style="flex-direction:column;align-items:stretch;gap:6px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select data-f="direction">${W.st.dirs.map((d) => `<option value="${d}"${d === c.direction ? " selected" : ""}>${d.toUpperCase()}</option>`).join("")}</select>
+      <span class="muted">at ${clock(at)}</span><button data-act="now">Move to the paused moment</button>
+      <label class="muted" style="display:flex;gap:4px;align-items:center"><input type="checkbox" data-f="uncertain"${c.uncertain ? " checked" : ""}> uncertain</label>
+    </div>
+    <input data-f="note" placeholder="Note (optional)" value="${esc(c.note || "")}">
+    <input data-f="reason" placeholder="Why the change (kept in the log)">
+    <div style="display:flex;gap:8px"><button data-act="save" class="primary">Save</button><button data-act="cancel">Cancel</button></div>
+  </div>`;
+}
+function hOpenEditor(id) { W.hedit = id; W.hnewT = null; V.pause(); renderHand(); const f = document.querySelector('[data-edit] [data-f="note"]'); if (f) f.focus(); }
+async function hToggleUncertain() {
+  const c = hLast();
+  if (!c) return;
+  try {
+    applyHand(await api("/api/hand/edit", { id: c.id, uncertain: !c.uncertain, reason: "U key" }));
+    hmsg(c.uncertain ? `The ${c.direction.toUpperCase()} at ${clock(c.t)} counts again.` : `The ${c.direction.toUpperCase()} at ${clock(c.t)} is uncertain: kept, not counted.`, "ok");
+  } catch (e) { hmsg(esc(e.message), "err"); }
+}
+$("hlist").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-act]"), box = e.target.closest("[data-edit]");
+  if (!b || !box) return;
+  e.preventDefault();
+  const id = +box.dataset.edit, c = W.h.sum.counts.find((x) => x.id === id);
+  if (b.dataset.act === "cancel") { W.hedit = null; W.hnewT = null; renderHand(); return; }
+  if (b.dataset.act === "now") { W.hnewT = +V.currentTime.toFixed(2); renderHand(); return; }
+  const f = (name) => box.querySelector(`[data-f="${name}"]`);
+  const body = { id, direction: f("direction").value, uncertain: f("uncertain").checked, note: f("note").value, reason: f("reason").value };
+  if (W.hnewT != null && c && W.hnewT !== c.t) body.t = W.hnewT;
+  try { applyHand(await api("/api/hand/edit", body)); W.hedit = null; W.hnewT = null; renderHand(); hmsg("Count corrected; the change is in the log.", "ok"); }
+  catch (err) { hmsg(esc(err.message), "err"); }
+});
+async function loadDisputes() {  // two people's counts disagree: each moment, to settle with a reason
+  $("hdisputes").innerHTML = "";
+  if (!W.st || W.st.mode !== "manual") return;
+  let g;
+  try { g = await api("/api/gold/current"); } catch (e) { return; }
+  const a = g.clip && g.clip.agreement;
+  if (!a || !a.disputes || !a.disputes.length) return;
+  W.disputes = a.disputes;
+  const open = a.disputes.filter((d) => !d.decision).length;
+  $("hdisputes").innerHTML = `<div class="sub"><b>Two counts disagree on ${a.disputes.length} moment${a.disputes.length > 1 ? "s" : ""}</b> <span class="muted">(${open ? `${open} to settle` : "all settled"})</span>
+    <div class="muted">Watch each, then say what really happened, and why. Both counts are kept; your decision is recorded under your name.</div>
+    <label class="muted" style="display:flex;gap:6px;align-items:center;margin-top:6px">Settled by <input id="adjBy" value="${esc(W.st.store.operator || "")}"></label>
+    ${a.disputes.map((d, i) => `<div style="margin-top:10px;display:block">
+      <div><a href="#" data-dshow="${i}">${esc(d.clock)} · ${esc(d.camera)}</a> <span class="muted">${esc(d.what)}</span>${d.decision ? ` <span class="ok">settled: ${esc(d.decision.decision)}, ${esc(d.decision.reason)} (${esc(d.decision.by)})</span>` : ""}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">${W.st.dirs.map((x) => `<button data-dset="${i}" data-v="${x}">${x.toUpperCase()}</button>`).join("")}<button data-dset="${i}" data-v="none">No crossing</button><button data-dset="${i}" data-v="uncertain">Still uncertain</button>
+      <input data-dreason="${i}" placeholder="Why" style="flex:1;min-width:140px"></div></div>`).join("")}</div>`;
+}
+$("hdisputes").addEventListener("click", async (e) => {
+  const show = e.target.closest("[data-dshow]"), set = e.target.closest("[data-dset]");
+  if (show) {
+    e.preventDefault();
+    const d = W.disputes[+show.dataset.dshow];
+    if (d.camera !== W.hcam && W.h.geometry[d.camera]) hswitch(d.camera);
+    V.currentTime = Math.max(0, d.t - 3); V.play().catch(() => {});
+  } else if (set) {
+    const i = +set.dataset.dset, d = W.disputes[i];
+    const reason = document.querySelector(`[data-dreason="${i}"]`).value.trim(), by = $("adjBy").value.trim();
+    if (!reason || !by) { hmsg("Give your name and why, for the record.", "warn"); return; }
+    try { await api("/api/gold/adjudicate", { by, decisions: [{ camera: d.camera, t: d.t, decision: set.dataset.v, reason }] }); hmsg("Settled and recorded.", "ok"); loadDisputes(); }
+    catch (err) { hmsg(esc(err.message), "err"); }
+  }
+});
 
 function draw() {
   if (W.key === "check") drawCheck();
@@ -1221,14 +1295,17 @@ function draw() {
 
 // ---------- keys and clicks ----------
 window.addEventListener("keydown", (e) => {
-  const a = document.activeElement; if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA")) return;
+  const a = document.activeElement; if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT")) return;
   if (W.key !== "check" && W.key !== "hand") return;
   if (e.repeat && !e.key.startsWith("Arrow")) { e.preventDefault(); return; }  // a held key acts once
   const k = e.key.toLowerCase(), go_ = (fn) => { e.preventDefault(); fn(); };
   if (k === " " || e.code === "Space") go_(() => (V.paused ? V.play().catch(() => {}) : V.pause()));
+  else if (k === "," || k === ".") go_(() => { V.pause(); V.currentTime = Math.max(0, V.currentTime + (k === "." ? 1 : -1) / (W.st.fps || 10)); });
   else if (W.key === "hand") {
-    if (k === "i") go_(() => hcount("in"));
-    else if (k === "o") go_(() => hcount("out"));
+    if (k === "i") go_(() => hcount("in", e.shiftKey));
+    else if (k === "o") go_(() => hcount("out", e.shiftKey));
+    else if (k === "u") go_(hToggleUncertain);
+    else if (k === "e") go_(() => { const c = hLast(); if (c) hOpenEditor(c.id); });
     else if (k === "z" || k === "backspace") go_(hundo);
     else if (k === "arrowleft") go_(() => (V.currentTime = Math.max(0, V.currentTime - (e.shiftKey ? 0.1 : 2))));
     else if (k === "arrowright") go_(() => (V.currentTime = Math.min(W.st.duration_s, V.currentTime + (e.shiftKey ? 0.1 : 2))));
@@ -1252,11 +1329,13 @@ window.addEventListener("keydown", (e) => {
   }
 });
 document.addEventListener("click", (e) => {
-  const el = e.target.closest("[data-t],[data-hdel],[data-seek],#reveal");
+  const el = e.target.closest("[data-t],[data-hdel],[data-hedit],[data-hedit-last],[data-seek],#reveal");
   if (!el) return;
   e.preventDefault();
   if (el.id === "reveal") api("/api/reveal", {}).catch(() => {});
   else if (el.dataset.hdel) hdelete(+el.dataset.hdel);
+  else if (el.dataset.hedit) hOpenEditor(+el.dataset.hedit);
+  else if (el.dataset.heditLast) { const c = hLast(); if (c) hOpenEditor(c.id); }
   else if (el.dataset.seek) V.currentTime = +el.dataset.seek;
   else { V.currentTime = Math.max(0, +el.dataset.t - 3); V.play().catch(() => {}); }
 });
@@ -1314,8 +1393,8 @@ async function showGold() {  // a count by hand of every moment can be kept as a
 function goldHtml(c) {
   const a = c.agreement, who = c.reviews.map((r) => `${esc(r.reviewer)} (${r.crossings})`).join(" and ");
   return `<div class="ok">Kept as gold clip ${esc(c.id)} (${esc(c.conditions.traffic || "")} traffic), in the ${esc(c.split)} set, counted by ${who}.</div>`
-    + (a ? `<div class="${a.disagreements ? "warn" : "ok"}" style="margin-top:6px">The two counts agree on ${a.agreed} crossing(s)${a.disagreements
-            ? `; they disagree on ${a.disagreements}, which stay out of any scoring until someone looks again: ${a.where.map(esc).join(", ")}` : ""}.</div>`
+    + (a ? `<div class="${a.status === "agreed" || a.status === "settled" ? "ok" : "warn"}" style="margin-top:6px">The two counts agree on ${a.agreed} crossing(s)${a.disagreements
+            ? `; they disagree on ${a.disagreements} (${esc(a.status)}). Each is listed on the Count by hand step, with a Show button, to settle with a reason; until then it stays out of any scoring` : ""}.</div>`
        : `<div class="muted" style="margin-top:6px">Someone else can count the same footage without seeing this count: it shows how far two people agree. <button id="goldRecount" style="margin-left:6px">Count it again as someone else</button></div>`);
 }
 $("goldSave").addEventListener("click", async () => {

@@ -40,7 +40,7 @@ from typing import Any
 
 from av.error import FFmpegError
 
-from . import bench, paths
+from . import auditlog, bench, paths
 from . import video as vid
 from .config import ConfigError
 from .evaluate import ENGINE as CROSSING_ENGINE
@@ -219,7 +219,9 @@ def save(state: dict[str, Any], run_dir: Path, tags: Iterable[str], notes: str =
                         for c in state["cameras"]},
         "crossings": [{"camera": c["camera"], "t": round(float(c["t"]), 2),
                        "clock": (start + timedelta(seconds=float(c["t"]))).strftime("%H:%M:%S"),
-                       "direction": c["direction"]}
+                       "direction": c["direction"],
+                       **({"uncertain": True} if c.get("uncertain") else {}),
+                       **({"note": c["note"]} if c.get("note") else {})}
                       for c in sorted(m["counts"], key=lambda c: float(c["t"]))
                       if c["direction"] in dirs],
     }
@@ -272,38 +274,74 @@ def save(state: dict[str, Any], run_dir: Path, tags: Iterable[str], notes: str =
 def truth(rec: dict[str, Any]) -> tuple[dict[str, list[tuple[float, str]]], dict[str, list[float]],
                                         dict[str, Any] | None]:
     """The clip's crossings per camera, the uncertain moments per camera, and how two
-    people's counts agreed (None with one count)."""
+    people's counts agreed (None with one count).
+
+    Crossings marked uncertain are never truth: they are uncertain moments. With two counts,
+    the crossings both counted the same way are truth; each moment they disagree on (and
+    each uncertain mark) is a dispute, uncertain until someone settles it (adjudicate()):
+    settled as In or Out it becomes a crossing, as no crossing it goes, as uncertain it
+    stays out of scoring. Both original counts are always kept."""
     cams, dirs = [c["sensor"] for c in rec["cameras"]], rec["dirs"]
+    reviews = rec["reviews"]
 
-    def of(review: dict[str, Any]) -> dict[str, list[tuple[float, str]]]:
+    def of(review: dict[str, Any], marked: bool = False) -> dict[str, list[tuple[float, str]]]:
         return {cam: [(float(c["t"]), str(c["direction"])) for c in review["crossings"]
-                      if c["camera"] == cam] for cam in cams}
+                      if c["camera"] == cam and bool(c.get("uncertain")) == marked] for cam in cams}
 
-    first = of(rec["reviews"][0])
-    if len(rec["reviews"]) < 2:
-        return first, {cam: [] for cam in cams}, None
-    second = of(rec["reviews"][1])
+    first = of(reviews[0])
+    if len(reviews) < 2:
+        return first, {cam: [t for t, _ in of(reviews[0], True)[cam]] for cam in cams}, None
+    second = of(reviews[1])
+    names = [str(r["reviewer"]) for r in reviews[:2]]
+    marks = [of(reviews[0], True), of(reviews[1], True)]
+    decided: dict[str, dict[str, Any]] = (rec.get("adjudication") or {}).get("decisions") or {}
+    start = datetime.fromisoformat(rec["period"]["start"])
     real: dict[str, list[tuple[float, str]]] = {}
     unsure: dict[str, list[float]] = {}
     total = dict.fromkeys(("agreed", "direction_disagreements", "only_first", "only_second",
                            "disagreements"), 0)
-    where: list[str] = []
-    start = datetime.fromisoformat(rec["period"]["start"])
+    disputes: list[dict[str, Any]] = []
+
+    def way(src: list[tuple[float, str]], t: float) -> str:
+        return next((d.upper() for tt, d in src if abs(tt - t) < 0.01), "?")
+
     for cam in cams:
-        real[cam], unsure[cam] = consensus(first[cam], second[cam], dirs)
+        agreed, _ = consensus(first[cam], second[cam], dirs)
         g = agreement(first[cam], second[cam], dirs)
         for k in total:
             total[k] += int(g[k])
-        where += [f"{cam} {(start + timedelta(seconds=t)):%H:%M:%S} ({what})"
-                  for what, ts in (("direction", g["at"]["direction"]),
-                                   (f"only {rec['reviews'][0]['reviewer']}", g["at"]["only_first"]),
-                                   (f"only {rec['reviews'][1]['reviewer']}", g["at"]["only_second"]))
-                  for t in ts]
+        mine = [(t, f"{names[0]} counted {way(first[cam], t)}, {names[1]} the other way")
+                for t in g["at"]["direction"]]
+        mine += [(t, f"only {names[0]} counted {way(first[cam], t)}") for t in g["at"]["only_first"]]
+        mine += [(t, f"only {names[1]} counted {way(second[cam], t)}")
+                 for t in g["at"]["only_second"]]
+        for who, m in zip(names, marks, strict=True):
+            for t, d in m[cam]:
+                near = next((k for k, (tt, _) in enumerate(mine) if abs(tt - t) <= TOLERANCE_S), None)
+                if near is None:
+                    mine.append((t, f"{who} marked an uncertain {d.upper()}"))
+                else:  # the same moment as another disagreement: one question, not two
+                    mine[near] = (mine[near][0], f"{mine[near][1]}; {who} marked it uncertain")
+        real[cam], unsure[cam] = list(agreed), []
+        for t, what in sorted(mine):
+            key = f"{cam}@{t:.2f}"
+            decision = decided.get(key)
+            disputes.append({"key": key, "camera": cam, "t": round(t, 2),
+                             "clock": f"{(start + timedelta(seconds=t)):%H:%M:%S}", "what": what,
+                             "decision": decision})
+            if decision and decision["decision"] in dirs:
+                real[cam].append((t, str(decision["decision"])))
+            elif not decision or decision["decision"] == "uncertain":
+                unsure[cam].append(t)
+        real[cam].sort()
     union = total["agreed"] + total["disagreements"]
+    settled = sum(1 for d in disputes if d["decision"])
+    status = ("agreed" if not disputes else "settled" if settled == len(disputes)
+              else "partly settled" if settled else "disagreement (unresolved)")
     return real, unsure, {
         **total, "agreement_pct": round(100.0 * total["agreed"] / union, 1) if union else None,
-        "status": "agreed" if not total["disagreements"] else "disagreement (unresolved)",
-        "reviewers": [r["reviewer"] for r in rec["reviews"][:2]], "where": sorted(where)}
+        "status": status, "reviewers": names, "disputes": disputes,
+        "where": [f"{d['camera']} {d['clock']} ({d['what']})" for d in disputes]}
 
 
 def describe(rec: dict[str, Any]) -> dict[str, Any]:
@@ -317,6 +355,51 @@ def describe(rec: dict[str, Any]) -> dict[str, Any]:
                         for r in rec["reviews"]],
             "crossings": sum(len(v) for v in real.values()),
             "uncertain": sum(len(v) for v in unsure.values()), "agreement": agree}
+
+
+DECISIONS = ("in", "out", "none", "uncertain")
+
+
+def adjudicate(state: dict[str, Any], decisions: Iterable[dict[str, Any]], by: str,
+               root: Path | None = None, shared: Path | None = None) -> dict[str, Any]:
+    """Settle moments two people's counts disagree on: for each, In, Out, no crossing or
+    still uncertain, who decided and why. Both counts stay as they were; a later decision on
+    the same moment replaces the earlier one, and every decision stays in the history and the
+    audit log."""
+    by = by.strip()
+    if not by:
+        raise GoldError("Say who settles the disagreements.")
+    rec = find(state, root, shared)
+    if rec is None:
+        raise GoldError("This footage has no gold clip.")
+    if len(rec["reviews"]) < 2:
+        raise GoldError("Only one person has counted this clip: there is nothing to settle.")
+    _, _, agree = truth(rec)
+    assert agree is not None
+    open_ = {d["key"]: d for d in agree["disputes"]}
+    names = {r["reviewer"].casefold() for r in rec["reviews"][:2]}
+    adj = rec.setdefault("adjudication", {"decisions": {}, "history": []})
+    for d in decisions:
+        key = f"{d.get('camera')}@{float(d.get('t', -1)):.2f}"
+        if key not in open_:
+            raise GoldError(f"There is no disagreement on {d.get('camera')} at {d.get('t')}.")
+        decision, reason = str(d.get("decision") or ""), str(d.get("reason") or "").strip()
+        if decision not in DECISIONS or (decision in ("in", "out") and decision not in rec["dirs"]):
+            raise GoldError(f"{decision!r}: settle it as {', '.join(rec['dirs'])}, none or uncertain.")
+        if not reason:
+            raise GoldError("Give the reason for each decision: it is kept with it.")
+        entry = {"decision": decision, "reason": reason, "by": by, "at": _now(),
+                 "by_one_of_the_counters": by.casefold() in names}
+        adj["decisions"][key] = entry
+        adj["history"].append({"key": key, "dispute": open_[key]["what"], **entry})
+        auditlog.append("adjudicated", user=by, obj={"gold_clip": rec["id"], "camera": d["camera"],
+                                                     "t": open_[key]["t"]},
+                        before=open_[key]["what"], after=decision, reason=reason, root=root)
+    rec["updated_at"] = _now()
+    write_json_atomic(folder(root) / f"{rec['id']}.json", rec)
+    if shared is not None:
+        write_json_atomic(folder(shared) / f"{rec['id']}.json", rec)
+    return describe(rec)
 
 
 def _clip_files(root: Path | None = None, shared: Path | None = None

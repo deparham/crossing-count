@@ -99,11 +99,24 @@ and add a note; if the setting says not to count them and it matters, mark uncer
 
 A gold clip can be counted a second time, independently, by someone who has not seen the
 first count. The two counts are matched crossing by crossing (same camera, same
-direction, at most 2 seconds apart). Crossings both counted are the ground truth;
-the moments they disagree on stay out of scoring until adjudicated, and both original
-counts are kept.
+direction, at most 2 seconds apart). Crossings both counted are the ground truth. Each
+moment they disagree on (a crossing only one counted, one counted in opposite
+directions, or one marked uncertain) is listed on the Count by hand step, with a Show
+button. A third person, ideally, settles each one after watching it: **In**, **Out**,
+**no crossing**, or **still uncertain**, always with the reason. Until settled, a moment
+stays out of scoring. Both original counts are never changed; every decision is kept with
+who made it, when and why, in the clip's history and in the audit log.
 
-## 7. The automatic counter's rule is not this definition
+## 7. Marking and correcting, in the app
+
+While counting by hand: `I` / `O` count a crossing; with `Shift` (`⇧I` / `⇧O`) the crossing
+is marked **uncertain**: kept and listed in the report, never counted, and left out of
+scoring. `U` marks (or unmarks) the last crossing uncertain; `E` opens it to correct its
+direction, move it to the moment the video is paused on, mark it uncertain or add a note;
+`,` and `.` step one frame. Every correction is kept with what it was, what it became and
+the reason given.
+
+## 8. The automatic counter's rule is not this definition
 
 The automatic counter (rule.py) uses heuristics of its own: a mask zone a person must
 reach, filter zones, and cancelling a crossing that the same track undoes. Those decide

@@ -112,9 +112,18 @@ Videos are listed), with or without the sensor's marks, then choose how to count
    the video while you count.
 2. **Traffic.** Choose In, Out or both.
 3. **Count by hand.** Play each camera at 0.5× to 16× and press `I` or `O` as
-   each person crosses; `Z` undoes. A timeline shows the stretches you have
-   watched and every count. If you finish with stretches unwatched, the page
-   asks you to confirm.
+   each person crosses; `Z` undoes. `⇧I` / `⇧O` count a crossing you are not
+   sure of: it is listed in the report but never counted. `U` marks the last
+   crossing uncertain (or not), `E` opens it to change its direction, move it
+   to the paused moment or add a note, and `,` / `.` step one frame. Every
+   crossing in the list has an edit link too; each correction asks for a
+   reason and is kept with what it was. A timeline shows the stretches you
+   have watched and every count (uncertain ones in yellow). If you finish
+   with stretches unwatched, the page asks you to confirm.
+   When a gold clip has been counted by two people, the moments they disagree
+   on are listed beside the video: **Show** jumps to each, and a third person
+   settles it (In, Out, no crossing, still uncertain) with a reason. Both
+   counts stay as they were.
 4. **RetailNext.** Enter the sensor's number.
 
 Both end with the **report**: an A4-portrait PowerPoint in the layout of iTOi's

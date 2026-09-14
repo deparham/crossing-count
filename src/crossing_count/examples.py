@@ -67,6 +67,8 @@ def moments(w: Wizard) -> list[dict[str, Any]]:
     if w.manual():
         m = st["manual"]
         for c in m["counts"]:
+            if c.get("uncertain"):  # nothing certain to learn from
+                continue
             out.append({"label": "crossing", "source": "manual_click", "camera": c["camera"],
                         "t": float(c["t"]), "direction": c["direction"]})
         rng = random.Random(st["fingerprint"])

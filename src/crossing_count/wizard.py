@@ -412,6 +412,7 @@ class Wizard:
         self._lock = threading.RLock()
         self._job: _Job | None = None
         info = vid.probe(self.video)
+        self.fps = float(info.fps_reported or 0) or 10.0  # for stepping one frame at a time
         if self.path.is_file():
             state = json.loads(self.path.read_text(encoding="utf-8"))
             if state.get("fingerprint") != info.fingerprint:
@@ -1039,7 +1040,10 @@ class Wizard:
             self._save()
 
     @_open_only
-    def manual_add(self, sensor: str, t: float, direction: str) -> dict[str, Any]:
+    def manual_add(self, sensor: str, t: float, direction: str, uncertain: bool = False,
+                   note: str = "") -> dict[str, Any]:
+        """One crossing counted by hand. An uncertain one is kept and listed but never counted
+        (Ground Truth Specification: when in doubt, mark it, never guess)."""
         self._camera(sensor)
         if direction not in self.dirs():
             raise WizardError(f"This count is for {' and '.join(LABELS[d] for d in self.dirs())}.")
@@ -1048,7 +1052,9 @@ class Wizard:
         with self._lock:
             m = self.state["manual"]
             c = {"id": m["next_id"], "camera": sensor, "t": round(float(t), 2),
-                 "direction": direction, "at": _now()}
+                 "direction": direction, "at": _now(),
+                 **({"uncertain": True} if uncertain else {}),
+                 **({"note": note.strip()[:500]} if note.strip() else {})}
             m["next_id"] += 1
             m["counts"].append(c)
             m["done"] = False
@@ -1067,6 +1073,43 @@ class Wizard:
             m["counts"], m["done"] = kept, False
             self._decide("hand_count_removed", before=dict(gone))
             self._save()
+
+    @_open_only
+    def manual_edit(self, count_id: int, t: float | None = None, direction: str | None = None,
+                    uncertain: bool | None = None, note: str | None = None,
+                    reason: str = "") -> dict[str, Any]:
+        """Correct one count by hand: its moment, its direction, whether it is certain, its
+        note. What it was, what it became and why go to the logs."""
+        with self._lock:
+            c = next((x for x in self.state["manual"]["counts"] if x["id"] == count_id), None)
+            if c is None:
+                raise WizardError("There is no such count.")
+            before = dict(c)
+            if t is not None:
+                if not 0.0 <= t <= float(self.state["duration_s"]) + 1.0:
+                    raise WizardError(f"{t:.2f} s is outside the video")
+                c["t"] = round(float(t), 2)
+            if direction is not None:
+                if direction not in self.dirs():
+                    raise WizardError(f"This count is for "
+                                      f"{' and '.join(LABELS[d] for d in self.dirs())}.")
+                c["direction"] = direction
+            if uncertain is not None:
+                if uncertain:
+                    c["uncertain"] = True
+                else:
+                    c.pop("uncertain", None)
+            if note is not None:
+                if note.strip():
+                    c["note"] = note.strip()[:500]
+                else:
+                    c.pop("note", None)
+            if c != before:
+                c["edited_at"] = _now()
+                self._decide("hand_count_edited", before=before, after=dict(c),
+                             reason=reason.strip() or None)
+                self._save()
+            return dict(c)
 
     @_open_only
     def manual_undo(self, sensor: str) -> dict[str, Any] | None:
@@ -1135,8 +1178,11 @@ class Wizard:
             watched = m["watched"].get(key, [])
             seen = sum(b - a for a, b in watched)
             cams.append({"sensor": key, "picture": cam["picture"],
-                         "in": sum(1 for c in mine if c["direction"] == "in"),
-                         "out": sum(1 for c in mine if c["direction"] == "out"),
+                         "in": sum(1 for c in mine if c["direction"] == "in"
+                                   and not c.get("uncertain")),
+                         "out": sum(1 for c in mine if c["direction"] == "out"
+                                    and not c.get("uncertain")),
+                         "uncertain": sum(1 for c in mine if c.get("uncertain")),
                          "watched": watched,
                          "watched_pct": round(min(100.0, 100.0 * seen / dur), 1) if dur else 0.0,
                          "unwatched": unwatched_ranges(watched, dur)})
@@ -1458,9 +1504,12 @@ class Wizard:
         if self.manual():
             m = self.state["manual"]
             cams = self.manual_summary()["cameras"]
-            verified = {d: sum(1 for x in m["counts"] if x["direction"] == d) for d in dirs}
+            verified = {d: sum(1 for x in m["counts"] if x["direction"] == d
+                               and not x.get("uncertain")) for d in dirs}
+            unsure = {d: sum(1 for x in m["counts"] if x["direction"] == d and x.get("uncertain"))
+                      for d in dirs}
             c = {"manual": True, "detected": dict.fromkeys(dirs, 0), "verified": verified,
-                 "unsure": dict.fromkeys(dirs, 0), "confirmed": 0, "rejected": 0, "found": 0,
+                 "unsure": unsure, "confirmed": 0, "rejected": 0, "found": 0,
                  "not_found": 0, "added": 0, "unanswered": 0, "items": 0, "watch_ranges": 0,
                  "watch_s": 0.0, "watch_done": 0, "groups": 0, "group_people": 0,
                  "watched_pct": {cam["sensor"]: cam["watched_pct"] for cam in cams},
@@ -1561,7 +1610,12 @@ class Wizard:
     def unsure_rows(self) -> list[dict[str, Any]]:
         """Crossings the checker could not decide: listed in the report, never counted."""
         if self.manual():
-            return []
+            return [{"t": c["t"], "camera": c["camera"],
+                     "picture": self._camera(c["camera"])["picture"], "direction": c["direction"],
+                     "point": None, "found": "Unclear to the person counting: not counted"
+                     + (f" ({c['note']})" if c.get("note") else "")}
+                    for c in self.state["manual"]["counts"]
+                    if c.get("uncertain") and c["direction"] in self.dirs()]
         answers = self.state["answers"]
         return [{"t": it["t"], "camera": it["camera"], "picture": it["picture"],
                  "direction": it["direction"], "point": it["point"],
@@ -1572,8 +1626,10 @@ class Wizard:
         if self.manual():
             rows = [{"t": c["t"], "camera": c["camera"],
                      "picture": self._camera(c["camera"])["picture"], "direction": c["direction"],
-                     "point": None, "found": "Counted by hand"}
-                    for c in self.state["manual"]["counts"] if c["direction"] in self.dirs()]
+                     "point": None,
+                     "found": "Counted by hand" + (f": {c['note']}" if c.get("note") else "")}
+                    for c in self.state["manual"]["counts"]
+                    if c["direction"] in self.dirs() and not c.get("uncertain")]
             rows.sort(key=lambda r: (r["t"], r["picture"]))
             return rows
         answers, people = self.state["answers"], self.state["people"]
@@ -1592,7 +1648,7 @@ class Wizard:
 
     def public(self) -> dict[str, Any]:
         with self._lock:
-            return {**self.state, "dirs": self.dirs(), "counts": self.counts(),
+            return {**self.state, "dirs": self.dirs(), "counts": self.counts(), "fps": self.fps,
                     "run_dir": str(self.run_dir), "history": self.history(),
                     "intervals": self.intervals(), "comparison": self.comparison()}
 

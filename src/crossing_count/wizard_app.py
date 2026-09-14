@@ -182,6 +182,22 @@ class HandAddIn(BaseModel):
     camera: str
     t: float
     direction: str
+    uncertain: bool = False
+    note: str = ""
+
+
+class HandEditIn(BaseModel):
+    id: int
+    t: float | None = None
+    direction: str | None = None
+    uncertain: bool | None = None
+    note: str | None = None
+    reason: str = ""  # why it changed: kept in the logs
+
+
+class AdjudicateIn(BaseModel):
+    by: str  # who settled the disagreements
+    decisions: list[dict[str, Any]]  # {camera, t, decision: in | out | none | uncertain, reason}
 
 
 class HandCameraIn(BaseModel):
@@ -636,11 +652,16 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     @app.post("/api/hand/add")
     def hand_add(a: HandAddIn) -> dict[str, Any]:
-        return hand_run(lambda: wiz().manual_add(a.camera, a.t, a.direction))
+        return hand_run(lambda: wiz().manual_add(a.camera, a.t, a.direction, a.uncertain, a.note))
 
     @app.post("/api/hand/delete")
     def hand_delete(i: HandIdIn) -> dict[str, Any]:
         return hand_run(lambda: wiz().manual_delete(i.id))
+
+    @app.post("/api/hand/edit")
+    def hand_edit(e: HandEditIn) -> dict[str, Any]:
+        return hand_run(lambda: wiz().manual_edit(e.id, e.t, e.direction, e.uncertain, e.note,
+                                                  e.reason))
 
     @app.post("/api/hand/undo")
     def hand_undo(c: HandCameraIn) -> dict[str, Any]:
@@ -872,6 +893,15 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         try:
             return {"clip": gold.save(w.state, w.run_dir, g.tags, g.notes, data(), g.lighting,
                                       g.occlusion, shared())}
+        except gold.GoldError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/gold/adjudicate")
+    def gold_adjudicate(a: AdjudicateIn) -> dict[str, Any]:
+        """Settle moments two people's counts disagree on; both counts are kept."""
+        w = wiz()
+        try:
+            return {"clip": gold.adjudicate(w.state, a.decisions, a.by, data(), shared())}
         except gold.GoldError as exc:
             raise HTTPException(400, str(exc)) from exc
 
