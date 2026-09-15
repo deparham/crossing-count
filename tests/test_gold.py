@@ -20,12 +20,12 @@ TEST_STORE = next(c for c in (f"T-{i}" for i in range(500)) if gold.split_of(c) 
 
 
 @pytest.fixture
-def counted(two_tile_video: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Wizard:
+def counted(clean_two_tile_video: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Wizard:
     monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path))  # never the real settings
-    w = Wizard(two_tile_video["video"], two_tile_video["dir"], tmp_path)
+    w = Wizard(clean_two_tile_video["video"], clean_two_tile_video["dir"], tmp_path)
     w.set_mode("manual")
     w.set_marks(True)
-    s = Setup(w.video, two_tile_video["dir"])
+    s = Setup(w.video, clean_two_tile_video["dir"])
     w.set_named_cameras(s.existing(), [t.as_dict() for t in s.tiles],
                         [{"picture": 0, "name": "CN-9-PB1", "include": True},
                          {"picture": 1, "name": "CN-9-R2", "include": False}])
@@ -60,7 +60,7 @@ def test_only_a_full_count_on_clean_footage_can_be_kept(counted: Wizard, tmp_pat
     assert (clip["split"], clip["crossings"], clip["tags"]) == ("test", 2, ["groups"])
     assert clip["conditions"]["lighting"] == "low" and clip["conditions"]["traffic"] in (
         "quiet", "normal", "busy", "heavy")
-    assert (clip["rules"], clip["specification"]) == ({"children": "count", "staff": "count"}, "1.1")
+    assert (clip["rules"], clip["specification"]) == ({"children": "count", "staff": "count"}, "1.2")
     rec = json.loads((gold.folder(tmp_path) / f"{clip['id']}.json").read_text())
     first = rec["reviews"][0]["crossings"][0]
     assert (first["camera"], first["direction"]) == ("CN-9-PB1", "in")

@@ -16,12 +16,12 @@ STORE = next(c for c in (f"A-{i}" for i in range(500)) if gold.split_of(c) == "t
 
 
 @pytest.fixture
-def counter(two_tile_video: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Wizard:
+def counter(clean_two_tile_video: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Wizard:
     monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path))
-    w = Wizard(two_tile_video["video"], two_tile_video["dir"], tmp_path)
+    w = Wizard(clean_two_tile_video["video"], clean_two_tile_video["dir"], tmp_path)
     w.set_mode("manual")
     w.set_marks(True)
-    s = Setup(w.video, two_tile_video["dir"])
+    s = Setup(w.video, clean_two_tile_video["dir"])
     w.set_named_cameras(s.existing(), [t.as_dict() for t in s.tiles],
                         [{"picture": 0, "name": "CN-9-PB1", "include": True},
                          {"picture": 1, "name": "CN-9-R2", "include": False}])

@@ -1,7 +1,7 @@
-# Ground Truth Specification v1.1
+# Ground Truth Specification v1.2
 
-Status: v1.1 in force from 15 September 2026 (v1.0 from 14 September 2026). Every count by
-hand records the version it
+Status: v1.2 in force from 16 September 2026 (v1.1 from 15 September, v1.0 from 14
+September 2026). Every count by hand records the version it
 followed (`specification` in the wizard's state and in each gold clip). Counts made
 under different versions are not scored together unless the change log below says the
 versions are compatible.
@@ -165,9 +165,70 @@ None is a better sample than another: they answer different questions.
 - **Independence.** While choosing, windows are shown by their role and traffic level only,
   never with the system's numbers.
 
+## 10. Independence, and where the line is
+
+Two things have to hold before a count measures the sensor rather than itself.
+
+### 10.1 Independence: clean footage, proved in the picture
+
+A count is independent only if the person could not see the sensor's own work: RetailNext's
+burned-in counting line, its track dots and its height bubbles. This holds for **every**
+count, by hand or automatic: a person checking the tool's crossings on marked footage sees
+the sensor's answer too.
+
+Four things say whether footage shows the marks, and **any one of them is enough**
+(`independence.py`):
+
+| Source | What it is |
+|---|---|
+| in the picture | RetailNext's thin blue lines found on the people-free picture of each camera (`overlay.counting_overlay_evidence`) |
+| how it was obtained | a RetailNext download remembers whether its marks were asked for |
+| its name | "Export - 392 marked - ..." |
+| what was said | the answer on the wizard's marks step |
+
+The picture is never overruled by an answer. A gold clip is refused unless the footage is
+clean and was checked in the picture. Results counted on marked footage are excluded from
+every comparison with the system, and say why. Earlier results are audited on the
+Validation runs page; those found to be on marked footage are reclassified (kept out, with
+the reason, in the audit log and a registry) — the results themselves are never edited.
+Gold clips that are not known to have been counted on clean footage are **provisional**:
+kept and listed, left out of scoring.
+
+### 10.2 Line correspondence: our line is the sensor's line
+
+On marked footage a line drawn over RetailNext's line is its line by construction. On clean
+footage there is nothing to draw over, and a line half a metre off measures something the
+sensor does not: the difference then appears as sensor error that is not sensor error.
+Every drawing records how its line was placed (`correspondence.py`), strongest first:
+
+| Method | What it means |
+|---|---|
+| `api` | fetched from RetailNext's API. **Not available**: its documented API gives locations (stores, entrances, time zones), not the lines they count on. |
+| `calibrated` | drawn over RetailNext's own line on marked footage (at least 80% of the drawn line on the burned-in line), then used on clean footage of the same camera |
+| `sensor_line` | RetailNext's own line in the picture (a count by hand on marked footage): corresponds by construction, but is not independent |
+| `by_eye` | drawn by eye on clean footage: the weakest evidence |
+
+The wizard offers the calibrated route on clean footage downloaded from RetailNext: it
+exports one minute of the same window **with** marks, the line is drawn on that, and the
+drawing is then used for counting on the clean footage. Every report names the method per
+camera and says plainly that a line drawn by eye is the weakest evidence; a validation's
+manifest records it.
+
+### 10.3 Which camera is this picture?
+
+A drawing is matched to a camera picture by, in order: its line sitting on the burned-in
+line; having been drawn on this very video; its people-free picture lining up with the one
+it was drawn on, with the marks masked out (`correspondence.alignment`: on real exports the
+same camera a day apart scores about 0.6, different cameras below 0.1); and the camera names
+of a RetailNext download. A match **by name alone** is not confident: the wizard asks a
+person to confirm the picture is that camera, and refuses to run the count or make the
+report until they do. A silently mismatched camera would compare one camera's crossings with
+another camera's numbers, which is a wrong report rather than a failed run.
+
 ## Change log
 
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 14 Sep 2026 | First version. |
 | 1.1 | 15 Sep 2026 | Section 9: sampling protocol (peak with control windows, stratified, random), recorded with every validation and stated on every report. What a crossing is did not change: counts made under 1.0 and 1.1 are scored together. |
+| 1.2 | 16 Sep 2026 | Section 10: independence enforced from the picture itself (not a flag), for automatic checks as well as counts by hand; line correspondence (api / calibrated / by eye) recorded per camera; camera matching confirmed by a person when it is not certain. What a crossing is did not change: counts made under 1.0, 1.1 and 1.2 are scored together, but a count on marked footage is no longer accepted as gold and is left out of comparisons. |

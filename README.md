@@ -844,8 +844,24 @@ run checks:
 ## Known limitations
 
 - The sensor's own tracks and height labels are burned into RetailNext exports
-  and cannot be hidden. A reviewer who can see the sensor's opinion may be pulled
-  toward it, and the review stage cannot remove those pixels.
+  and cannot be hidden, so counting is done on clean exports instead. The tool
+  checks each picture itself rather than trusting an answer: marked footage is
+  refused for gold clips, and any result counted or checked on it is left out of
+  the comparison with the sensor, with the reason
+  (docs/GROUND_TRUTH_SPECIFICATION.md, section 10). Earlier results can be
+  audited for this on the *Validation runs* page.
+- On clean footage there is no burned-in line to draw over, so a line drawn by
+  eye may not be where the sensor counts, and part of any difference would be
+  the line rather than the sensor. Each drawing records how it was placed:
+  calibrated on RetailNext's marked footage (the wizard fetches a minute of the
+  same window with marks to draw on) or drawn by eye, and every report says
+  which. RetailNext's documented API does not give the line's coordinates, which
+  would be the definitive fix.
+- Matching a drawing to a camera picture on clean footage uses the picture it
+  was drawn on and the camera names of a RetailNext download; the alignment
+  thresholds were tuned on a handful of real exports (the same camera a day
+  apart scored about 0.6, different cameras below 0.1). A match by name alone
+  has to be confirmed by a person before the count runs.
 - Busy entrances cost review time. On one 15-minute two-camera clip with 11-13
   people in view, the motion gate removed almost nothing. Unexplained ranges
   covered about 80% of the footage, and the queue came to 190 items, estimated

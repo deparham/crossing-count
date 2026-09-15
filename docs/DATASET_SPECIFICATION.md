@@ -52,13 +52,20 @@ count, not a new clip.
 | `conditions` | `{traffic, traffic_per_camera_hour, lighting, occlusion}` (section 3) |
 | `tags` | scenario tags chosen by the person who counted (groups, people stopping, ...) |
 | `notes` | free text |
-| `reviews` | one or two independent counts: `{reviewer, at, run, video, marked, watched_pct, crossings: [{camera, t, clock, direction}]}` |
+| `reviews` | one or two independent counts: `{reviewer, at, run, video, marked, footage, watched_pct, crossings: [{camera, t, clock, direction}]}`; `footage` is what the count's footage was checked to be (clean or not, how it was obtained, what each picture showed) |
 | `created_at`, `updated_at`, `made_with` | when, and which CrossingCount version |
 
 Only counts that meet all of these are accepted: counted by hand in the wizard's Manual
-mode; at least 99% of every counted camera's footage watched; clean footage (not the
-sensor's marked footage); the footage's clock known; store code and the counter's name
-given. A second count must cover the same cameras and traffic, under the same rules.
+mode; at least 99% of every counted camera's footage watched; clean footage, checked in the
+picture itself and not merely declared (Ground Truth Specification, section 10.1); the
+footage's clock known; store code and the counter's name given. A second count must cover
+the same cameras and traffic, under the same rules.
+
+**Provisional clips.** A clip whose footage shows RetailNext's marks, or was never checked
+for them in the picture (kept before that check existed), is marked provisional: it stays in
+the set and is listed everywhere, with the reason, but is left out of scoring unless it is
+asked for. Saving the count again checks its footage and clears it if it is clean. Frozen
+manifests list provisional clips, and every scoring says how many it left out.
 
 ## 3. Conditions
 

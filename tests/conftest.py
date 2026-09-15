@@ -43,14 +43,40 @@ def _frame_walkers() -> list[Walker]:
     ]
 
 
-def _draw_overlay(img: np.ndarray, t: float) -> None:
-    for x0, line in ((0, LINE_A), (640, LINE_B)):
-        pts = np.array([(x + x0, y + TOP) for x, y in line], dtype=np.int32)
-        cv2.polylines(img, [pts], False, LIGHT_BLUE, 2, cv2.LINE_AA)
+def _draw_header(img: np.ndarray, t: float) -> None:
+    """The camera name and clock bar: on every export, clean or not."""
+    for x0 in (0, 640):
         bar = img[TOP : TOP + 16, x0 : x0 + 640]
         bar[:] = (bar * 0.3).astype(np.uint8)
         cv2.putText(bar, f"CAM 12:00:{t:05.2f}", (4, 12), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
                     (255, 255, 255), 1)
+
+
+def _draw_overlay(img: np.ndarray, t: float) -> None:
+    """RetailNext's burned-in counting lines, and the header bar."""
+    for x0, line in ((0, LINE_A), (640, LINE_B)):
+        pts = np.array([(x + x0, y + TOP) for x, y in line], dtype=np.int32)
+        cv2.polylines(img, [pts], False, LIGHT_BLUE, 2, cv2.LINE_AA)
+    _draw_header(img, t)
+
+
+def _background() -> np.ndarray:
+    bg = np.zeros((600, 1280, 3), dtype=np.uint8)
+    bg[TOP : TOP + 480, :640] = texture(480, 640, seed=1, mean=150)
+    bg[TOP : TOP + 480, 640:] = texture(480, 640, seed=2, mean=105)
+    return bg
+
+
+@pytest.fixture(scope="session")
+def clean_two_tile_video(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    """The same two cameras and people exported clean: no RetailNext lines in the picture."""
+    d = tmp_path_factory.mktemp("synth_clean")
+    video = d / "two_cameras_clean.mp4"
+    rng = np.random.default_rng(0)
+    walkers = _frame_walkers()
+    write_video(video, (render_frame(_background(), walkers, i / FPS, rng, overlay=_draw_header)
+                        for i in range(int(DURATION * FPS))), fps=FPS)
+    return {"video": video, "dir": d, "walkers": walkers}
 
 
 def _norm(points: list[tuple[float, float]]) -> list[list[float]]:

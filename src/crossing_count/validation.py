@@ -289,7 +289,15 @@ def _read(p: Path) -> dict[str, Any] | None:
 
 def collect(root: Path, shared: Path | None = None) -> list[dict[str, Any]]:
     """Every validation's saved result (made with its report): the team's shared records,
-    then this computer's runs, one per footage (this computer's wins)."""
+    then this computer's runs, one per footage (this computer's wins). Results reclassified
+    as counted on marked footage (independence.reclassify) come back marked."""
+    from .independence import apply, registry
+
+    reg = registry(root)
+    return [apply(r, reg) for r in _collect(root, shared)]
+
+
+def _collect(root: Path, shared: Path | None = None) -> list[dict[str, Any]]:
     found: dict[str, dict[str, Any]] = {}
     if shared is not None:
         for p in sorted((shared / "validations").glob("*/*.json")):
@@ -313,7 +321,9 @@ def exclusions(r: Mapping[str, Any]) -> list[str]:
     if r.get("status") != "complete":
         why.append("the validation was incomplete")
     if r.get("marked"):
-        why.append("counted on footage showing the system's own marks")
+        again = (r.get("reclassified") or {}).get("why")
+        why.append("counted on footage showing the system's own marks"
+                   + (f" (found on audit: {'; '.join(again)})" if again else ""))
     if not r.get("rows"):
         why.append("no numbers from the system")
     return why

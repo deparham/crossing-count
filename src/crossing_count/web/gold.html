@@ -141,7 +141,8 @@ function render() {
           `<td>${c.cameras.map(esc).join("<br>")}</td><td>${c.reviews.map((r) => esc(r.reviewer)).join(", ")}</td>` +
           `<td>${c.crossings}${c.uncertain ? ` <span class="muted">(+${c.uncertain} uncertain)</span>` : ""}</td><td>${two}</td>` +
           `<td>${[...["traffic", "lighting", "occlusion"].filter((k) => c.conditions[k]).map((k) => `${k}:${c.conditions[k]}`), ...c.tags]
-            .map((t) => `<span class="pill">${esc(G.labels[t] || t)}</span>`).join("")}${c.notes ? `<div class="muted" style="font-size:12px">${esc(c.notes)}</div>` : ""}</td></tr>`;
+            .map((t) => `<span class="pill">${esc(G.labels[t] || t)}</span>`).join("")}${c.notes ? `<div class="muted" style="font-size:12px">${esc(c.notes)}</div>` : ""}` +
+          `${(c.provisional || []).length ? `<div class="warn" style="font-size:12px">Provisional, left out of scoring: ${c.provisional.map(esc).join("; ")}</div>` : ""}</td></tr>`;
       }).join("")
     : `<tr><td class="muted">No gold clip yet. Count a clip by hand in the wizard (Manual), watching every moment, then keep it on the report page.</td></tr>`;
   $("testNote").textContent = `Tune only on the development set: the test set is for a final check, and each use is recorded (so far: ${G.test_scorings}).`;

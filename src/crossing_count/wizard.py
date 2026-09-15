@@ -28,10 +28,21 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from . import __copyright__, auditlog, paths, provenance, runs, sampling, sensors, validation
+from . import (
+    __copyright__,
+    auditlog,
+    independence,
+    paths,
+    provenance,
+    runs,
+    sampling,
+    sensors,
+    validation,
+)
+from . import correspondence as co
 from . import video as vid
 from .candidates import MISS_KIND
-from .config import bind, load_config
+from .config import ConfigError, bind, load_config
 from .export import INTERVAL_MIN, sensor_accuracy
 from .gating import camera_dir
 from .manual import intervals_for, merge_ranges, unwatched_ranges
@@ -62,7 +73,7 @@ def prompt_priority(why: str) -> int:
 CLIP_BEFORE_S = 2.5
 CLIP_AFTER_S = 1.5
 MIN_WATCHED_PCT = 99.0  # a hand count that watched less of a camera's footage is incomplete
-GROUND_TRUTH_SPEC = "1.1"  # docs/GROUND_TRUTH_SPECIFICATION.md: what a crossing is
+GROUND_TRUTH_SPEC = "1.2"  # docs/GROUND_TRUTH_SPECIFICATION.md: what a crossing is
 RULE_CHOICES = ("count", "exclude")  # what counts as a person: children, staff (spec section 4)
 MAX_GROUP = 9  # people one answer can count, when a group crosses together
 FOUND = {  # how each verified crossing came to be counted, for the report
@@ -503,7 +514,8 @@ class Wizard:
             before = [c["sensor"] for c in self.state["cameras"]]
             self.state["cameras"] = [
                 {"picture": i, "sensor": c["sensor"], "site": c["site"], "config": c["path"],
-                 "tile": tiles[i]} for i, c in sorted(chosen.items())]
+                 "tile": tiles[i], "matched_by": c.get("how"),
+                 "confident": bool(c.get("confident", True))} for i, c in sorted(chosen.items())]
             self._decide("cameras", before=before, after={
                 c["sensor"]: c["config"] for c in self.state["cameras"]})
             store = self.state["store"]
@@ -761,6 +773,72 @@ class Wizard:
         """A hand count on footage showing RetailNext's own line: no drawing is shown over it."""
         return self.manual() and bool(self.state.get("marks"))
 
+    def note_marks_detected(self, evidence: list[dict[str, Any]]) -> None:
+        """What each picture shows (Setup.marks()): RetailNext's lines, or none. Kept so a
+        count's independence rests on the picture, not only on an answer."""
+        if self.state.get("final"):
+            return
+        with self._lock:
+            brief = [{k: e.get(k) for k in ("marks", "segments", "length_px")} for e in evidence]
+            if self.state.get("marks_detected") != brief:
+                self.state["marks_detected"] = brief
+                self._save()
+
+    def footage(self) -> dict[str, Any]:
+        """Is the footage clean of RetailNext's marks, and how do we know (independence.py)?"""
+        return independence.of_state(self.state)
+
+    def footage_marked(self) -> bool:
+        """Counted or checked on footage showing the sensor's own work, whatever the mode: the
+        person could see the sensor's answer, so the count is not independent of it."""
+        return not self.footage()["clean"]
+
+    def correspondence(self) -> dict[str, dict[str, Any]]:
+        """How each camera's counting line corresponds to the sensor's (correspondence.py),
+        and how the drawing was matched to the picture."""
+        out: dict[str, dict[str, Any]] = {}
+        for cam in self.state["cameras"]:
+            found: dict[str, Any]
+            if self.marked():  # RetailNext's own line is in the picture: its line by construction
+                found = {"method": "sensor_line", "line_match": None,
+                         "words": co.METHODS["sensor_line"]}
+            else:
+                cfg = None
+                if cam.get("config"):
+                    try:
+                        cfg = load_config(Path(cam["config"]))
+                    except (ConfigError, OSError, ValueError, KeyError):
+                        cfg = None
+                found = (co.of_config(cfg.traced_on, cfg.overlay_hsv) if cfg is not None
+                         else {"method": "by_eye", "line_match": None,
+                               "words": "no drawing: the camera was named only"})
+            out[cam["sensor"]] = {**found, "strength": co.STRENGTH[found["method"]],
+                                  "matched_by": cam.get("matched_by"),
+                                  "confirmed_by": cam.get("confirmed_by")}
+        return out
+
+    def unconfirmed(self) -> list[str]:
+        """Cameras matched to a picture in a way the tool is not sure of, and which nobody has
+        confirmed. Counting them would put one camera's crossings against another camera's
+        numbers, which is a wrong report rather than a failed run."""
+        return [f"Picture {c['picture'] + 1} was matched to {c['sensor']} by "
+                f"{c.get('matched_by') or 'a guess'}. Check that it is that camera and confirm "
+                f"it on the Cameras step." for c in self.state["cameras"]
+                if c.get("confident") is False and not c.get("confirmed_by")]
+
+    @_open_only
+    def confirm_camera(self, picture: int) -> None:
+        """A person looked and says this picture is that camera."""
+        with self._lock:
+            cam = next((c for c in self.state["cameras"] if int(c["picture"]) == int(picture)), None)
+            if cam is None:
+                raise WizardError(f"There is no camera in picture {int(picture) + 1}.")
+            cam["confirmed_by"] = self._reviewer() or "someone"
+            cam["confirmed_at"] = _now()
+            self._decide("camera_confirmed", picture=int(picture), camera=cam["sensor"],
+                         matched_by=cam.get("matched_by"))
+            self._save()
+
     def _check_open(self) -> None:
         final = self.state.get("final")
         if final:
@@ -902,7 +980,8 @@ class Wizard:
                 "schema": "result/1", "engine": validation.ENGINE, "made_at": _now(),
                 "app_version": app_version(), "status": c["status"],
                 "incomplete": c["incomplete"], "checks": c["checks"],
-                "mode": st.get("mode") or "auto", "marked": self.marked(),
+                "mode": st.get("mode") or "auto", "marked": self.footage_marked(),
+                "footage": self.footage(), "lines": self.correspondence(),
                 "rules": st.get("rules"), "specification": st["manual"].get("specification")
                 if self.manual() else GROUND_TRUTH_SPEC,
                 "system": src.get("system") or "RetailNext",
@@ -1316,6 +1395,8 @@ class Wizard:
                 raise WizardError("The count is already running.")
             if not self.state["cameras"]:
                 raise WizardError("Draw the cameras first.")
+            if unsure := self.unconfirmed():
+                raise WizardError(" ".join(unsure))
             if not self.dirs():
                 raise WizardError("Choose Traffic In or Traffic Out first.")
             if self.checked_work() and not confirm:
@@ -1898,10 +1979,20 @@ class Wizard:
         method.insert(len(method) - 1, f"Crossings as defined by CrossingCount's Ground Truth "
                       f"Specification v{spec}: children {said[rules['children']]}, staff "
                       f"{said[rules['staff']]}.")
-        if self.marked():
-            method.insert(len(method) - 1, "Counted on footage showing RetailNext's own tracks "
-                          "and counts, which can sway a count towards the sensor's: this count "
-                          "is not independent of the sensor.")
+        foot = self.footage()
+        if not foot["clean"]:
+            method.insert(len(method) - 1,
+                          f"{'Counted' if self.manual() else 'Checked'} on footage showing "
+                          f"RetailNext's own tracks and counts ({'; '.join(foot['why_marked'])}), "
+                          f"which can sway a count towards the sensor's: this count is not "
+                          f"independent of the sensor.")
+        if lines := self.correspondence():
+            how_lines = "; ".join(f"{cam} {x['words']}" for cam, x in lines.items())
+            weakest = min(x["strength"] for x in lines.values())
+            method.insert(len(method) - 1, f"Counting lines: {how_lines}." + (
+                " A line drawn by eye is the weakest evidence that it is where the sensor counts: "
+                "part of any difference from RetailNext may be the line, not the sensor."
+                if weakest < 2 else ""))
         if c.get("groups"):
             method.insert(3, f"{c['groups']} of the confirmed crossings were groups crossing "
                              f"together: {c['group_people']} people, each counted.")
@@ -1952,6 +2043,8 @@ class Wizard:
     @_open_only
     def make_report(self, logo: Path | None = None) -> Path:
         with self._lock:
+            if unsure := self.unconfirmed():  # whose crossings are these? before anything else
+                raise WizardError(" ".join(unsure))
             c = self.counts()
             if self.manual():
                 if not c["checked"]:

@@ -58,6 +58,12 @@
     <div id="eng"></div>
   </div>
   <div class="card">
+    <div class="big">Independence check</div>
+    <div class="muted">A count made where RetailNext's own tracks and counts are on the picture is not independent of the sensor, whether it was counted by hand or checked. This looks at every result on this computer — the picture itself, how the footage was obtained, and its name — and lists any that say clean but are not. Reclassifying keeps them out of the Sensor results, with the reason; the results themselves are never edited.</div>
+    <div style="margin-top:10px"><button id="auditGo">Check earlier validations</button> <button id="auditFix" hidden>Reclassify them</button></div>
+    <div id="auditMarks"></div>
+  </div>
+  <div class="card">
     <div class="big">Audit log</div>
     <div id="audit" class="muted"></div>
     <div class="scroll" style="margin-top:10px"><table id="recent"></table></div>
@@ -101,6 +107,23 @@ function integrity(r) {
   $("runs").addEventListener("click", async (ev) => {
     const b = ev.target.closest("[data-open]");
     if (b) { try { await api("/api/runs/reveal", { id: b.dataset.open }); } catch (err) { alert(err.message); } }
+  });
+  const auditShow = (found, done) => {
+    $("auditFix").hidden = done || !found.length;
+    $("auditMarks").innerHTML = !found.length
+      ? '<div class="ok" style="margin-top:10px">None: every result on this computer was counted on footage without RetailNext\'s marks.</div>'
+      : `<div class="${done ? "ok" : "warn"}" style="margin-top:10px">${done ? "Reclassified" : "Found"} ${found.length} result(s) counted on footage showing RetailNext's marks:</div>` +
+        `<div class="scroll"><table style="margin-top:6px"><tr><th>Footage</th><th>Store</th><th>How counted</th><th>Why it is not clean</th></tr>` +
+        found.map((f) => `<tr><td>${esc(f.filename)}</td><td>${esc(f.store || "")}</td><td>${f.mode === "manual" ? "by hand" : "checked"}${f.finalised ? ` <span class="muted">(${esc(f.finalised)})</span>` : ""}</td><td class="warn">${f.why.map(esc).join("; ")}</td></tr>`).join("") + "</table></div>";
+  };
+  $("auditGo").addEventListener("click", async () => {
+    $("auditMarks").innerHTML = '<div class="muted" style="margin-top:10px">Looking at the pictures…</div>';
+    try { auditShow((await api("/api/audit/marks", {})).findings, false); }
+    catch (e) { $("auditMarks").innerHTML = `<div class="err" style="margin-top:10px">${esc(e.message)}</div>`; }
+  });
+  $("auditFix").addEventListener("click", async () => {
+    try { auditShow((await api("/api/audit/marks/reclassify", {})).reclassified, true); }
+    catch (e) { $("auditMarks").innerHTML = `<div class="err" style="margin-top:10px">${esc(e.message)}</div>`; }
   });
   const picked = () => [...document.querySelectorAll("[data-pick]:checked")].map((x) => x.dataset.pick);
   const show = async (path) => {

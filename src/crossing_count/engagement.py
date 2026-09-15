@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import auditlog, provenance, runs, validation
+from . import auditlog, independence, provenance, runs, validation
 
 PREFIX = "CC-ENG"
 SCHEMA = "engagement/1"
@@ -50,7 +50,7 @@ def _load(root: Path, vid: str) -> tuple[dict[str, Any] | None, dict[str, Any] |
         return None, None, f"unreadable ({e})"
     if not runs.verify(folder, root)["intact"]:
         return m, result, "its files changed since it was finalised"
-    return m, result, None
+    return m, independence.apply(result, independence.registry(root)), None
 
 
 def gather(root: Path, ids: Iterable[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:

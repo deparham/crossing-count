@@ -125,6 +125,7 @@ def write(w: Wizard, root: Path, shared: Path | None = None) -> dict[str, Any]:
     for p in sorted(folder.iterdir()):
         files[p.name] = provenance.file_sha256(p)
     geometry = w.geometry()
+    lines = w.correspondence()
     video_sha = provenance.file_sha256(w.video) if w.video.is_file() else None
     src = dict(st.get("sensor_source") or {})
     src.pop("numbers", None)
@@ -138,6 +139,7 @@ def write(w: Wizard, root: Path, shared: Path | None = None) -> dict[str, Any]:
                     "crossing_evaluation": evaluate.ENGINE, "matching": evaluate.MATCHING},
         "ground_truth": {"specification": result["specification"], "rules": st.get("rules"),
                          "mode": result["mode"], "marked_footage": result["marked"],
+                         "footage_check": result.get("footage"),
                          "check_same_person_window_s": TWIN_WINDOW_S},
         "store": {k: st["store"].get(k) for k in ("code", "name", "location", "report_date")},
         "footage": {"filename": st["filename"], "fingerprint": st["fingerprint"],
@@ -149,7 +151,12 @@ def write(w: Wizard, root: Path, shared: Path | None = None) -> dict[str, Any]:
         "sampling": st.get("sampling"), "traffic": result.get("traffic"),
         "cameras": [{"sensor": c["sensor"], "picture": c["picture"], "tile": c.get("tile"),
                      "config": c.get("config"), "line": geometry.get(c["sensor"], {}).get("line"),
-                     "mask": geometry.get(c["sensor"], {}).get("mask")} for c in st["cameras"]],
+                     "mask": geometry.get(c["sensor"], {}).get("mask"),
+                     # how we know this line is where the sensor counts, and that this picture
+                     # is that camera (correspondence.py)
+                     "correspondence": lines.get(c["sensor"]),
+                     "matched_by": c.get("matched_by"), "confirmed_by": c.get("confirmed_by")}
+                    for c in st["cameras"]],
         "system_under_test": {**src, "system": result["system"], "source": result["source"],
                               "numbers": numbers, "numbers_sha256": _canonical_sha(numbers)},
         "detection": ({"model": st.get("model"),

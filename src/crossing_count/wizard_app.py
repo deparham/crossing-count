@@ -28,6 +28,7 @@ from . import (
     auditlog,
     engagement,
     gold,
+    independence,
     paths,
     releases,
     runs,
@@ -57,6 +58,7 @@ class RunIn(BaseModel):
 
 EXPORT_POLL_S = 5.0  # how often to ask RetailNext whether an export is ready
 EXPORT_WAIT_S = 1800.0  # and for how long, before giving up
+CALIBRATE_S = 60.0  # how much of the window to export again with marks, to draw the line on
 
 
 class ForgetIn(BaseModel):
@@ -125,6 +127,10 @@ class BusiestIn(BaseModel):
 
 class EngagementIn(BaseModel):
     ids: list[str]  # finalised validation IDs, all of one store
+
+
+class PictureIn(BaseModel):
+    picture: int
 
 
 def _bare(code: str) -> str:
@@ -318,6 +324,8 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         final = w.state.get("final")  # a finalised validation opens as it was kept
         if name and not w.state["store"].get("operator") and not final:
             w.set_store(operator=str(name))
+        if not final:  # what the pictures show, not only what someone answers (independence.py)
+            w.note_marks_detected(s.marks())
         notes = [] if final else identify_download(w, s, path) + w.tidy_on_open(len(s.tiles))
         draw = f"/draw/{uuid.uuid4().hex[:10]}"
         app.router.routes[:] = [r for r in app.router.routes
@@ -339,6 +347,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                 return []  # not one of ours, or RetailNext is out of reach
             info = {**info, **rn.store_summary(conn.subscription, nodes, store)}
         s.store = (str(info["code"]), str(info.get("name") or ""))
+        s.names = [str(n) for n in info.get("cameras") or []]  # the channels, in picture order
         return w.use_download(info)
 
     @app.get("/api/state")
@@ -645,11 +654,17 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         s = setup()
         cfgs = s.existing()
         marks = s.marks()
+        info = wiz().state.get("retailnext") or {}
         return {"pictures": [
             {"picture": t.index, "marks": bool(marks[t.index]["marks"]),
-             "configs": [{"sensor": c["sensor"], "file": c["file"]} for c in cfgs
+             "configs": [{"sensor": c["sensor"], "file": c["file"], "how": c["how"],
+                          "confident": c["confident"], "alignment": c["alignment"],
+                          "correspondence": c["correspondence"]} for c in cfgs
                          if c["picture"] == t.index and not c["problem"]]}
             for t in s.tiles],
+            # a clean download can be calibrated against a minute of the same window with marks
+            "can_calibrate": bool(info.get("start") and info.get("subscription")
+                                  and info.get("code") and not any(m["marks"] for m in marks)),
             # footage from RetailNext: its cameras' names, picture by picture
             "suggested": (wiz().state.get("retailnext") or {}).get("cameras", []),
             # RetailNext's blue lines found on the people-free picture, or a saved drawing
@@ -737,6 +752,95 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     def cameras() -> dict[str, Any]:
         s = setup()
         return run(lambda: wiz().set_cameras(s.existing(), [t.as_dict() for t in s.tiles]))
+
+    @app.post("/api/cameras/confirm")
+    def cameras_confirm(p: PictureIn) -> dict[str, Any]:
+        """A person says this picture really is that camera (a match the tool was unsure of)."""
+        return run(lambda: wiz().confirm_camera(p.picture))
+
+    @app.post("/api/calibrate")
+    def calibrate() -> dict[str, Any]:
+        """Export a minute of this footage again with RetailNext's marks and open the drawing
+        page on it: a line drawn there sits on RetailNext's own line, and is then used on this
+        clean footage (correspondence.py; Ground Truth Specification section 10)."""
+        from datetime import datetime as dt
+        from datetime import timedelta as td
+
+        w, s = wiz(), setup()
+        info = dict(w.state.get("retailnext") or {})
+        if not (info.get("start") and info.get("end") and info.get("subscription")
+                and info.get("code")):
+            raise HTTPException(400, "Calibrating needs footage downloaded from RetailNext here: "
+                                     "its store and period have to be known.")
+        if cur.rn_job and cur.rn_job.get("state") in ("exporting", "downloading"):
+            raise HTTPException(409, "A download is already under way.")
+        try:
+            conn, nodes, store = rn_store(f"{info['subscription']}/{info['code']}")
+            channels = rn.video_channels(nodes, str(store["uuid"]))
+            if not channels:
+                raise rn.RetailNextError(f"RetailNext has no camera video for "
+                                         f"{store.get('name')}.")
+            start = dt.fromisoformat(str(info["start"]))
+            end = min(start + td(seconds=CALIBRATE_S), dt.fromisoformat(str(info["end"])))
+        except (rn.RetailNextError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        target = paths.data_root() / "calibration"
+        target.mkdir(parents=True, exist_ok=True)
+        dest = rn.free_path(target, rn.footage_name(str(info["code"]), start, end, True))
+        job: dict[str, Any] = {
+            "state": "exporting", "done": 0, "total": None, "path": None, "draw_url": None,
+            "message": "RetailNext is preparing a minute of it with its marks…"}
+        cur.rn_job = job
+
+        def work() -> None:
+            try:
+                export_id = rn.start_export(conn, list(channels.values()), start, end, True)
+                waited, link = 0.0, ""
+                while True:
+                    state, got = rn.export_status(conn, export_id)
+                    if state == "ready":
+                        link = got
+                        break
+                    if state in ("failed", "expired"):
+                        raise rn.RetailNextError(f"RetailNext could not export it: {got or state}")
+                    if waited >= EXPORT_WAIT_S:
+                        raise rn.RetailNextError("RetailNext has not finished the export.")
+                    time.sleep(EXPORT_POLL_S)
+                    waited += EXPORT_POLL_S
+                job.update(state="downloading", message="Downloading…")
+                rn.download(link, dest, lambda done, total: job.update(done=done, total=total))
+                rn.remember_download(dest, {**rn.store_summary(conn.subscription, nodes, store),
+                                            "marks": True, "calibration": True,
+                                            "start": start.isoformat(), "end": end.isoformat()})
+                cal = Setup(dest, sites)
+                cal.store, cal.names = s.store, s.names
+                where = f"/calibrate/{uuid.uuid4().hex[:10]}"
+                app.router.routes[:] = [r for r in app.router.routes if not (
+                    isinstance(r, Mount) and r.path.startswith("/calibrate/"))]
+                app.mount(where, create_app(dest, sites, setup=cal))
+                job.update(state="done", message="Ready to draw.", path=str(dest),
+                           draw_url=where + "/")
+            except (rn.RetailNextError, FFmpegError, OSError, ValueError) as exc:
+                job.update(state="failed", message=str(exc))
+
+        threading.Thread(target=work, daemon=True).start()
+        return job
+
+    @app.get("/api/calibrate")
+    def calibrate_status() -> dict[str, Any]:
+        return cur.rn_job or {"state": "idle"}
+
+    @app.post("/api/audit/marks")
+    def audit_marks() -> dict[str, Any]:
+        """Earlier results whose footage shows RetailNext's marks although they say clean."""
+        return {"findings": independence.audit(data())}
+
+    @app.post("/api/audit/marks/reclassify")
+    def audit_marks_reclassify() -> dict[str, Any]:
+        """Keep those results out of every comparison with the system, with the reason."""
+        found = independence.audit(data())
+        independence.reclassify(data(), found, str(paths.load_settings().get("operator") or ""))
+        return {"reclassified": found}
 
     @app.post("/api/direction")
     def direction(d: DirectionIn) -> dict[str, Any]:

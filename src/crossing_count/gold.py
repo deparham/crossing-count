@@ -40,7 +40,7 @@ from typing import Any
 
 from av.error import FFmpegError
 
-from . import auditlog, bench, paths
+from . import auditlog, bench, independence, paths
 from . import video as vid
 from .config import ConfigError
 from .evaluate import ENGINE as CROSSING_ENGINE
@@ -140,10 +140,11 @@ def problems(state: dict[str, Any]) -> list[str]:
                  "looks only where the tool pointed.")]
     out = []
     m, dur = state.get("manual") or {}, float(state["duration_s"])
-    if state.get("marks"):
-        out.append("This footage shows RetailNext's own tracks and counts, which can sway a "
-                   "count towards the sensor's: a gold clip is counted on clean footage "
-                   "(downloaded for a count by hand, without RetailNext's marks).")
+    f = independence.of_state(state)  # the picture, the download, the name, the answer
+    if not f["clean"]:
+        out.append("This footage shows RetailNext's own tracks and counts ("
+                   + "; ".join(f["why_marked"]) + "), which can sway a count towards the "
+                   "sensor's: a gold clip is counted on clean footage. " + independence.CLEAN_PATH)
     if not m.get("done"):
         out.append("Finish counting first.")
     elif not m.get("specification"):
@@ -196,7 +197,14 @@ def save(state: dict[str, Any], run_dir: Path, tags: Iterable[str], notes: str =
          shared: Path | None = None) -> dict[str, Any]:
     """Keep this count by hand in the gold set: a new clip, or a second person's count of
     one already kept (the same person again replaces their own count). With a shared
-    folder, the clip is also copied there."""
+    folder, the clip is also copied there. The footage is checked in the picture for
+    RetailNext's marks, whatever the wizard was told about it."""
+    if state.get("marks_detected") is None:
+        try:
+            state = {**state, "marks_detected": independence.detect(Path(str(state["video"])))}
+        except (OSError, ValueError, FFmpegError) as e:
+            raise GoldError(f"The footage could not be checked for RetailNext's marks ({e}): a "
+                            f"gold clip needs it.") from None
     bad = problems(state)
     if bad:
         raise GoldError(" ".join(bad))
@@ -214,7 +222,8 @@ def save(state: dict[str, Any], run_dir: Path, tags: Iterable[str], notes: str =
     review = {
         "reviewer": reviewer, "at": _now(), "run": str(run_dir),
         "video": {"filename": state["filename"], "fingerprint": state["fingerprint"]},
-        "marked": bool(state.get("marks")), "specification": m["specification"],
+        "marked": False, "footage": independence.of_state(state),  # clean: problems() says so
+        "specification": m["specification"],
         "watched_pct": {c["sensor"]: round(_watched_pct(m["watched"].get(c["sensor"], []), dur), 1)
                         for c in state["cameras"]},
         "crossings": [{"camera": c["camera"], "t": round(float(c["t"]), 2),
@@ -344,6 +353,26 @@ def truth(rec: dict[str, Any]) -> tuple[dict[str, list[tuple[float, str]]], dict
         "where": [f"{d['camera']} {d['clock']} ({d['what']})" for d in disputes]}
 
 
+def provisional(rec: dict[str, Any]) -> list[str]:
+    """Why a clip is not trusted as gold: kept and listed, but left out of scoring unless
+    asked. A count on footage showing RetailNext's marks, or on footage never checked for
+    them in the picture (clips kept before that check), is not independent of the sensor."""
+    why = []
+    for r in rec["reviews"]:
+        who, f = r.get("reviewer") or "someone", r.get("footage")
+        name = str((r.get("video") or {}).get("filename") or "")
+        if r.get("marked") or (f and not f.get("clean")):
+            detail = "; ".join((f or {}).get("why_marked") or [])
+            why.append(f"{who} counted it on footage showing RetailNext's marks"
+                       + (f" ({detail})" if detail else ""))
+        elif independence.name_says_marked(name):
+            why.append(f"{who} counted it on footage whose name says it shows RetailNext's marks")
+        elif not f or not f.get("checked_in_picture"):
+            why.append(f"{who}'s footage was not checked for RetailNext's marks in the picture "
+                       f"(kept before that check): save the count again to check it")
+    return why
+
+
 def describe(rec: dict[str, Any]) -> dict[str, Any]:
     real, unsure, agree = truth(rec)
     return {"id": rec["id"], "store": rec["store"], "split": rec["split"], "period": rec["period"],
@@ -354,7 +383,8 @@ def describe(rec: dict[str, Any]) -> dict[str, Any]:
             "reviews": [{"reviewer": r["reviewer"], "at": r["at"], "crossings": len(r["crossings"])}
                         for r in rec["reviews"]],
             "crossings": sum(len(v) for v in real.values()),
-            "uncertain": sum(len(v) for v in unsure.values()), "agreement": agree}
+            "uncertain": sum(len(v) for v in unsure.values()), "agreement": agree,
+            "provisional": provisional(rec)}
 
 
 DECISIONS = ("in", "out", "none", "uncertain")
@@ -441,6 +471,8 @@ def manifest(root: Path | None = None, shared: Path | None = None,
     for p, rec in files:
         entry = {"id": rec["id"], "split": rec["split"], "sha256": _sha_file(p),
                  "crossings": describe(rec)["crossings"]}
+        if why := provisional(rec):  # listed, never silently dropped
+            entry["provisional"] = why
         if records:  # a frozen version keeps the clips themselves, so it can be scored later
             entry["record"] = rec
         entries.append(entry)
@@ -454,6 +486,7 @@ def manifest(root: Path | None = None, shared: Path | None = None,
             "videos": sorted({str(v["video"]["fingerprint"]) for _, r in files for v in r["reviews"]}),
             "crossings": sum(e["crossings"] for e in entries),
             "splits": {str(r["store"]["code"]): r["split"] for _, r in files},
+            "provisional": [e["id"] for e in entries if e.get("provisional")],
             "clips": entries}
 
 
@@ -685,10 +718,11 @@ def experiments_dir(root: Path | None = None) -> Path:
 
 
 def evaluate(which: str, root: Path | None = None, note: str = "",
-             shared: Path | None = None) -> dict[str, Any]:
+             shared: Path | None = None, include_provisional: bool = False) -> dict[str, Any]:
     """Score the automatic count on the development clips (train and validation) or, when
     asked, on the held-out test clips, which needs a frozen version of the set. The result
-    is kept as an experiment record naming the dataset version it used."""
+    is kept as an experiment record naming the dataset version it used. Provisional clips
+    (provisional()) are left out, and named, unless asked for."""
     if which not in ("development", "test"):
         raise GoldError("Score the development set or the test set.")
     chosen = DEVELOPMENT if which == "development" else ("test",)
@@ -697,9 +731,14 @@ def evaluate(which: str, root: Path | None = None, note: str = "",
     if which == "test" and version == "unreleased":
         raise GoldError("Freeze the gold set first (Versions, on the gold page): a test-set score "
                         "must name a frozen version of the set.")
-    recs = [r for r in clips(root, shared) if r["split"] in chosen]
+    in_set = [r for r in clips(root, shared) if r["split"] in chosen]
+    left_out = [{"id": r["id"], "why": why} for r in in_set
+                if (why := provisional(r)) and not include_provisional]
+    recs = [r for r in in_set if r["id"] not in {x["id"] for x in left_out}]
     if not recs:
-        raise GoldError(f"No gold clip in the {which} set yet.")
+        raise GoldError(f"No gold clip in the {which} set yet"
+                        + (f" ({len(left_out)} provisional clip(s) left out: see the gold page)."
+                           if left_out else "."))
     results = [score_clip(r, root) for r in recs]
     scored = [c for c in results if c["scored"]]
     total: dict[str, dict[str, int]] = {}
@@ -713,6 +752,9 @@ def evaluate(which: str, root: Path | None = None, note: str = "",
     n = sum(v["truth"] for v in total.values())
     made = datetime.now().astimezone()
     ids = {r["id"] for r in recs}
+    said_left = (f"{len(left_out)} provisional clip(s) left out: not known to have been "
+                 f"counted on clean footage.")
+    left_note = [said_left] if left_out else []
     exp = {"id": f"{made:%Y%m%d-%H%M%S}-{which}", "made_at": made.isoformat(timespec="seconds"),
            "set": which, "splits": list(chosen),
            "dataset": {"id": DATASET, "version": version, "content_hash": current["content_hash"],
@@ -727,7 +769,8 @@ def evaluate(which: str, root: Path | None = None, note: str = "",
            "clips": results, "totals": summary(total) if total else None,
            "by_split": {k: summary(v) for k, v in by_split.items()},
            "by_tag": {k: summary(v) for k, v in sorted(by_group.items())},
-           "workload": _workload(scored), "limits": _limits(recs, scored, n), "note": note}
+           "workload": _workload(scored), "note": note, "provisional_left_out": left_out,
+           "limits": _limits(recs, scored, n) + left_note}
     write_json_atomic(experiments_dir(root) / f"{exp['id']}.json", exp)
     return exp
 

@@ -19,9 +19,11 @@ from fastapi.responses import HTMLResponse, Response
 from numpy.typing import NDArray
 from pydantic import BaseModel, Field
 
+from . import correspondence as co
 from . import geometry as geo
 from . import layout as lay
 from . import overlay as ov
+from . import retailnext as rn
 from . import tracing
 from . import video as vid
 from .config import ConfigError, aspect_matches, bind, load_config, parse_config
@@ -70,6 +72,13 @@ class Setup:
         # name): only its own drawings are offered. RetailNext's blue line looks alike in
         # every store, so a drawing of another store's camera can fit this footage's line.
         self.store: tuple[str, ...] = ()
+        # The camera each picture shows, when the footage says so: a RetailNext download
+        # remembers its channels in order, and a single-camera export is named after it.
+        self.names: list[str] = []
+        m = rn._DOWNLOAD_NAME.match(self.info.filename)
+        code = m["code"].strip() if m else ""
+        if len(self.tiles) == 1 and code.count("-") >= 2:
+            self.names = [code]
 
     def marks(self) -> list[dict[str, Any]]:
         """Per picture: does it show the sensor's burned-in lines (not a clean export)?"""
@@ -82,6 +91,11 @@ class Setup:
         if not 0 <= i < len(self.tiles):
             raise HTTPException(404, f"no camera picture #{i}")
         return self.tiles[i]
+
+    def picture(self, i: int) -> NDArray[np.uint8]:
+        """One camera's people-free picture, without the header bar (name and clock)."""
+        t = self.tile(i)
+        return np.asarray(t.crop(self.median)[t.header_px:], dtype=np.uint8)
 
     def picture_jpeg(self, i: int, t: float | None) -> bytes:
         tile = self.tile(i)
@@ -128,9 +142,10 @@ class Setup:
                             ov.line_match_score(self.median, line, cfg.overlay_hsv), 3)
             best = max(scores, key=lambda k: scores[k]) if scores else None
             matched = best is not None and scores[best] >= 0.5
+            how = "its line sitting on the burned-in line" if matched else None
+            confident, align = matched, None
             # Drawn on this very video but no burned-in line to match (a clean export):
-            # it belongs to the picture it was drawn on. Configs from other videos are not
-            # placed without a line match, so another camera's drawing never shows up here.
+            # it belongs to the picture it was drawn on.
             drawn_on = (cfg.traced_on or {}).get("tile_index")
             same_video = (cfg.traced_on or {}).get("video") == self.info.filename
             if (not matched and same_video and isinstance(drawn_on, int)
@@ -138,7 +153,10 @@ class Setup:
                     and aspect_matches(cfg, self.tiles[drawn_on].width,
                                        self.tiles[drawn_on].height)):
                 best, matched = drawn_on, True  # no burned-in line here: the picture drawn on
+                how, confident = "having been drawn on this very video", True
                 scores.pop(best, None)
+            if not matched:  # clean footage of a camera drawn elsewhere: its picture, its name
+                best, matched, how, confident, align = self._without_marks(p, cfg)
             size = self.tiles[best if best is not None else 0]
             problem = None
             try:
@@ -149,8 +167,44 @@ class Setup:
                         "overlay_hue": cfg.overlay_hsv[0] if cfg.overlay_hsv else None,
                         "rule": cfg.rule, "picture": best if matched else None,
                         "match": scores.get(best) if matched and best is not None else None,
+                        "how": how, "confident": bool(confident), "alignment": align,
+                        "correspondence": co.of_config(cfg.traced_on, cfg.overlay_hsv),
                         "problem": problem})
         return out
+
+    def _without_marks(self, path: Path, cfg: Any
+                       ) -> tuple[int | None, bool, str | None, bool, dict[str, Any] | None]:
+        """Clean footage shows no burned-in line for a drawing to be matched by. The drawing's
+        own people-free picture is compared with each camera's (correspondence.alignment), and
+        the camera names of a RetailNext download are used. A match by name alone is not
+        confident: the wizard then asks a person before that camera is counted, because a
+        silently mismatched camera puts one camera's crossings against another's numbers."""
+        named = next((t.index for t in self.tiles
+                      if t.index < len(self.names) and self.names[t.index]
+                      and self.names[t.index].casefold() == cfg.sensor.casefold()
+                      and aspect_matches(cfg, t.width, t.height)), None)
+        ref = co.load_reference(path)
+        fits: dict[int, dict[str, Any]] = {}
+        if ref is not None:
+            for t in self.tiles:
+                if aspect_matches(cfg, t.width, t.height):
+                    fits[t.index] = co.alignment(ref, self.picture(t.index))
+        lines_up = [i for i, a in fits.items() if a["aligned"]]
+        if lines_up:
+            pick = named if named in lines_up else max(lines_up,
+                                                       key=lambda i: fits[i]["similarity"])
+            if named is None:
+                return pick, True, "its picture being the one it was drawn on", True, fits[pick]
+            if named == pick:
+                return pick, True, "its camera name and its picture", True, fits[pick]
+            return pick, True, ("its picture, though the footage calls that camera "
+                                f"{self.names[named]}"), False, fits[pick]
+        if named is not None:
+            return named, True, ("its camera name only" if ref is None else
+                                 "its camera name only: its picture no longer looks like the one "
+                                 "it was drawn on, so the camera may have moved"), False, \
+                fits.get(named)
+        return None, False, None, False, None
 
     def shapes_of(self, path: str, i: int) -> dict[str, Any]:
         """A saved config's shapes in picture pixels, even if its geometry needs fixing."""
@@ -208,6 +262,7 @@ class Setup:
 
         crop = tile.crop(self.median)
         hsv = None
+        marked_picture = bool(self.marks()[tile.index]["marks"])
         if len(d.line) >= 2:
             line = np.asarray(d.line, dtype=np.float64)
             hsv = ov.overlay_color_from_line(crop, line)
@@ -218,6 +273,9 @@ class Setup:
                 hsv = None
             if hsv is not None:
                 res["line_match"] = round(ov.line_match_score(crop, line, hsv), 3)
+        # how this line corresponds to the sensor's: drawn over its own line, or by eye
+        corr = co.of_drawing(res["line_match"], marked_picture)
+        res["correspondence"] = corr
         if errors:
             return res
         assert d.inside is not None
@@ -234,7 +292,7 @@ class Setup:
                 traced_on={"video": self.info.filename, "tile_index": tile.index,
                            "tile_size": [tile.width, tile.height],
                            "date": datetime.now().astimezone().date().isoformat(),
-                           "method": "setup page"},
+                           "method": "setup page", "correspondence": corr},
                 min_dwell_in_zone_s=d.min_dwell_in_zone_s, pending_timeout_s=d.pending_timeout_s,
                 stitch_gap_max_s=d.stitch_gap_max_s,
                 notes=f"drawn on '{self.info.filename}' picture #{tile.index}", gate=d.gate,
@@ -245,7 +303,7 @@ class Setup:
         if d.same_track_returns != "flag":
             raw["same_track_returns"] = d.same_track_returns
         warnings.extend(warns)
-        if hsv is None and self.marks()[tile.index]["marks"]:
+        if hsv is None and marked_picture:
             warnings.append("Your line is not on the burned-in light-blue line. Draw it on the "
                             "line, or the drawing cannot be matched to this camera later.")
         elif res["line_match"] is not None and res["line_match"] < 0.8:
@@ -263,7 +321,10 @@ class Setup:
         if path.exists() and not d.overwrite:
             return {"exists": True, "path": str(path)}
         write_json_atomic(path, res["config"])
-        return {"saved": True, "path": str(path), "warnings": res["warnings"]}
+        # the picture it was drawn on: how clean footage of this camera is recognised later
+        ref = co.save_reference(path, self.picture(d.picture))
+        return {"saved": True, "path": str(path), "reference": str(ref),
+                "correspondence": res["correspondence"], "warnings": res["warnings"]}
 
 
 def create_app(video: str | Path, sites_dir: str | Path = "sites",

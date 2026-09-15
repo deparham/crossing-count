@@ -260,6 +260,11 @@
       <div class="big">Draw each camera</div>
       <div class="muted">For each camera picture: type the site and camera name, draw the counting line (click along it, Enter to finish), click the inside of the store, draw the mask zone if the camera has one, then press Save. Cameras drawn before are found by themselves.</div>
       <div id="drawn" style="margin-top:8px"></div>
+      <div id="calibCard" class="sub" hidden style="margin-top:10px">
+        <div class="muted">This footage is clean, so there is no RetailNext line to draw over, and a line drawn by eye may not be where the sensor counts. Draw on RetailNext's marked footage of the same minute instead: the line then provably sits on the sensor's own line, and it is used here. The report says which of the two it was.</div>
+        <div style="margin-top:8px"><button id="calibGo">Get a minute with RetailNext's marks</button> <span id="calibMsg" class="muted"></span></div>
+        <iframe id="calibFrame" title="Draw on RetailNext's marked footage" hidden style="width:100%;height:70vh;border:0;margin-top:8px"></iframe>
+      </div>
       <div style="margin-top:10px"><button id="drawDone" class="primary">Done drawing →</button></div>
     </div>
     <iframe id="draw" title="Draw the cameras"></iframe>
@@ -792,12 +797,47 @@ $("namesDone").addEventListener("click", async () => {
 async function refreshDrawn() {
   const r = await api("/api/drawn").catch(() => null);
   if (!r) return;
+  $("calibCard").hidden = !r.can_calibrate;
+  const one = (c) => `${esc(c.sensor)} <span class="muted">(${esc(c.file)}${c.how ? `, matched by ${esc(c.how)}` : ""}${c.correspondence ? `; ${esc(c.correspondence.words)}` : ""})</span>`;
   $("drawn").innerHTML = r.pictures.map((p) => p.configs.length
-    ? `<div class="ok">Picture ${p.picture + 1}: ${p.configs.map((c) => `${esc(c.sensor)} <span class="muted">(${esc(c.file)})</span>`).join(", ")} ✓</div>`
+    ? `<div class="${p.configs.every((c) => c.confident) ? "ok" : "warn"}">Picture ${p.picture + 1}: ${p.configs.map(one).join(", ")} ${p.configs.every((c) => c.confident) ? "✓" : "— check this is the right camera"}</div>`
     : `<div class="muted">Picture ${p.picture + 1}: no drawing yet (skip it if you don't want this camera counted)</div>`).join("");
 }
+// A camera matched by its name alone is not counted until a person says the picture is that
+// camera: otherwise its crossings would be set against another camera's numbers.
+function askToConfirm() {
+  const unsure = (W.st.cameras || []).filter((c) => c.confident === false && !c.confirmed_by);
+  if (!unsure.length) return false;
+  clearInterval(W.timer);
+  $("drawn").innerHTML += unsure.map((c) => `<div class="warn" style="margin-top:6px">Picture ${c.picture + 1} was matched to <b>${esc(c.sensor)}</b> by ${esc(c.matched_by || "a guess")}. Counting it as the wrong camera would compare its crossings with another camera's numbers. <button data-confirm="${c.picture}">Yes, picture ${c.picture + 1} is ${esc(c.sensor)}</button></div>`).join("");
+  return true;
+}
+$("drawn").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-confirm]");
+  if (!b) return;
+  try { setState(await api("/api/cameras/confirm", { picture: +b.dataset.confirm })); } catch (err) { msg(err.message, "err"); return; }
+  if (!askToConfirm()) go("traffic");
+});
 $("drawDone").addEventListener("click", async () => {
-  try { setState(await api("/api/cameras", {})); go("traffic"); } catch (e) { msg(e.message, "err"); }
+  try { setState(await api("/api/cameras", {})); } catch (e) { msg(e.message, "err"); return; }
+  if (!askToConfirm()) go("traffic");
+});
+$("calibGo").addEventListener("click", async () => {
+  $("calibMsg").textContent = "Asking RetailNext…";
+  try { await api("/api/calibrate", {}); } catch (e) { $("calibMsg").textContent = ""; msg(e.message, "err"); return; }
+  const poll = async () => {
+    let j;
+    try { j = await api("/api/calibrate"); } catch (err) { setTimeout(poll, 3000); return; }
+    if (j.state === "failed") { $("calibMsg").innerHTML = `<span class="err">${esc(j.message)}</span>`; return; }
+    if (j.state === "done") {
+      $("calibMsg").textContent = "Draw each camera's line on RetailNext's own line below and press Save; it is then used on this clean footage.";
+      $("calibFrame").src = j.draw_url; $("calibFrame").hidden = false; refreshDrawn();
+      return;
+    }
+    $("calibMsg").textContent = j.state === "downloading" ? `Downloading… ${(j.done / 1e6).toFixed(0)} MB` : j.message;
+    setTimeout(poll, 3000);
+  };
+  poll();
 });
 
 // ---------- traffic ----------
