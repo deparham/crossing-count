@@ -41,6 +41,28 @@ ICON = str(ROOT / "packaging" / "mac" / "CrossingCount.icns")
 VERSION = re.search(r'__version__ = "([^"]+)"',
                     (ROOT / "src" / "crossing_count" / "__init__.py").read_text()).group(1)
 
+# Windows: who made this program, shown in the file's properties and in Windows'
+# "unknown publisher" prompts. Without it the program has no publisher at all.
+VERSION_FILE = None
+if sys.platform == "win32":
+    numbers = tuple(int(x) for x in (VERSION.split(".") + ["0", "0", "0", "0"])[:4])
+    VERSION_FILE = str(Path(WORKPATH) / "version_info.txt")
+    Path(VERSION_FILE).write_text(f"""VSVersionInfo(
+  ffi=FixedFileInfo(filevers={numbers}, prodvers={numbers}, mask=0x3f, flags=0x0,
+                    OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
+  kids=[
+    StringFileInfo([StringTable('040904B0', [
+      StringStruct('CompanyName', 'iTOi Solutions'),
+      StringStruct('FileDescription', 'Crossing Count - human-verified crossing counts'),
+      StringStruct('FileVersion', '{VERSION}'),
+      StringStruct('InternalName', 'CrossingCount'),
+      StringStruct('LegalCopyright', 'Copyright (c) 2026 Parham Forozan. All rights reserved.'),
+      StringStruct('OriginalFilename', 'CrossingCount.exe'),
+      StringStruct('ProductName', 'Crossing Count'),
+      StringStruct('ProductVersion', '{VERSION}')])]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])])
+""", encoding="utf-8")
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -49,6 +71,7 @@ exe = EXE(
     name="CrossingCount",
     console=False,  # the app is its own window (the count wizard); closing it quits
     icon=ICON if MAC else None,
+    version=VERSION_FILE,
 )
 coll = COLLECT(exe, a.binaries, a.datas, name="CrossingCount")
 if MAC:

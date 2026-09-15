@@ -68,13 +68,45 @@ jobs:
           Get-Content "$env:CROSSING_COUNT_HOME\logs\app.log" -ErrorAction SilentlyContinue
           if ($p.ExitCode -ne 0) { throw "self-test failed (exit $($p.ExitCode))" }
 
+      - name: Sign the program, if a certificate is set up
+        id: sign
+        shell: pwsh
+        env:
+          CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}  # the .pfx file, base64
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if (-not $env:CERT_PFX) {
+            Write-Host "::warning::No WINDOWS_CERT_PFX secret: this build is unsigned, so Windows warns that the publisher is unknown (docs/INSTALL_WINDOWS.md)."
+            "signed=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          $pfx = "$env:RUNNER_TEMP\codesign.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_PFX))
+          $tool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $tool) { throw "signtool.exe not found on the runner" }
+          # SHA-256, and timestamped so the signature outlives the certificate
+          & $tool.FullName sign /f $pfx /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 dist\CrossingCount\CrossingCount.exe
+          if ($LASTEXITCODE -ne 0) { throw "signing the program failed" }
+          "signed=true" >> $env:GITHUB_OUTPUT
+          "tool=$($tool.FullName)" >> $env:GITHUB_OUTPUT
+          "pfx=$pfx" >> $env:GITHUB_OUTPUT
+
       - name: Installer with Inno Setup
         shell: pwsh
+        env:
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
           $version = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "0.1.${{ github.run_number }}" }
-          & $iscc "/DAppVersion=$version" packaging\installer.iss
+          $args = @("/DAppVersion=$version")
+          if ("${{ steps.sign.outputs.signed }}" -eq "true") {
+            # $f is the file Inno Setup passes to the sign tool
+            $args += "/DSign"
+            $args += "/Smysign=`"${{ steps.sign.outputs.tool }}`" sign /f `"${{ steps.sign.outputs.pfx }}`" /p `"$env:CERT_PASSWORD`" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `$f"
+          }
+          & $iscc @args packaging\installer.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
 
       - uses: actions/upload-artifact@v4
@@ -91,7 +123,12 @@ jobs:
         run: |
           $tag = "win-b${{ github.run_number }}"
           $exe = (Get-ChildItem dist/installer/*.exe | Select-Object -First 1).FullName
-          gh release create $tag $exe --target "${{ github.sha }}" --title "Windows build ${{ github.run_number }}" --notes "$(git log -1 --format=%s)"
+          # the checksum goes in the notes: anyone can check the download is this build
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          $signed = if ("${{ steps.sign.outputs.signed }}" -eq "true") { "Signed with the project's code-signing certificate." }
+                    else { "Not signed: Windows will warn that the publisher is unknown. See docs/INSTALL_WINDOWS.md." }
+          $notes = "$(git log -1 --format=%s)`n`nSHA-256: ``$hash```n`n$signed"
+          gh release create $tag $exe --target "${{ github.sha }}" --title "Windows build ${{ github.run_number }}" --notes $notes
           if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
           $old = gh release list --limit 100 --json tagName --jq '.[].tagName' |
             Where-Object { $_ -match '^win-b\d+$' } |

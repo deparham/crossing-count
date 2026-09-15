@@ -437,6 +437,17 @@ GitHub's Windows machines build the installer, with
    wraps the result with Inno Setup (`packaging/installer.iss`). A separate
    job runs the tests on Windows.
 
+**"Windows protected your PC".** Windows shows that, or *unknown publisher*,
+because the installer is not signed with a code-signing certificate: it cannot
+tell who made it. It is not a virus warning, and every unsigned program gets it.
+Click **More info → Run anyway**, and check the installer's SHA-256 against the
+one in the release notes.
+[docs/INSTALL_WINDOWS.md](docs/INSTALL_WINDOWS.md) has the steps, including
+`Unblock-File`, and what the warning costs to remove for good. The build signs
+the program and the installer by itself once the repository secrets
+`WINDOWS_CERT_PFX` and `WINDOWS_CERT_PASSWORD` hold a certificate; without them
+it builds unsigned and says so in the run's log and the release notes.
+
 Once installed, the program files are read-only. Your drawings, runs and
 settings live in `%LOCALAPPDATA%\CrossingCount`, and the installer starts you
 off with the camera drawings in `sites/`. Automatic counting runs on the

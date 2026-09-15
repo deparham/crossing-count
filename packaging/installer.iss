@@ -1,6 +1,10 @@
 ; Inno Setup script: wraps the PyInstaller folder (dist\CrossingCount) into setup.exe.
 ; Build on Windows after PyInstaller:
 ;     ISCC.exe /DAppVersion=0.1.0 packaging\installer.iss
+; With a code-signing certificate set up, build with
+;     ISCC.exe /DAppVersion=0.1.0 /DSign packaging\installer.iss
+; and a sign tool named "mysign" (ISCC /Smysign=... or Inno's Tools > Configure Sign Tools).
+; Unsigned, Windows SmartScreen warns that the publisher is unknown: docs/INSTALL_WINDOWS.md.
 #ifndef AppVersion
   #define AppVersion "0.1.0"
 #endif
@@ -23,6 +27,16 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequiredOverridesAllowed=dialog
 WizardStyle=modern
 UninstallDisplayIcon={app}\CrossingCount.exe
+; what Windows shows about setup.exe itself (properties, and the "unknown publisher" prompt)
+VersionInfoVersion={#AppVersion}
+VersionInfoCompany=iTOi Solutions
+VersionInfoProductName=Crossing Count
+VersionInfoDescription=Crossing Count setup
+VersionInfoCopyright=Copyright (C) 2026 Parham Forozan. All rights reserved.
+#ifdef Sign
+SignTool=mysign
+SignedUninstaller=yes
+#endif
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
