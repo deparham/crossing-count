@@ -1,0 +1,46 @@
+# The quick gate on every change: lint, types, tests, and a look at the dependencies.
+# The slow jobs (building the Mac app and the Windows installer, their self-tests and the
+# release that installed apps update from) stay in their own workflows.
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:  # a new push replaces a run still going for the same branch
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: true  # the first run fills it (torch is large); later ones are quick
+          cache-dependency-glob: uv.lock
+      - run: uv sync --frozen
+      - name: Lint
+        run: uv run ruff check .
+      - name: Types
+        run: uv run mypy src tests
+      - name: Tests
+        run: uv run pytest -q
+
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+      - name: Known vulnerabilities in the locked dependencies
+        run: |
+          uv export --no-hashes --no-emit-project --format requirements-txt > requirements.txt
+          uvx pip-audit -r requirements.txt --strict

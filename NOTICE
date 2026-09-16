@@ -1,8 +1,15 @@
 CrossingCount
 Copyright © 2026 Parham Forozan. All rights reserved.
 
-No part of this software may be copied, modified or distributed without the
-written permission of the copyright holder.
+This software is proprietary: see LICENSE. No part of it may be copied, modified
+or distributed without the written permission of the copyright holder.
 
-It uses open-source components under their own licences, among them
-Ultralytics YOLO, OpenCV, PyAV, FastAPI, python-pptx and keyring.
+It uses open-source components under their own licences. docs/LICENSING.md lists
+every one with its version and what its licence requires.
+
+One of them matters more than the rest: Ultralytics YOLO, and the model weights
+that come with it, are licensed AGPL-3.0. Running CrossingCount inside the
+company that owns it is fine. Giving anyone outside that company a build, or
+letting anyone reach the app over a network, would require Ultralytics'
+commercial licence or releasing the whole combined work under AGPL-3.0. Read
+docs/LICENSING.md before sharing a build with anyone.

@@ -762,6 +762,27 @@ Measured on this Mac (MPS), per picture: YOLO 60 ms at 640 px and 10 ms on a
 on whole pictures, and about six times more inside the de-rotated pipeline,
 which asks for roughly twenty crops a frame.
 
+**What the first comparison found** (16 Sep 2026; CN-123 11:30, two cameras, the
+same two minutes, same tracker and rule):
+
+| Detection set | People a frame | Tracks | Proposed | Time |
+|---|---|---|---|---|
+| YOLO11s, de-rotated | 9.8 / 10.2 | 146 / 161 | 0 | 2 min 24 s |
+| RF-DETR Large, naive | 15.0 / 15.0 | 108 / 96 | 0 | 1 min 42 s |
+| RF-DETR Large, de-rotated | 56.6 / 59.9 | 215 / 219 | 4 | 38 min 55 s |
+
+RF-DETR in the de-rotated pipeline reports about 57 people a frame where 11 to
+13 are in view: the same person found in several overlapping rotated crops and
+not merged, because the duplicate rules (`merge_duplicates`) were tuned to
+YOLO's boxes. As wired, that combination is unusable, and at 0.1× real time it
+is too slow to use anyway. RF-DETR on whole pictures is the interesting one:
+faster than YOLO de-rotated, and seeing more people.
+
+**No winner is declared.** None of these crossings has been counted by hand, so
+there is nothing to score recall against, and `bench.py --all-detectors` says so
+rather than picking. Until a clip is fully hand-counted, "sees more people" is
+not evidence of counting better.
+
 Anything detected in the people-free median frame (clothing racks, mannequins)
 is treated as static and ignored when later detections match it closely.
 

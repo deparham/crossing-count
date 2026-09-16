@@ -1,0 +1,43 @@
+CrossingCount
+Copyright © 2026 Parham Forozan. All rights reserved.
+
+This software is proprietary. It is not open source, and no licence to use,
+copy, modify, merge, publish, distribute, sublicense or sell copies of it is
+granted except in writing by the copyright holder.
+
+Permitted use
+-------------
+
+The copyright holder and the organisation operating CrossingCount as an
+internal service may install and run it on their own computers, and give its
+reports to the customers whose footage was validated. Reports are outputs, not
+copies of the software, and are not restricted by this licence.
+
+Not permitted without written permission
+----------------------------------------
+
+  * giving, selling or lending the program, its installers or its source to
+    anyone outside that organisation, including a customer;
+  * running it as a service other people reach over a network;
+  * publishing the source, in whole or in part.
+
+Both of the first two would also trigger obligations under the AGPL-3.0 licence
+of Ultralytics YOLO, which this software uses. Read docs/LICENSING.md before
+sharing any build with anyone: it names every component, its licence, and what
+each one requires.
+
+Third-party components
+----------------------
+
+CrossingCount includes and depends on open-source components under their own
+licences, listed in docs/LICENSING.md and NOTICE. Nothing in this licence
+limits the rights those licences give you in those components.
+
+No warranty
+-----------
+
+The software is provided "as is", without warranty of any kind, express or
+implied. The copyright holder is not liable for any claim, damages or other
+liability arising from the software or its use. It produces measurements of
+counting systems; the person who signs a validation report is responsible for
+checking it.
