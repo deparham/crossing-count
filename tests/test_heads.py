@@ -122,11 +122,10 @@ def test_marking_page_api(two_tile_video: dict[str, Any], tmp_path: Path) -> Non
     assert client.get("/api/state").json()["frames"] == 0
     assert client.post("/api/add", json={"path": str(two_tile_video["video"]),
                                          "per_camera": 2}).json()["started"]
-    for _ in range(400):
-        st = client.get("/api/state").json()
-        if not st["adding"]["busy"]:
-            break
-        time.sleep(0.05)
+    deadline = time.monotonic() + 120  # reading the video takes a while on a slow runner
+    while (st := client.get("/api/state").json())["adding"]["busy"]:
+        assert time.monotonic() < deadline, st
+        time.sleep(0.1)
     assert st["frames"] == 4 and st["adding"]["error"] is None
     fid = st["frames_list"][0]["id"]
     assert client.get(f"/api/image/{fid}").headers["content-type"] == "image/jpeg"

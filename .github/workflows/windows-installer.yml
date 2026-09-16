@@ -114,11 +114,15 @@ jobs:
           & $iscc @args packaging\installer.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
 
+      # a copy on the run's page, for a few days: the release below is what the apps and
+      # people download, so a full artifact store must not stop it
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: CrossingCount-Setup
           path: dist/installer/*.exe
           if-no-files-found: error
+          retention-days: 3
 
       - name: Publish for the apps' update notice
         if: github.ref_type == 'branch'

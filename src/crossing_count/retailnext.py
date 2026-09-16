@@ -520,11 +520,14 @@ def download_info(video: Path) -> dict[str, Any] | None:
     return {"code": m["code"].strip(), "marks": bool(m["marks"])}
 
 
+NOT_IN_FILE_NAMES = re.compile(r'[<>:"/\\|?*]')  # characters Windows refuses in a file name
+
+
 def footage_name(code: str, start: datetime, end: datetime, marks: bool) -> str:
     """Named like RetailNext's own exports, so the store and the clock are read from it:
     "Export - CN-123 - 2026-09-12-113000 AEST to 2026-09-12-114500 AEST.mp4"."""
-    def at(t: datetime) -> str:
-        return f"{t:%Y-%m-%d-%H%M%S} {t.tzname() or ''}".strip()
+    def at(t: datetime) -> str:  # a zone without a name ("UTC+10:00") loses what Windows forbids
+        return f"{t:%Y-%m-%d-%H%M%S} {NOT_IN_FILE_NAMES.sub('', t.tzname() or '')}".strip()
 
     return f"Export - {code}{' marked' if marks else ''} - {at(start)} to {at(end)}.mp4"
 

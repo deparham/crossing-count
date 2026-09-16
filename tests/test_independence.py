@@ -216,8 +216,9 @@ def test_the_wizard_fetches_a_marked_minute_to_calibrate_on(
         if job["state"] in ("done", "failed"):
             break
         time.sleep(0.02)
-    assert job["state"] == "done", job
+    assert job["state"] == "done", job.get("message")
     assert asked == [(["v1", "v2"], True)]  # the same cameras, this time with RetailNext's marks
-    assert Path(job["path"]).name.startswith("Export - CN-9 marked - 2026-09-12-113000")
+    name = Path(job["path"]).name  # the store's clock, as RetailNext names it; no ":" (Windows)
+    assert name.startswith("Export - CN-9 marked - 2026-09-12-113000 AEST") and ":" not in name
     info = client.get(f"{job['draw_url']}api/info")
     assert info.status_code == 200 and len(info.json()["pictures"]) == 2

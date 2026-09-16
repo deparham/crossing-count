@@ -897,6 +897,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         clean footage (correspondence.py; Ground Truth Specification section 10)."""
         from datetime import datetime as dt
         from datetime import timedelta as td
+        from zoneinfo import ZoneInfo
 
         w, s, mine = wiz(), setup(), me()
         info = dict(w.state.get("retailnext") or {})
@@ -912,9 +913,12 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
             if not channels:
                 raise rn.RetailNextError(f"RetailNext has no camera video for "
                                          f"{store.get('name')}.")
-            start = dt.fromisoformat(str(info["start"]))
-            end = min(start + td(seconds=CALIBRATE_S), dt.fromisoformat(str(info["end"])))
-        except (rn.RetailNextError, ValueError) as exc:
+            # the store's own clock, named as RetailNext names it (AEST), as the footage was
+            zone = ZoneInfo(str(info.get("time_zone") or store.get("time_zone") or "UTC"))
+            start = dt.fromisoformat(str(info["start"])).astimezone(zone)
+            end = min(start + td(seconds=CALIBRATE_S),
+                      dt.fromisoformat(str(info["end"])).astimezone(zone))
+        except (rn.RetailNextError, ValueError, KeyError) as exc:  # KeyError: unknown time zone
             raise HTTPException(400, str(exc)) from exc
         target = paths.data_root() / "calibration"
         target.mkdir(parents=True, exist_ok=True)
