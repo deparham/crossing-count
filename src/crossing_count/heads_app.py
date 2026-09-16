@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from .heads import HeadLabels, LabelError, add_video
-from .review_app import WEB_DIR
+from .localweb import WEB_DIR
 from .wizard import default_folders, list_videos
 
 

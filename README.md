@@ -20,9 +20,9 @@ which only downloads numbers.
 |---|---|---|
 | M1 | Motion gating (`gate.py`) and camera tracing (`trace_line.py`) | built |
 | M2 | Candidate crossings (`detect.py`: detection, tracking, counting rule) | built |
-| M3 | Review page (`review.py`) | built |
-| M4 | CSV export, pipeline metrics, report (`export.py`) | built |
-| – | Manual counting page (`count.py`), no detection at all | built |
+| M3 | Human check (the wizard's check step) | built |
+| M4 | Report, CSV files and finalised validation runs | built |
+| – | Counting by hand (the wizard's Count by hand step), no detection at all | built |
 | – | Count wizard (`wizard.py`): automatic or manual count, then a PowerPoint report | built |
 | – | Windows installer (PyInstaller + Inno Setup, built by GitHub Actions) | built on GitHub |
 | – | Mac app (`CrossingCount.app` in a `.dmg`, built by GitHub Actions) | built on GitHub |
@@ -524,42 +524,19 @@ Licences: YOLO (Ultralytics) is under AGPL-3.0. Check with whoever handles
 licensing before giving the program to anyone outside the company: that needs
 Ultralytics' commercial licence or AGPL compliance.
 
-## Quick path: count by hand (`count.py`)
+## Quick path: count by hand
 
 The simplest way to check a sensor: you do all the counting, and the tool
-records it. No detection or tracking is involved, and no camera setup is needed.
+records it. No detection or tracking is involved. It is the wizard's **Manual**
+mode, described under *The count wizard* above: pick the footage, name or draw
+the cameras, then press `I` and `O` at every crossing while a timeline shows
+what you have watched. The count, the watched stretches and every correction
+are saved as they happen, the report is the same PowerPoint, and a full count on
+clean footage can be kept as a gold clip.
 
-```bash
-uv run count.py "Export - Multiple Channels - 2026-09-12-113000 AEST to 2026-09-12-114500 AEST.mp4" --operator "Your Name"
-```
-
-The page plays one camera at a time, cropped out of the multi-camera export.
-Watch the light-blue counting line, and press `I` when someone goes in and `O`
-when someone goes out. Other keys:
-
-- `Z` undoes the last count on this camera.
-- `Space` plays and pauses. The arrow keys step 2 s (0.1 s with `⇧`); up and
-  down change the speed.
-- `1`–`4` switch camera. Each camera resumes where you left it.
-
-Under the picture, a timeline shows the stretches you have watched and every
-count. The report lists anything left unwatched, so a count is only complete
-when a camera shows 100% watched.
-
-Type the sensor's numbers from RetailNext into "Compare with the sensor". Enter
-them per camera, or as the combined figure. Accuracy shows at once, per
-15-minute interval. An interval the video only partly covers is flagged,
-because the sensor's figure for the whole interval is not comparable.
-
-Everything is saved on every key press to `runs/<video>/manual/counts.json`.
-**Save report and CSV** writes one CSV per camera (the five columns below,
-after a header block) plus `report.html` and `summary.json`, to
-`runs/<video>/manual/export/`. `uv run count.py VIDEO --export` does the same
-without opening the page.
-
-The clock comes from the RetailNext filename. For other names pass
-`--start "2026-09-12 11:30:00"`. Camera names come from `gate.py` if it ran,
-else from `--cameras "CN-123-PB1,CN-123-R2"` or the page.
+(The standalone `count.py` page that did this was removed on 16 September 2026;
+the wizard does everything it did, with a decision log and the gold set. Counts
+it left behind are still read by `bench.py`.)
 
 The rest of this README covers the assisted path: the tool proposes crossings
 and a person confirms them.
@@ -820,61 +797,30 @@ These are **proposals, not verified counts**. On real footage, some true
 crossings were only in the rejected or unexplained lists, so the review below
 covers those too.
 
-## 5. Review (M3)
+## 5. Check, and 6. Report
 
-```bash
-uv run review.py "/path/to/Export - Multiple Channels - ....mp4" --operator "Your Name"
-```
+Both are the wizard's own steps now (*The count wizard*, above); the standalone
+`review.py` and `export.py` commands were removed on 16 September 2026.
 
-The review page opens in your browser and plays each item as a short clip,
-cropped to its camera, with the line, zones and the person's path drawn on. It
-goes through, per camera:
+The **check step** plays each item as a short clip, cropped to its camera, with
+the line, zones and the person's path drawn on, and asks per camera:
 
-- **every proposed crossing:** `A` accept, `R` reject, `S` split into two
-  people, `U` unsure, `F` flip the direction;
-- **every lost entry and duplicate, plus a random quarter of the other
-  rejections:** `C` the rule was right, `X` restore as a real crossing;
-- **every stretch of unexplained motion, likely misses first, played at 2×:**
-  press `I` or `O` the moment someone goes in or out, then `Enter` when done.
+- every crossing the tool counted: how many people crossed there (`Y` for one,
+  `2`–`5` for a group, `N` for nobody, `U` when you cannot tell);
+- every likely miss it listed — rejections of a kind that are often real, and
+  tracks lost at the line;
+- **a seeded quarter of the rule's other rejections**, so the counting rule is
+  audited rather than trusted (a restored one is counted, and the report says it
+  came from the audit);
+- every stretch of movement it could not explain, at 2×, where you press `I` or
+  `O` for anyone it never detected.
 
-Other keys:
+Every answer is saved as it happens, with who gave it and when, in
+`runs/<video>/wizard/state.json` and the audit log.
 
-- `1`–`5` tag the item: child, staff, pram/trolley, group merge, unsure.
-- `Space`, `←`/`→` and `↑`/`↓` control playback.
-- `Z` removes the last crossing you added to the current item; with none, it
-  undoes the last decision. A held key acts once, and adding a second crossing
-  in the same direction at the same moment asks you to confirm it was two people.
-- `N` and `P` move to the next or previous item without deciding.
-
-Every key press is saved to `runs/<video>/review/decisions.json`, including
-unfinished work on an item. Close the page any time and it resumes where you
-stopped. The header shows progress and the time left.
-
-## 6. Export (M4)
-
-```bash
-uv run export.py "/path/to/Export - Multiple Channels - ....mp4" --sensor-in 20 --sensor-out 23
-```
-
-This writes to `runs/<video>/export/`:
-
-- **`<camera>.csv`:** the manual tool's layout. First a header block (site,
-  sensor, video, the clock time of video 00:00:00, operator, the counting rules
-  including the mask zone), then the columns
-  `video_time,video_seconds,clock_time,direction,tags`.
-- **`pipeline_metrics.json`:** the pipeline's own error rates, measured by the
-  review. It covers proposals accepted, rejected and split; unexplained
-  stretches reviewed and how many held a missed crossing; U-turns and returns
-  discarded; lost entries; stitched tracks.
-- **`report.html`:** verified in and out per camera and in total, per 15-minute
-  interval, tags, the pipeline's error rates, and the sensor's accuracy when you
-  give its numbers.
-
-To give the sensor's numbers, use `--sensor-in` / `--sensor-out` for combined
-counts, or `--sensor CAMERA:in=N,out=M` for each camera.
-
-Until the review is finished, the counts can only go up, and every output says
-so.
+The **report** is the PowerPoint described above. Finalising a validation also
+writes `intervals.csv`, `crossings.csv`, the decisions and a manifest to
+`validations/<ID>/`, read-only and checksummed.
 
 ## Timing
 

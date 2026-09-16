@@ -40,8 +40,7 @@ from . import (
 from . import overlay as ov
 from . import retailnext as rn
 from .examples import check_folder
-from .localweb import local_only
-from .review_app import WEB_DIR, _range_response
+from .localweb import WEB_DIR, local_only, video_range
 from .webapp import Setup, create_app
 from .wizard import Wizard, WizardError, default_folders, list_videos
 
@@ -947,7 +946,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     @app.get("/video")
     def video_file(request: Request) -> Response:
-        return _range_response(wiz().video, request.headers.get("range"))
+        return video_range(wiz().video, request.headers.get("range"))
 
     # ---- the gold set ----------------------------------------------------------------------
 

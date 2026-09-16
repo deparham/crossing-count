@@ -135,10 +135,3 @@ def review_run_dir(two_tile_video: dict[str, Any],
     return d
 
 
-@pytest.fixture
-def fresh(review_run_dir: Path) -> Path:
-    """The review run directory with any saved review decisions removed."""
-    state = review_run_dir / "review" / "decisions.json"
-    if state.exists():
-        state.unlink()
-    return review_run_dir

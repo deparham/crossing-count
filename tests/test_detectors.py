@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -112,14 +113,13 @@ def _track(tid: int, xs: list[tuple[float, float, float]]) -> Track:
 
 
 def test_things_that_never_move_are_their_own_kind_of_false_positive() -> None:
-    class Res:
-        candidates = {"picture": {"tile": {"y0": 0, "y1": 480}}}
-        tracks = [_track(1, [(0.0, 100.0, 100.0), (9.0, 100.4, 100.2)]),  # a mannequin
-                  _track(2, [(0.0, 10.0, 10.0), (9.0, 300.0, 300.0)]),  # a person walking
-                  _track(3, [(0.0, 50.0, 50.0), (1.0, 50.0, 50.0)])]  # still, but only 1 s
-
+    res = SimpleNamespace(
+        candidates={"picture": {"tile": {"y0": 0, "y1": 480}}},
+        tracks=[_track(1, [(0.0, 100.0, 100.0), (9.0, 100.4, 100.2)]),  # a mannequin
+                _track(2, [(0.0, 10.0, 10.0), (9.0, 300.0, 300.0)]),  # a person walking
+                _track(3, [(0.0, 50.0, 50.0), (1.0, 50.0, 50.0)])])  # still, but only 1 s
     items = [{"track_id": 1}, {"track_id": 2}, {"tracks": [1, 5]}]
-    s = bench.static_objects(Res(), items)  # type: ignore[arg-type]
+    s = bench.static_objects(res, items)  # type: ignore[arg-type]
     assert (s["tracks"], s["items"]) == (1, 2) and s["seconds"] == 9.0
 
 

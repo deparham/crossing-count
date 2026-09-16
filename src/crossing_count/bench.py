@@ -29,7 +29,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import paths
+from . import evaluate, paths
 from .candidates import CameraDetection, DetectOptions, output_dir, replay_factory, run_detect
 from .config import load_config
 from .export import CSV_COLUMNS
@@ -270,18 +270,10 @@ def replay(video: Path, run_dir: Path, configs: list[str | Path], allow_config_c
 
 
 def _pairs(a: list[float], b: list[float]) -> list[tuple[int, int]]:
-    """One-to-one matches within WINDOW_S, closest first."""
-    near = sorted((abs(x - y), i, j) for i, x in enumerate(a) for j, y in enumerate(b)
-                  if abs(x - y) <= WINDOW_S)
-    used_a: set[int] = set()
-    used_b: set[int] = set()
-    out = []
-    for _, i, j in near:
-        if i not in used_a and j not in used_b:
-            used_a.add(i)
-            used_b.add(j)
-            out.append((i, j))
-    return out
+    """One-to-one matches within WINDOW_S, by the one matching the whole project uses
+    (evaluate.match, as the gold set is scored with): two scorers that disagreed about the
+    same clip would be worse than either."""
+    return [(j, i) for i, j in evaluate.match(b, a, WINDOW_S)]
 
 
 def score_camera(real: list[tuple[float, str]], items: list[dict[str, Any]],

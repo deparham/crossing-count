@@ -76,7 +76,14 @@ def main(argv: list[str] | None = None) -> int:
     for m in modes:
         opts = DetectOptions(mode=m, model=args.model, device=args.device, det_fps=args.det_fps,
                              record=args.record, backbone=args.detector)
-        where = m if args.detector == "yolo" else f"{args.detector}-{m}"
+        # each detector and each set of weights keeps its own results, so they can be
+        # compared on the same clip; today's default (YOLO, its own weights) stays put
+        if args.detector != "yolo":
+            where = f"{args.detector}-{m}"
+        elif args.model != ap.get_default("model"):
+            where = f"{Path(args.model).stem}-{m}"
+        else:
+            where = m
         print(f"\n[{args.detector} {m}]", file=sys.stderr)
         try:
             res = run_detect(args.video, args.configs, run_dir, opts=opts, sample_s=args.sample,

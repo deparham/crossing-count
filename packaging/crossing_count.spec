@@ -10,8 +10,8 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 ROOT = Path(SPECPATH).parent
-SCRIPTS = ["gate", "detect", "count", "review", "export", "setup_ui", "proposed",
-           "trace_line", "wizard", "label", "train_heads", "retailnext"]
+SCRIPTS = ["gate", "detect", "setup_ui", "proposed", "trace_line", "wizard", "label",
+           "train_heads", "retailnext"]
 
 # keyring finds the credential store (Credential Manager, Keychain) through its
 # package metadata, so that goes in too.

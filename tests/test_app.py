@@ -43,12 +43,15 @@ def test_an_installed_copy_starts_with_the_shipped_drawings(tmp_path: Path,
 def test_every_step_is_a_sub_command(capsys: pytest.CaptureFixture[str],
                                      tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path))
-    for name in ("gate", "detect", "count"):
+    for name in ("gate", "detect"):
         with pytest.raises(SystemExit) as done:
             app.main([name, "--help"])
         assert done.value.code == 0
     out = capsys.readouterr().out
-    assert "motion gating" in out and "candidate crossings" in out and "Manual count" in out
+    assert "motion gating" in out and "candidate crossings" in out
+    # the standalone hand counter, reviewer and exporter are gone: the wizard does all
+    # three, and their names are no longer sub-commands
+    assert not {"count", "review", "export"} & set(app.COMMANDS)
 
 
 def test_the_wizard_starts_steps_as_scripts_or_as_sub_commands(

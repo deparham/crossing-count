@@ -23,11 +23,11 @@ the sensor's numbers and to export footage, with keys in the system credential s
 | Tracking | `tracks.py` (own tracker: jump cuts, walking-speed joining) | tracks |
 | Crossing logic | `crossing.py` (side changes with a margin), `rule.py` (mask/filter zones, same-track returns, duplicates) | counted crossings, discards with reasons |
 | Candidates | `candidates.py` (`detect.py`) | `candidates.json`, `discarded.json`, `unexplained.json` (incl. `broken_track_at_line`) |
-| Human check | wizard check step (`wizard.py`: Y / N / Unsure / group size, then watching unexplained movement); legacy `review.py` + `review.html` | verified crossings, decision log |
-| Count by hand | wizard hand step (`manual.py`: watched ranges, per-camera counts); legacy `count.py` + `count.html` | hand counts with coverage |
+| Human check | wizard check step (`wizard.py`: Y / N / Unsure / group size, a seeded sample of the rule's rejections, then watching unexplained movement) | verified crossings, decision log |
+| Count by hand | wizard hand step (watched ranges from `manual.py`, per-camera counts, uncertain marks) | hand counts with coverage |
 | Persistence | JSON under `runs/<video>/` (`wizard/state.json`, `history/`), `settings.json`, credential store (keyring) | |
 | Sensor data | `retailnext.py` (locations, traffic per 15 minutes, busiest window, video export), wizard `use_retailnext` | sensor counts |
-| Reporting | `report_pptx.py` (customer PowerPoint); legacy `export.py` (CSV + HTML) | report |
+| Reporting | `report_pptx.py` (customer PowerPoint), `runs.py` (CSV files of a finalised validation) | report |
 | Evaluation | `bench.py` (where verified crossings fall), `evaluate.py` + `gold.py` + `gold.html` (gold set, crossing-level scoring, experiment records) | scores |
 | Training | `heads.py`, `label.py`, `train_heads.py` (parked: no better than the current detector); `examples.py` (learning examples to a shared folder) | |
 | App shell | `wizard_app.py` (FastAPI), `window.py` (pywebview window), `app.py` (one executable), `updates.py` (git), `releases.py` + `builtin.py` (GitHub builds, self-update, built-in keys) | |
@@ -54,10 +54,13 @@ the sensor's numbers and to export footage, with keys in the system credential s
   1,300-line file.
 - **Untyped state.** State files are dicts marked `wizard/1` but never validated; old
   files are upgraded by filling in defaults.
-- **Duplicated code.** Three video players and timelines (`review.html`, `count.html`,
-  `wizard.html`); two check flows (review.py, wizard); two hand-count flows (count.py,
-  wizard); two report writers (export.py, report_pptx.py); two scorers (bench.py,
-  gold.py). The legacy command-line flows are no longer the user's path.
+- ~~**Duplicated code.**~~ Fixed (16 Sep 2026): the legacy command-line flows are gone —
+  `count.py`, `review.py`, `export.py`, their pages and their apps were deleted after the
+  one thing the wizard lacked (the seeded audit of the rule's rejections) was folded into
+  its check step. One video player remains (`wizard.html`; the other pages draw on
+  pictures, not video), one report writer (`report_pptx.py`), and one matching
+  (`evaluate.match`), which `bench.py` and `gold.py` both use. The readers for counts kept
+  in the older formats stay, so earlier work is still scored.
 - **Sensor comparison tied to RetailNext.** The wizard assumes RetailNext's 15-minute
   intervals; there is no generic sensor format.
 - **One number for the sensor.** "Sensor accuracy" is 100 - |sensor - verified| /

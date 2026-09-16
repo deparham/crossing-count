@@ -19,10 +19,9 @@ from .paths import FROZEN, SOURCE_ROOT, data_root, models_dirs, prepare_data_roo
 
 PORT = 8780
 COMMANDS = {
-    "gate": "gate", "detect": "detect", "count": "count", "review": "review",
-    "export": "export", "setup": "setup_ui", "proposed": "proposed", "trace": "trace_line",
-    "wizard": "wizard", "label": "label", "train-heads": "train_heads",
-    "retailnext": "retailnext",
+    "gate": "gate", "detect": "detect", "setup": "setup_ui", "proposed": "proposed",
+    "trace": "trace_line", "wizard": "wizard", "label": "label",
+    "train-heads": "train_heads", "retailnext": "retailnext",
 }
 
 

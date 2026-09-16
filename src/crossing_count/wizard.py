@@ -12,6 +12,7 @@ import functools
 import json
 import os
 import pickle
+import random
 import re
 import shutil
 import subprocess
@@ -64,7 +65,12 @@ TWIN_WINDOW_S = 2.0  # same direction this close on another camera: maybe one pe
 POSSIBLE_REASONS = ("no_filter", "returned_same_track", "outward_no_mask", "pending_expired",
                     "pending_at_eof", "pending_at_range_end")
 PROMPT_PRIORITY = {"no_filter": 0, "returned_same_track": 0, "outward_no_mask": 0,
-                   "pending_expired": 1, "pending_at_eof": 1, "pending_at_range_end": 1, "lost": 2}
+                   "pending_expired": 1, "pending_at_eof": 1, "pending_at_range_end": 1,
+                   "lost": 2, "audit": 3}
+# The rule's other rejections are not trusted: a seeded sample of them is put to the checker
+# as well, so the rule itself is audited. Asked last, after the likely misses.
+AUDIT_SHARE = 0.25
+AUDIT_MIN = 5
 
 
 def prompt_priority(why: str) -> int:
@@ -80,6 +86,7 @@ FOUND = {  # how each verified crossing came to be counted, for the report
     "detected": "Detected, confirmed",
     "lost": "Track lost at line, confirmed",
     "added": "Added by the checker",
+    "audit": "Rejected by the rule, checked as a sample, restored",
 }
 Image = NDArray[np.uint8]
 
@@ -154,10 +161,15 @@ def _found(why: str, people: int) -> str:
 
 
 def review_items(camera: str, picture: int, candidates: dict[str, Any], discarded: dict[str, Any],
-                 unexplained: dict[str, Any], dirs: list[str], duration: float
-                 ) -> list[dict[str, Any]]:
+                 unexplained: dict[str, Any], dirs: list[str], duration: float,
+                 audit_seed: str | None = None) -> list[dict[str, Any]]:
     """What one camera's count asks a person to check: every counted crossing, and every
-    possible miss (rule rejections that are often real, tracks lost at the line)."""
+    possible miss (rule rejections that are often real, tracks lost at the line).
+
+    With an audit_seed, a seeded sample of the rule's *other* rejections is asked about too,
+    so the counting rule is audited rather than trusted; the same seed always picks the same
+    sample. Scoring replays pass no seed, so a score is never changed by the audit.
+    """
     def clip(t0: float, t1: float | None = None) -> list[float]:
         return [round(max(0.0, t0 - CLIP_BEFORE_S), 2),
                 round(min(duration, (t0 if t1 is None else t1) + CLIP_AFTER_S), 2)]
@@ -176,6 +188,18 @@ def review_items(camera: str, picture: int, candidates: dict[str, Any], discarde
             t = float(first["t"])
             items.append({**base, "id": d["id"], "kind": "possible", "why": d["reason"],
                           "t": t, "direction": first["direction"], "clip": clip(t, t + 1.5),
+                          "point": _near(d.get("path"), t), "path": d.get("path")})
+    if audit_seed is not None:
+        rest = [d for d in discarded.get("discarded", [])
+                if d.get("reason") not in POSSIBLE_REASONS
+                and (d.get("crossings") or [{}])[0].get("direction") in dirs]
+        rng = random.Random(f"{audit_seed}:{camera}")
+        share = min(len(rest), max(AUDIT_MIN, round(AUDIT_SHARE * len(rest))))
+        for d in sorted(rng.sample(rest, share), key=lambda d: float(d["crossings"][0]["t"])):
+            first = d["crossings"][0]
+            t = float(first["t"])
+            items.append({**base, "id": d["id"], "kind": "possible", "why": "audit", "t": t,
+                          "direction": first["direction"], "clip": clip(t, t + 1.5),
                           "point": _near(d.get("path"), t), "path": d.get("path")})
     for u in unexplained.get("unexplained", []):
         if u.get("kind") == MISS_KIND and u.get("direction_guess") in dirs:
@@ -1517,7 +1541,7 @@ class Wizard:
         for cam in self.state["cameras"]:
             items += review_items(cam["sensor"], cam["picture"], self._read(cam, "candidates"),
                                   self._read(cam, "discarded"), self._read(cam, "unexplained"),
-                                  self.dirs(), dur)
+                                  self.dirs(), dur, audit_seed=str(self.state["fingerprint"]))
         items.sort(key=lambda i: (i["kind"] != "counted",
                                   prompt_priority(i["why"]) if i["kind"] == "possible" else 0,
                                   i["t"], i["picture"]))
