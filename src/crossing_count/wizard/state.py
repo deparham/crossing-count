@@ -10,18 +10,13 @@ from __future__ import annotations
 
 import functools
 import json
-import os
 import pickle
-import random
 import re
 import shutil
-import subprocess
-import sys
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Concatenate, ParamSpec, TypeVar
 
@@ -29,7 +24,7 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from . import (
+from .. import (
     __copyright__,
     auditlog,
     independence,
@@ -40,54 +35,37 @@ from . import (
     sensors,
     validation,
 )
-from . import correspondence as co
-from . import video as vid
-from .candidates import MISS_KIND
-from .config import ConfigError, bind, load_config
-from .export import INTERVAL_MIN, sensor_accuracy
-from .gating import camera_dir
-from .manual import intervals_for, merge_ranges, unwatched_ranges
-from .report_pptx import build_report
-from .util import default_run_dir, fmt_hms, same_store, write_json_atomic
-from .version import app_version
+from .. import correspondence as co
+from .. import video as vid
+from ..config import ConfigError, bind, load_config
+from ..export import INTERVAL_MIN, sensor_accuracy
+from ..gating import camera_dir
+from ..manual import intervals_for, merge_ranges, unwatched_ranges
+from ..report_pptx import build_report
+from ..util import default_run_dir, fmt_hms, same_store, write_json_atomic
+from ..version import app_version
+from .items import (
+    CHOICES,
+    DIRECTIONS,
+    FOUND,
+    GROUND_TRUTH_SPEC,
+    LABELS,
+    MAX_GROUP,
+    MIN_WATCHED_PCT,
+    MODELS,
+    RULE_CHOICES,
+    TWIN_WINDOW_S,
+    _found,
+    accuracy_range,
+    distinct_people,
+    mark_twins,
+    prompt_priority,
+    review_items,
+    row_numbers,
+    watch_stretches,
+)
+from .jobs import Progress, _Job, pipeline_commands
 
-ROOT = paths.SOURCE_ROOT  # the project folder, when running from source
-VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv", ".avi")
-DIRECTIONS = ("in", "out")
-CHOICES = {"in": ["in"], "out": ["out"], "both": ["in", "out"]}
-LABELS = {"in": "Traffic In", "out": "Traffic Out"}
-MODELS = ("yolo11m.pt", "yolo11s.pt")
-TWIN_WINDOW_S = 2.0  # same direction this close on another camera: maybe one person seen twice
-# Rule rejections offered to the checker. Measured on checked clips (11:30 CN-123, YD-612):
-# "never touched the filter zone" and "out and back on one track" were real about half the
-# time or more; exits without the mask 3 in 7; entries lost before the mask 0 in 8; tracks
-# broken at the line 9 in 94. U-turns (0 in 2) stay rejected.
-POSSIBLE_REASONS = ("no_filter", "returned_same_track", "outward_no_mask", "pending_expired",
-                    "pending_at_eof", "pending_at_range_end")
-PROMPT_PRIORITY = {"no_filter": 0, "returned_same_track": 0, "outward_no_mask": 0,
-                   "pending_expired": 1, "pending_at_eof": 1, "pending_at_range_end": 1,
-                   "lost": 2, "audit": 3}
-# The rule's other rejections are not trusted: a seeded sample of them is put to the checker
-# as well, so the rule itself is audited. Asked last, after the likely misses.
-AUDIT_SHARE = 0.25
-AUDIT_MIN = 5
-
-
-def prompt_priority(why: str) -> int:
-    """Possible misses most often real come first; tracks broken at the line last."""
-    return PROMPT_PRIORITY.get(why, 1)
-CLIP_BEFORE_S = 2.5
-CLIP_AFTER_S = 1.5
-MIN_WATCHED_PCT = 99.0  # a hand count that watched less of a camera's footage is incomplete
-GROUND_TRUTH_SPEC = "1.2"  # docs/GROUND_TRUTH_SPECIFICATION.md: what a crossing is
-RULE_CHOICES = ("count", "exclude")  # what counts as a person: children, staff (spec section 4)
-MAX_GROUP = 9  # people one answer can count, when a group crosses together
-FOUND = {  # how each verified crossing came to be counted, for the report
-    "detected": "Detected, confirmed",
-    "lost": "Track lost at line, confirmed",
-    "added": "Added by the checker",
-    "audit": "Rejected by the rule, checked as a sample, restored",
-}
 Image = NDArray[np.uint8]
 
 
@@ -103,313 +81,9 @@ def _pts(a: Any) -> list[list[float]]:
     return [[round(float(x), 1), round(float(y), 1)] for x, y in a]
 
 
-def _near(path: list[list[float]] | None, t: float) -> list[float] | None:
-    """The [x, y] of the path sample closest in time to t."""
-    if not path:
-        return None
-    s = min(path, key=lambda p: abs(p[0] - t))
-    return [s[1], s[2]]
-
-
-def _iou(a: Any, b: Any) -> float:
-    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
-    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
-    inter = ix * iy
-    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
-    return inter / union if union > 0 else 0.0
-
-
-def distinct_people(dets: list[Any], overlap: float = 0.3, near_px: float = 40.0) -> list[Any]:
-    """One detection per person, for pictures: the rotated crops often find someone twice,
-    as boxes that barely overlap but stand on the same spot."""
-    kept: list[Any] = []
-    for d in sorted(dets, key=lambda d: -float(getattr(d, "conf", 0.0))):
-        foot = getattr(d, "foot", None)
-        if all(_iou(d.bbox, k.bbox) < overlap
-               and (foot is None or getattr(k, "foot", None) is None
-                    or float(np.hypot(foot[0] - k.foot[0], foot[1] - k.foot[1])) > near_px)
-               for k in kept):
-            kept.append(d)
-    return kept
-
-
 def _dur(seconds: float) -> str:
     s = max(0, round(seconds))
     return f"{s // 60} min {s % 60} s" if s >= 60 else f"{s} s"
-
-
-def accuracy_range(sensor: int | None, verified: int, unsure: int) -> list[float] | None:
-    """The system's accuracy whichever way the unsure crossings go: [lowest, highest]."""
-    vals = [a for v in range(verified, verified + unsure + 1)
-            if (a := sensor_accuracy(sensor, v)["accuracy_pct"]) is not None]
-    return [min(vals), max(vals)] if vals else None
-
-
-def row_numbers(rows: list[dict[str, Any]]) -> list[str]:
-    """The report's numbering, one number per person: a group of 3 after two people is "3–5"."""
-    out, k = [], 1
-    for r in rows:
-        n = int(r.get("people", 1))
-        out.append(str(k) if n == 1 else f"{k}–{k + n - 1}")
-        k += n
-    return out
-
-
-def _found(why: str, people: int) -> str:
-    text = FOUND.get(why, "Rejected by rule, restored")
-    return f"{text} (group of {people})" if people > 1 else text
-
-
-def review_items(camera: str, picture: int, candidates: dict[str, Any], discarded: dict[str, Any],
-                 unexplained: dict[str, Any], dirs: list[str], duration: float,
-                 audit_seed: str | None = None) -> list[dict[str, Any]]:
-    """What one camera's count asks a person to check: every counted crossing, and every
-    possible miss (rule rejections that are often real, tracks lost at the line).
-
-    With an audit_seed, a seeded sample of the rule's *other* rejections is asked about too,
-    so the counting rule is audited rather than trusted; the same seed always picks the same
-    sample. Scoring replays pass no seed, so a score is never changed by the audit.
-    """
-    def clip(t0: float, t1: float | None = None) -> list[float]:
-        return [round(max(0.0, t0 - CLIP_BEFORE_S), 2),
-                round(min(duration, (t0 if t1 is None else t1) + CLIP_AFTER_S), 2)]
-
-    base = {"camera": camera, "picture": picture}
-    items: list[dict[str, Any]] = []
-    for c in candidates.get("candidates", []):
-        if c["direction"] in dirs:
-            t = float(c["t_seconds"])
-            items.append({**base, "id": c["id"], "kind": "counted", "why": "detected",
-                          "t": t, "direction": c["direction"], "clip": clip(t),
-                          "point": c.get("crossing_xy"), "path": c.get("path")})
-    for d in discarded.get("discarded", []):
-        first = (d.get("crossings") or [{}])[0]
-        if d.get("reason") in POSSIBLE_REASONS and first.get("direction") in dirs:
-            t = float(first["t"])
-            items.append({**base, "id": d["id"], "kind": "possible", "why": d["reason"],
-                          "t": t, "direction": first["direction"], "clip": clip(t, t + 1.5),
-                          "point": _near(d.get("path"), t), "path": d.get("path")})
-    if audit_seed is not None:
-        rest = [d for d in discarded.get("discarded", [])
-                if d.get("reason") not in POSSIBLE_REASONS
-                and (d.get("crossings") or [{}])[0].get("direction") in dirs]
-        rng = random.Random(f"{audit_seed}:{camera}")
-        share = min(len(rest), max(AUDIT_MIN, round(AUDIT_SHARE * len(rest))))
-        for d in sorted(rng.sample(rest, share), key=lambda d: float(d["crossings"][0]["t"])):
-            first = d["crossings"][0]
-            t = float(first["t"])
-            items.append({**base, "id": d["id"], "kind": "possible", "why": "audit", "t": t,
-                          "direction": first["direction"], "clip": clip(t, t + 1.5),
-                          "point": _near(d.get("path"), t), "path": d.get("path")})
-    for u in unexplained.get("unexplained", []):
-        if u.get("kind") == MISS_KIND and u.get("direction_guess") in dirs:
-            items.append({**base, "id": u["id"], "kind": "possible", "why": "lost",
-                          "t": float(u["t_seconds"]), "direction": u["direction_guess"],
-                          "clip": clip(float(u["start_s"]), float(u["end_s"])),
-                          "point": None, "path": None})
-    return items
-
-
-def watch_stretches(camera: str, picture: int, unexplained: dict[str, Any]) -> list[dict[str, Any]]:
-    """Movement near the line that gave no count and no possible miss: a person the tool
-    never detected there is found only by watching it."""
-    return [{"id": u["id"], "camera": camera, "picture": picture,
-             "start": float(u["start_s"]), "end": float(u["end_s"])}
-            for u in unexplained.get("unexplained", []) if u.get("kind") != MISS_KIND]
-
-
-def default_folders() -> list[Path]:
-    home = Path.home()
-    return [p for p in (home / "Downloads", home / "Desktop", home / "Movies", home / "Videos")
-            if p.is_dir()]
-
-
-def list_videos(folders: list[Path]) -> list[dict[str, Any]]:
-    """Video files directly inside the folders, newest first."""
-    found: list[dict[str, Any]] = []
-    for folder in folders:
-        try:
-            entries = sorted(folder.iterdir())
-        except OSError:
-            continue
-        for p in entries:
-            if p.name.startswith(".") or p.suffix.lower() not in VIDEO_EXTS or not p.is_file():
-                continue
-            st = p.stat()
-            found.append({
-                "path": str(p), "name": p.name, "folder": str(folder),
-                "size_mb": round(st.st_size / 1e6, 1),
-                "modified": datetime.fromtimestamp(st.st_mtime, tz=UTC).astimezone()
-                .isoformat(timespec="minutes"),
-            })
-    found.sort(key=lambda v: str(v["modified"]), reverse=True)
-    return found
-
-
-def mark_twins(items: list[dict[str, Any]]) -> None:
-    """Flag checks that may be the same person as a counted crossing elsewhere.
-
-    Two cameras can watch the same stretch of doorway. Of two counted crossings in
-    the same direction within TWIN_WINDOW_S on different cameras, the later camera's
-    one gets a note, as does a possible miss that coincides with a counted crossing,
-    so the checker can answer no and count that person once.
-    """
-    counted = [i for i in items if i["kind"] == "counted"]
-    for it in items:
-        for other in counted:
-            if (other is it or other["direction"] != it["direction"]
-                    or abs(other["t"] - it["t"]) > TWIN_WINDOW_S):
-                continue
-            if it["kind"] == "counted" and other["picture"] >= it["picture"]:
-                continue
-            it["twin"] = {"id": other["id"], "camera": other["camera"], "t": other["t"]}
-            break
-
-
-# ---- following the child processes -------------------------------------------------------
-
-_GATE = re.compile(r"gating (\d+):(\d+):([\d.]+) / (\d+):(\d+):([\d.]+)")
-_TRACK = re.compile(r"tracking\s+([\d.]+)% of active time\s+\(\s*([\d.]+)x realtime\)")
-_CAMERA = re.compile(r"^\s*(\S.*?): \w+ detector,")
-
-
-def _secs(h: str, m: str, s: str) -> float:
-    return int(h) * 3600 + int(m) * 60 + float(s)
-
-
-@dataclass
-class Progress:
-    """What gate.py and detect.py are doing, read from their output."""
-
-    cameras: int = 1
-    stage: str = "starting"  # starting, gate, detect, done
-    camera: str = ""
-    seen: list[str] = field(default_factory=list)
-    stage_pct: float = 0.0
-    speed: float | None = None
-    message: str = "Starting"
-    log: list[str] = field(default_factory=list)
-
-    def overall(self) -> float:
-        """Percent of the whole job: the gate is quick (5%), detection is the rest."""
-        if self.stage == "done":
-            return 100.0
-        if self.stage == "gate":
-            return 5.0 * self.stage_pct / 100.0
-        if self.stage == "detect":
-            per = 95.0 / max(1, self.cameras)
-            return 5.0 + per * (max(0, len(self.seen) - 1) + self.stage_pct / 100.0)
-        return 0.0
-
-    def feed(self, text: str) -> None:
-        line = text.strip()
-        if not line or line.startswith("objc["):
-            return
-        m = _GATE.search(line)
-        if m:
-            done, total = _secs(m[1], m[2], m[3]), _secs(m[4], m[5], m[6])
-            self.stage = "gate"
-            self.stage_pct = min(100.0, 100.0 * done / total) if total else 0.0
-            self.message = (f"Finding movement near the line: {fmt_hms(done)[:8]} of "
-                            f"{fmt_hms(total)[:8]}")
-            return
-        m = _TRACK.search(line)
-        if m:
-            self.stage, self.stage_pct, self.speed = "detect", float(m[1]), float(m[2])
-            self.message = (f"Detecting and tracking people on {self.camera}: "
-                            f"{self.stage_pct:.0f}% ({self.speed:.1f}x realtime)")
-            return
-        m = _CAMERA.match(text)
-        if m:
-            self.stage, self.camera, self.stage_pct = "detect", m[1], 0.0
-            if m[1] not in self.seen:
-                self.seen.append(m[1])
-            self.message = f"Detecting and tracking people on {self.camera}"
-        self.log.append(line)
-        del self.log[:-300]
-
-
-class _Job:
-    """Runs the commands one after another in a thread, feeding their output to Progress."""
-
-    def __init__(self, commands: list[list[str]], progress: Progress,
-                 finish: Callable[[str, str | None, list[str]], None]) -> None:
-        self.commands = commands
-        self.progress = progress
-        self._finish = finish
-        self.started = time.monotonic()
-        self.stopped = False
-        self.running = True
-        self._proc: subprocess.Popen[bytes] | None = None
-        threading.Thread(target=self._run, daemon=True).start()
-
-    def _run(self) -> None:
-        env = {**os.environ, "PYTHONUNBUFFERED": "1"}
-        status: str = "done"
-        error: str | None = None
-        cwd = paths.data_root()
-        cwd.mkdir(parents=True, exist_ok=True)
-        for cmd in self.commands:
-            if self.stopped:
-                break
-            name = Path(cmd[1]).name if len(cmd) > 1 else cmd[0]
-            try:
-                proc = subprocess.Popen(cmd, cwd=cwd, env=env,
-                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            except OSError as exc:
-                status, error = "failed", f"could not start {name}: {exc}"
-                break
-            self._proc = proc
-            assert proc.stdout is not None
-            fd, pending = proc.stdout.fileno(), b""
-            while True:
-                data = os.read(fd, 4096)
-                if not data:
-                    break
-                parts = re.split(rb"[\r\n]", pending + data)
-                pending = parts.pop()
-                for part in parts:
-                    self.progress.feed(part.decode("utf-8", "replace"))
-            if pending:
-                self.progress.feed(pending.decode("utf-8", "replace"))
-            code = proc.wait()
-            if self.stopped:
-                break
-            if code != 0:
-                status, error = "failed", (f"{name} stopped with an error (exit code {code}); "
-                                           f"the log says why")
-                break
-        if self.stopped:
-            status, error = "stopped", None
-        if status == "done":
-            self.progress.stage, self.progress.message = "done", "Finished"
-        self.running = False
-        self._finish(status, error, self.progress.log[-40:])
-
-    def stop(self) -> None:
-        self.stopped = True
-        if self._proc is not None and self._proc.poll() is None:
-            self._proc.terminate()
-
-
-def tool(name: str) -> list[str]:
-    """How to start one of the pipeline scripts: a sub-command of this program when installed."""
-    if paths.FROZEN:
-        return [sys.executable, name]
-    return [sys.executable, str(ROOT / f"{name}.py")]
-
-
-def pipeline_commands(w: Wizard) -> list[list[str]]:
-    """gate.py then detect.py for the chosen cameras, each pinned to its picture."""
-    cams = w.state["cameras"]
-    cfgs = [c["config"] for c in cams]
-    tiles = [a for c in cams for a in ("--tile", f"{c['sensor']}={c['picture']}")]
-    out = ["--out-dir", str(w.run_dir)]
-    return [
-        [*tool("gate"), str(w.video), *cfgs, *tiles, *out],
-        [*tool("detect"), str(w.video), *cfgs, "--model", w.state["model"], "--record", *out],
-    ]
 
 
 # ---- the count ---------------------------------------------------------------------------
@@ -1325,7 +999,7 @@ class Wizard:
     def save_examples(self, root: Path, wait: bool = False) -> None:
         """Save every counted crossing (and some moments with nobody crossing) as frames
         plus a description, for measuring and retraining the automatic counter."""
-        from .examples import export_examples
+        from ..examples import export_examples
 
         with self._lock:
             self.state["examples"] = {"status": "saving", "dir": str(root), "started_at": _now()}
