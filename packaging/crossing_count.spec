@@ -2,7 +2,7 @@
 # PyInstaller recipe for the Crossing Count program (one folder, then wrapped by
 # installer.iss on Windows). Build from the project folder:
 #     uv run --group build pyinstaller packaging/crossing_count.spec --noconfirm
-# models/ must hold the weights (yolo11s.pt, yolo11m.pt) before building.
+# models/ must hold the weights (yolo26m.pt, yolo26s.pt, yolo11m.pt, yolo11s.pt) first.
 import re
 import sys
 from pathlib import Path

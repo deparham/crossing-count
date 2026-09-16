@@ -124,7 +124,7 @@ From the installed packages' own metadata (direct dependencies and notable other
 
 | Package | Version | Licence | Note |
 |---|---|---|---|
-| ultralytics | 8.4.149 | AGPL-3.0 | Also the weights (yolo11s/m). Distributing a closed app needs Ultralytics' commercial licence. Open item. |
+| ultralytics | 8.4.149 | AGPL-3.0 | Also the weights (yolo26m/s, yolo11m/s). Distributing a closed app needs Ultralytics' commercial licence. Open item; RF-DETR (Apache-2.0) is the way out if it ever matches on the gold set. |
 | ultralytics-thop | 2.1.6 | AGPL-3.0 | Pulled in by Ultralytics |
 | torch | 2.14.0 | BSD-3 / Apache-2.0 (mixed, permissive) | |
 | torchvision | 0.29.0 | BSD | |

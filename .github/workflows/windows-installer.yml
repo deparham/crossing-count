@@ -40,14 +40,19 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force models | Out-Null
+          # each file with its checksum and the release it comes from: YOLO26's weights are
+          # in a later release than YOLO11's
           $weights = @{
-            "yolo11s.pt" = "85a76fe86dd8afe384648546b56a7a78580c7cb7b404fc595f97969322d502d5"
-            "yolo11m.pt" = "d5ffc1a674953a08e11a8d21e022781b1b23a19b730afc309290bd9fb5305b95"
+            "yolo26m.pt" = @{ sha = "401cea9ab23ad19246ff7744859816bc599f350e93c9dd30367b6f0a0745d0b7"; tag = "v8.4.0" }
+            "yolo26s.pt" = @{ sha = "646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b"; tag = "v8.4.0" }
+            "yolo11s.pt" = @{ sha = "85a76fe86dd8afe384648546b56a7a78580c7cb7b404fc595f97969322d502d5"; tag = "v8.3.0" }
+            "yolo11m.pt" = @{ sha = "d5ffc1a674953a08e11a8d21e022781b1b23a19b730afc309290bd9fb5305b95"; tag = "v8.3.0" }
           }
           foreach ($name in $weights.Keys) {
-            Invoke-WebRequest "https://github.com/ultralytics/assets/releases/download/v8.3.0/$name" -OutFile "models/$name"
+            $want = $weights[$name]
+            Invoke-WebRequest "https://github.com/ultralytics/assets/releases/download/$($want.tag)/$name" -OutFile "models/$name"
             $hash = (Get-FileHash "models/$name" -Algorithm SHA256).Hash.ToLower()
-            if ($hash -ne $weights[$name]) { throw "$name has checksum $hash, expected $($weights[$name])" }
+            if ($hash -ne $want.sha) { throw "$name has checksum $hash, expected $($want.sha)" }
           }
 
       - name: Build number, and what is built in

@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="which detector finds the people (rfdetr: uv sync --group detectors).\n"
                          "Its results go to <camera>/<detector>-<mode>/, so detectors can be "
                          "compared on the same clip")
-    ap.add_argument("--model", default="yolo11s.pt", help="weights file in models/")
+    ap.add_argument("--model", default="yolo26m.pt", help="weights file in models/")
     ap.add_argument("--rfdetr-weights", default="rf-detr-large-2026.pth",
                     help="RF-DETR Large weights file in models/")
     ap.add_argument("--device", help="torch device (default: mps if available, else cpu)")

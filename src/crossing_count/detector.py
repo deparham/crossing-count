@@ -163,7 +163,7 @@ class YoloBackbone:
 
     kind = "yolo"
 
-    def __init__(self, model: str = "yolo11s.pt", device: str | None = None) -> None:
+    def __init__(self, model: str = "yolo26m.pt", device: str | None = None) -> None:
         self.model_name = model
         self.path = weights_path(model)
         self.device = pick_device(device)

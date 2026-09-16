@@ -736,7 +736,7 @@ detector runs: a detector is only "pictures in, boxes and scores out"
 
 | `--detector` | What it is | Licence |
 |---|---|---|
-| `yolo` (default) | Ultralytics YOLO11, `models/yolo11s.pt` | AGPL-3.0 |
+| `yolo` (default) | Ultralytics YOLO26, `models/yolo26m.pt` | AGPL-3.0 |
 | `rfdetr` | RF-DETR Large, 704×704, `models/rf-detr-large-2026.pth` | Apache-2.0 |
 
 RF-DETR is an optional dependency group, so it never enters the app's bundle
@@ -771,7 +771,9 @@ Tracks have no long-term identity. A track that dies and is followed within
 Weights live in `models/` and are never downloaded at run time. One-time setup:
 
 ```bash
-mkdir -p models && curl -L -o models/yolo11s.pt https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s.pt
+mkdir -p models
+curl -L -o models/yolo26m.pt https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26m.pt
+curl -L -o models/yolo11m.pt https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11m.pt
 ```
 
 Ultralytics is forced offline and its usage analytics are switched off. Its

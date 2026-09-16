@@ -88,7 +88,7 @@ MISS_KIND = "broken_track_at_line"
 @dataclass(frozen=True)
 class DetectOptions:
     mode: str = "derotated"  # or "naive"
-    model: str = "yolo11s.pt"
+    model: str = "yolo26m.pt"
     device: str | None = None
     det_fps: float = 10.0
     batch_frames: int = 4

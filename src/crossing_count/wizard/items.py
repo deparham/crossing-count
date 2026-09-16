@@ -22,7 +22,12 @@ VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv", ".avi")
 DIRECTIONS = ("in", "out")
 CHOICES = {"in": ["in"], "out": ["out"], "both": ["in", "out"]}
 LABELS = {"in": "Traffic In", "out": "Traffic Out"}
-MODELS = ("yolo11m.pt", "yolo11s.pt")
+# The detector's weights, best first: the wizard's default is MODELS[0]. YOLO26 sees more
+# people per frame than YOLO11 at the same speed on this footage (16 Sep 2026, CN-123
+# 11:30, two cameras); whether that counts better is not known until a clip is counted by
+# hand, and every result records which weights produced it.
+MODELS = ("yolo26m.pt", "yolo26s.pt", "yolo11m.pt", "yolo11s.pt")
+SMALL_MODELS = ("yolo26s.pt", "yolo11s.pt")  # faster, and they miss more people
 TWIN_WINDOW_S = 2.0  # same direction this close on another camera: maybe one person seen twice
 # Rule rejections offered to the checker. Measured on checked clips (11:30 CN-123, YD-612):
 # "never touched the filter zone" and "out and back on one track" were real about half the

@@ -54,6 +54,7 @@ from .items import (
     MIN_WATCHED_PCT,
     MODELS,
     RULE_CHOICES,
+    SMALL_MODELS,
     TWIN_WINDOW_S,
     _found,
     accuracy_range,
@@ -1152,7 +1153,7 @@ class Wizard:
         if stats.get("processing_s"):
             text += (f", in {_dur(stats['processing_s'])} for {_dur(stats['video_s'])} of "
                      f"footage ({stats['realtime_x']:g}× real time)")
-        if "yolo11s" in str(model):
+        if str(model) in SMALL_MODELS:
             text += ". This fast detector merges more people walking together"
         return text + "."
 
