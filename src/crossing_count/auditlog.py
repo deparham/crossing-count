@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import paths
+from . import network, paths
 
 FILE = "audit.jsonl"
 GENESIS = "0" * 64
@@ -73,6 +73,8 @@ def append(action: str, *, user: str = "", obj: dict[str, Any] | None = None,
             "seq": seq + 1, "at": datetime.now().astimezone().isoformat(timespec="milliseconds"),
             "user": user, "login": _login(), "action": action, "object": obj,
             "before": before, "after": after, "reason": reason, "info": info or None, "prev": prev}
+        if (client := network.CLIENT.get()) is not None:  # done by someone on the network
+            entry["from"] = client
         entry["hash"] = _digest(entry)
         with open(p, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")

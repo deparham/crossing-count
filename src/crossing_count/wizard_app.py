@@ -1,4 +1,5 @@
-"""Local count-wizard page. Served from 127.0.0.1 only; the video never leaves this Mac.
+"""Local count-wizard page. Served from 127.0.0.1; with sharing switched on, also to people
+on this network with the access code (network.py), each on their own validation.
 
 The drawing step is the setup page itself, mounted at /draw/<id>/ for the chosen
 video and shown in a frame.
@@ -29,6 +30,7 @@ from . import (
     engagement,
     gold,
     independence,
+    network,
     paths,
     releases,
     runs,
@@ -41,10 +43,23 @@ from . import overlay as ov
 from . import retailnext as rn
 from .examples import check_folder
 from .localweb import WEB_DIR, local_only, video_range
+from .util import default_run_dir
 from .webapp import Setup, create_app
 from .wizard import Wizard, WizardError, default_folders, list_videos
 
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+LOCK_IDLE_S = 15 * 60  # footage left this long (and not counting) can be opened by someone else
+# What stays with the computer running CrossingCount, whoever asks over the network: its
+# RetailNext keys, updates, settings, quitting, its own screen (Finder), and the shared
+# records' irreversible steps. tests/test_network.py checks each is a real route.
+HOST_ONLY = frozenset({
+    ("POST", "/api/retailnext/connect"), ("POST", "/api/retailnext/reconnect"),
+    ("POST", "/api/retailnext/forget"), ("POST", "/api/share/brands"),
+    ("POST", "/api/share/token"), ("POST", "/api/update"), ("POST", "/api/update/token"),
+    ("POST", "/api/quit"), ("POST", "/api/settings"), ("POST", "/api/reveal"),
+    ("POST", "/api/runs/reveal"), ("POST", "/api/audit/marks/reclassify"),
+    ("POST", "/api/gold/freeze"), ("POST", "/api/network"),
+})
 
 
 class OpenIn(BaseModel):
@@ -254,41 +269,112 @@ class SettingsIn(BaseModel):
     examples_dir: str
 
 
+class NetworkIn(BaseModel):
+    on: bool
+
+
 @dataclass
 class _Current:
+    """One person's work (this computer's, or someone's on the network), and, in one shared
+    copy, what belongs to everyone (store lists, the update, gold scoring)."""
+
     wizard: Wizard | None = None
     setup: Setup | None = None
     draw: str | None = None
+    calibrate: str | None = None  # where this person's calibration drawing page is mounted
     rn_nodes: dict[str, list[dict[str, Any]]] | None = None  # per subscription, fetched once
     rn_job: dict[str, Any] | None = None  # the footage being exported and downloaded
     rn_plan: dict[str, Any] | None = None  # the windows last found: a download records its own
     update_job: dict[str, Any] | None = None  # the installed app downloading its new version
     gold_job: dict[str, Any] | None = None  # the automatic count being scored on gold clips
+    address: str | None = None  # on the network; None on this computer
+    operator: str | None = None  # the name typed by someone on the network
+    last_seen: float = 0.0
+
+    def who(self) -> str:
+        name = self.operator or (self.wizard.state["store"].get("operator")
+                                 if self.wizard is not None else None)
+        where = "this computer" if self.address is None else self.address
+        return f"{name} ({where})" if name else f"someone at {where}"
 
 
 def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = None,
                       folders: list[Path] | None = None, logo: Path | None = None,
-                      commands: Callable[[Wizard], list[list[str]]] | None = None) -> FastAPI:
+                      commands: Callable[[Wizard], list[list[str]]] | None = None,
+                      network_port: int = network.NETWORK_PORT) -> FastAPI:
     sites = sites_dir or paths.sites_dir()
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-    local_only(app)  # only its own pages, on this computer (localweb.py)
-    cur = _Current()
+    sharing = network.Sharing(app, network_port)
+    app.state.sharing = sharing  # the launcher switches it on at start when asked
+    # only its own pages, on this computer; with sharing on, people with the access code
+    local_only(app, sharing, HOST_ONLY)
+    glob = _Current()  # everyone's: RetailNext's store lists, the update, gold scoring
+    sessions: dict[str, _Current] = {}  # each person's own: "local" is this computer
+    lock = threading.Lock()  # the sessions, and the pages mounted for them
+
+    def me() -> _Current:
+        """The validation this request works on: its person's own."""
+        with lock:
+            mine = sessions.setdefault(network.SESSION.get(), _Current())
+            mine.address, mine.last_seen = network.CLIENT.get(), time.time()
+            return mine
+
+    def remote() -> bool:
+        return network.CLIENT.get() is not None
+
+    def unmount(where: str | None) -> None:
+        if where:
+            app.router.routes[:] = [r for r in app.router.routes
+                                    if not (isinstance(r, Mount) and r.path == where.rstrip("/"))]
+
+    def drop(person: _Current) -> None:
+        """Close a person's footage (it is saved as it goes): someone else may open it."""
+        unmount(person.draw)
+        unmount(person.calibrate)
+        person.wizard = person.setup = None
+        person.draw = person.calibrate = None
+
+    def holder(path: Path, mine: _Current) -> str | None:
+        """Who else has this footage's validation open and is still at it (or counting). A
+        validation lives in a folder named after the video, wherever the file is (Wizard)."""
+        target = ((runs_root or paths.data_root()) / default_run_dir(path, None)).resolve()
+        with lock:
+            for other in sessions.values():
+                if (other is mine or other.wizard is None
+                        or other.wizard.run_dir.resolve() != target):
+                    continue
+                if (other.wizard.job_status()["status"] == "running"
+                        or time.time() - other.last_seen < LOCK_IDLE_S):
+                    return other.who()
+                drop(other)
+        return None
+
+    def footage_roots() -> list[Path]:
+        """Where people on the network may pick footage: the footage folders, and downloads."""
+        return [*(folders or default_folders()), paths.data_root() / "footage"]
+
+    def operator_name() -> str:
+        if remote():
+            return me().operator or ""
+        return str(paths.load_settings().get("operator") or "")
     from .heads_app import create_label_app  # the head-marking page, at /label/
 
     app.mount("/label", create_label_app(folders=folders, runs_root=runs_root))
 
     def wiz() -> Wizard:
-        if cur.wizard is None:
+        mine = me()
+        if mine.wizard is None:
             raise HTTPException(409, "Choose the footage first.")
-        return cur.wizard
+        return mine.wizard
 
     def setup() -> Setup:
-        if cur.setup is None:
+        mine = me()
+        if mine.setup is None:
             raise HTTPException(409, "Choose the footage first.")
-        return cur.setup
+        return mine.setup
 
     def public() -> dict[str, Any]:
-        return {**wiz().public(), "draw_url": cur.draw,
+        return {**wiz().public(), "draw_url": me().draw, "on_host": not remote(),
                 "retailnext": bool(rn.subscriptions()),
                 "logo": str(logo) if logo is not None and logo.is_file() else None,
                 "pictures": [t.as_dict() for t in setup().tiles]}
@@ -307,19 +393,31 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     @app.get("/api/videos")
     def videos(folder: str | None = None) -> dict[str, Any]:
         where = [Path(folder).expanduser()] if folder else (folders or default_folders())
+        if remote() and not all(network.within(f, footage_roots()) for f in where):
+            raise HTTPException(403, "On the network, footage comes from the footage folders of "
+                                     "the computer running CrossingCount.")
         return {"folders": [str(f) for f in where], "videos": list_videos(where)}
 
     @app.post("/api/open")
     def open_video(o: OpenIn) -> dict[str, Any]:
         path = Path(o.path).expanduser()
+        if remote() and not network.within(path, footage_roots()):
+            raise HTTPException(403, "On the network, footage comes from the footage folders of "
+                                     "the computer running CrossingCount.")
         if not path.is_file():
             raise HTTPException(400, f"There is no file at {path}")
+        mine = me()
+        if (someone := holder(path, mine)) is not None:
+            raise HTTPException(409, f"{path.name} is open for {someone}. Two people cannot work "
+                                     f"on the same footage at once: it can be opened here once "
+                                     f"they open other footage, or after "
+                                     f"{LOCK_IDLE_S // 60} minutes without using it.")
         try:
             w = Wizard(path, sites, runs_root, commands)
             s = Setup(w.video, sites)
         except (WizardError, ValueError, OSError, FFmpegError) as exc:
             raise HTTPException(400, f"Could not open {path.name}: {exc}") from exc
-        name = paths.load_settings().get("operator")
+        name = operator_name()
         final = w.state.get("final")  # a finalised validation opens as it was kept
         if name and not w.state["store"].get("operator") and not final:
             w.set_store(operator=str(name))
@@ -327,10 +425,10 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
             w.note_marks_detected(s.marks())
         notes = [] if final else identify_download(w, s, path) + w.tidy_on_open(len(s.tiles))
         draw = f"/draw/{uuid.uuid4().hex[:10]}"
-        app.router.routes[:] = [r for r in app.router.routes
-                                if not (isinstance(r, Mount) and r.path.startswith("/draw/"))]
-        app.mount(draw, create_app(w.video, sites, setup=s))
-        cur.wizard, cur.setup, cur.draw = w, s, draw + "/"
+        with lock:
+            unmount(mine.draw)
+            app.mount(draw, create_app(w.video, sites, setup=s))
+            mine.wizard, mine.setup, mine.draw = w, s, draw + "/"
         return {**public(), "notes": notes}
 
     def identify_download(w: Wizard, s: Setup, path: Path) -> list[str]:
@@ -353,7 +451,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     def state() -> dict[str, Any]:
         return public()
 
-    cur.rn_nodes = {}
+    glob.rn_nodes = {}
 
     def rn_connections() -> dict[str, rn.Connection]:
         conns = {c.subscription: c for c in rn.connections()}
@@ -364,10 +462,10 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         return conns
 
     def rn_locations(conn: rn.Connection) -> list[dict[str, Any]]:
-        nodes = cur.rn_nodes if cur.rn_nodes is not None else {}
+        nodes = glob.rn_nodes if glob.rn_nodes is not None else {}
         if conn.subscription not in nodes:
             nodes[conn.subscription] = rn.locations(conn)
-        cur.rn_nodes = nodes
+        glob.rn_nodes = nodes
         return nodes[conn.subscription]
 
     def rn_store(code: str) -> tuple[rn.Connection, list[dict[str, Any]], dict[str, Any]]:
@@ -401,8 +499,8 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
             conn = rn.connect(c.subscription, c.access_key, c.secret_key)
         except rn.RetailNextError as exc:
             raise HTTPException(400, str(exc)) from exc
-        if cur.rn_nodes is not None:
-            cur.rn_nodes.pop(conn.subscription, None)  # a new key may see other stores
+        if glob.rn_nodes is not None:
+            glob.rn_nodes.pop(conn.subscription, None)  # a new key may see other stores
         return {"subscription": conn.subscription, **rn_lists()}
 
     @app.post("/api/retailnext/reconnect")
@@ -426,8 +524,8 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
             raise HTTPException(400, f"{sub} is built into this app, so it cannot be removed "
                                      f"here.")
         rn.forget_connection(sub)
-        if cur.rn_nodes is not None:
-            cur.rn_nodes.pop(sub, None)
+        if glob.rn_nodes is not None:
+            glob.rn_nodes.pop(sub, None)
         return rn_lists()
 
     @app.post("/api/share/brands")
@@ -458,16 +556,20 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     @app.post("/api/update")
     def update_apply() -> dict[str, Any]:
         """Take the newer version and start again on it. Not while work is running."""
-        if cur.wizard is not None and cur.wizard.job_status()["status"] == "running":
+        with lock:
+            everyone = list(sessions.values())
+        if any(p.wizard is not None and p.wizard.job_status()["status"] == "running"
+               for p in everyone):
             raise HTTPException(409, "A count is running: let it finish (or stop it) first.")
-        if cur.rn_job and cur.rn_job.get("state") in ("exporting", "downloading"):
+        if any(p.rn_job and p.rn_job.get("state") in ("exporting", "downloading")
+               for p in everyone):
             raise HTTPException(409, "Footage is downloading: let it finish first.")
         if paths.FROZEN:  # download and install in the background; the page follows the job
-            if not (cur.update_job and cur.update_job.get("state") in
+            if not (glob.update_job and glob.update_job.get("state") in
                     ("downloading", "installing", "restarting")):
                 job: dict[str, Any] = {"state": "downloading", "done": 0, "total": None,
                                        "message": ""}
-                cur.update_job = job
+                glob.update_job = job
                 threading.Thread(target=releases.run_update,
                                  args=(job, lambda: threading.Timer(1.5, _stop_server).start()),
                                  daemon=True).start()
@@ -481,7 +583,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     @app.get("/api/update/job")
     def update_job() -> dict[str, Any]:
-        return dict(cur.update_job or {})
+        return dict(glob.update_job or {})
 
     @app.post("/api/update/token")
     def update_token(t: TokenIn) -> dict[str, Any]:
@@ -535,7 +637,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                                  seed=b.seed, day=day.isoformat())
         except (rn.RetailNextError, sampling.SamplingError) as exc:
             raise HTTPException(400, str(exc)) from exc
-        cur.rn_plan = {**plan, "request": [_bare(b.code), b.date]}
+        me().rn_plan = {**plan, "request": [_bare(b.code), b.date]}
         return {"store": store.get("name"), "code": store.get("store_id"),
                 "subscription": conn.subscription, "time_zone": store.get("time_zone"),
                 "windows": plan["chosen"], "considered": len(plan["candidates"]),
@@ -545,7 +647,8 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     def retailnext_download(b: DownloadIn) -> dict[str, Any]:
         """Export the store's cameras for that window from RetailNext and download the video
         (in the background: GET this to follow it)."""
-        if cur.rn_job and cur.rn_job.get("state") in ("exporting", "downloading"):
+        mine = me()
+        if mine.rn_job and mine.rn_job.get("state") in ("exporting", "downloading"):
             raise HTTPException(409, "A download is already under way.")
         day = rn_day(b.date)
         try:
@@ -568,8 +671,8 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                                                     start, end, b.marks))
         job: dict[str, Any] = {"state": "exporting", "message": "RetailNext is preparing the video…",
                                "done": 0, "total": None, "path": None, "cameras": sorted(channels)}
-        cur.rn_job = job
-        plan = (cur.rn_plan if cur.rn_plan and cur.rn_plan["request"] == [_bare(b.code), b.date]
+        mine.rn_job = job
+        plan = (mine.rn_plan if mine.rn_plan and mine.rn_plan["request"] == [_bare(b.code), b.date]
                 else None)
         chosen_by = sampling.record(plan, b.start, b.until) if plan else None
 
@@ -607,7 +710,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     @app.get("/api/retailnext/download")
     def retailnext_download_status() -> dict[str, Any]:
-        return cur.rn_job or {"state": "idle"}
+        return me().rn_job or {"state": "idle"}
 
     @app.post("/api/retailnext/fetch")
     def retailnext_fetch() -> dict[str, Any]:
@@ -729,6 +832,36 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     def hand_done(d: DoneIn) -> dict[str, Any]:
         return hand_run(lambda: wiz().manual_done(d.done))
 
+    @app.get("/api/network")
+    def network_status() -> dict[str, Any]:
+        """Sharing on this network: the address and code (on this computer only), and who is
+        using it now."""
+        if remote():
+            return {"on_host": False, "on": True}
+        with lock:
+            people = [{"who": p.who(), "footage": p.wizard.video.name if p.wizard else None,
+                       "counting": bool(p.wizard and p.wizard.job_status()["status"] == "running"),
+                       "idle_s": round(time.time() - p.last_seen)}
+                      for p in sessions.values() if p.address is not None]
+        return {"on_host": True, **sharing.status(), "people": people}
+
+    @app.post("/api/network")
+    def network_switch(n: NetworkIn) -> dict[str, Any]:
+        """Let people on this network use CrossingCount, or stop. Stopping keeps their work
+        (saved as it went) and lets a count already running finish."""
+        if n.on and not sharing.start():
+            raise HTTPException(400, sharing.error or "Could not start sharing.")
+        if not n.on:
+            sharing.stop()
+            with lock:
+                for sid in [k for k, p in sessions.items() if p.address is not None]:
+                    person = sessions[sid]
+                    if not (person.wizard and person.wizard.job_status()["status"] == "running"):
+                        drop(person)
+                        del sessions[sid]
+        paths.save_settings({"network": n.on})
+        return network_status()
+
     @app.get("/api/settings")
     def get_settings() -> dict[str, Any]:
         return {"examples_dir": paths.load_settings().get("examples_dir", "")}
@@ -765,13 +898,13 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         from datetime import datetime as dt
         from datetime import timedelta as td
 
-        w, s = wiz(), setup()
+        w, s, mine = wiz(), setup(), me()
         info = dict(w.state.get("retailnext") or {})
         if not (info.get("start") and info.get("end") and info.get("subscription")
                 and info.get("code")):
             raise HTTPException(400, "Calibrating needs footage downloaded from RetailNext here: "
                                      "its store and period have to be known.")
-        if cur.rn_job and cur.rn_job.get("state") in ("exporting", "downloading"):
+        if mine.rn_job and mine.rn_job.get("state") in ("exporting", "downloading"):
             raise HTTPException(409, "A download is already under way.")
         try:
             conn, nodes, store = rn_store(f"{info['subscription']}/{info['code']}")
@@ -789,7 +922,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         job: dict[str, Any] = {
             "state": "exporting", "done": 0, "total": None, "path": None, "draw_url": None,
             "message": "RetailNext is preparing a minute of it with its marks…"}
-        cur.rn_job = job
+        mine.rn_job = job
 
         def work() -> None:
             try:
@@ -814,9 +947,10 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                 cal = Setup(dest, sites)
                 cal.store, cal.names = s.store, s.names
                 where = f"/calibrate/{uuid.uuid4().hex[:10]}"
-                app.router.routes[:] = [r for r in app.router.routes if not (
-                    isinstance(r, Mount) and r.path.startswith("/calibrate/"))]
-                app.mount(where, create_app(dest, sites, setup=cal))
+                with lock:
+                    unmount(mine.calibrate)
+                    app.mount(where, create_app(dest, sites, setup=cal))
+                    mine.calibrate = where + "/"
                 job.update(state="done", message="Ready to draw.", path=str(dest),
                            draw_url=where + "/")
             except (rn.RetailNextError, FFmpegError, OSError, ValueError) as exc:
@@ -827,7 +961,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     @app.get("/api/calibrate")
     def calibrate_status() -> dict[str, Any]:
-        return cur.rn_job or {"state": "idle"}
+        return me().rn_job or {"state": "idle"}
 
     @app.post("/api/audit/marks")
     def audit_marks() -> dict[str, Any]:
@@ -838,7 +972,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     def audit_marks_reclassify() -> dict[str, Any]:
         """Keep those results out of every comparison with the system, with the reason."""
         found = independence.audit(data())
-        independence.reclassify(data(), found, str(paths.load_settings().get("operator") or ""))
+        independence.reclassify(data(), found, operator_name())
         return {"reclassified": found}
 
     @app.post("/api/direction")
@@ -908,7 +1042,10 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     @app.post("/api/store")
     def store(s: StoreIn) -> dict[str, Any]:
         if s.operator and s.operator.strip():  # the checker's name, for the next video too
-            paths.save_settings({"operator": s.operator.strip()})
+            if remote():  # someone on the network: theirs, not this computer's setting
+                me().operator = s.operator.strip()
+            else:
+                paths.save_settings({"operator": s.operator.strip()})
         return run(lambda: wiz().set_store(s.name, s.code, s.location, s.report_date,
                                            s.operator))
 
@@ -1035,7 +1172,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     def engagement_keep(e: EngagementIn) -> dict[str, Any]:
         """Keep the engagement under its own ID, read-only."""
         try:
-            return engagement.write(data(), e.ids, str(paths.load_settings().get("operator") or ""))
+            return engagement.write(data(), e.ids, operator_name())
         except engagement.EngagementError as exc:
             raise HTTPException(400, str(exc)) from exc
 
@@ -1084,10 +1221,10 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         """Score the automatic count on gold clips, in the background (replays take a while)."""
         if s.which not in ("development", "test"):
             raise HTTPException(400, "Score the development set or the test set.")
-        if cur.gold_job and cur.gold_job.get("state") == "running":
+        if glob.gold_job and glob.gold_job.get("state") == "running":
             raise HTTPException(409, "Already scoring: wait for it to finish.")
         job: dict[str, Any] = {"state": "running", "which": s.which}
-        cur.gold_job = job
+        glob.gold_job = job
 
         def work() -> None:
             try:
@@ -1100,7 +1237,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     @app.get("/api/gold/score")
     def gold_score_status() -> dict[str, Any]:
-        return dict(cur.gold_job or {})
+        return dict(glob.gold_job or {})
 
     @app.get("/api/gold/experiment")
     def gold_experiment(id: str) -> dict[str, Any]:

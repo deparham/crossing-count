@@ -22,9 +22,13 @@ shared outside the company.
 > Either one means the whole combined work must be offered under AGPL-3.0, source included,
 > or Ultralytics' commercial licence must be bought first. There is no middle setting.
 
-The app binds to `127.0.0.1` for exactly this reason, and refuses requests that are not
-addressed to this computer (`localweb.py`). Changing that bind address is not a
-configuration choice; it is a licensing decision as well as a security one.
+The app binds to `127.0.0.1` by default for exactly this reason, and refuses requests that
+are not addressed to this computer (`localweb.py`). **Sharing on this network**
+(`network.py`) lets other computers use it with an access code. Used by colleagues of the
+same company on its own network, that is still use inside the company. Whether that is
+enough under AGPL section 13, which speaks of *users interacting with it remotely*, is a
+question for a lawyer before relying on it. Giving the code to anyone outside the company
+(a customer, a contractor on their own account) is item 2 above.
 
 **The way out**, if it is ever needed, is RF-DETR (Apache-2.0), already built in behind
 `--detector rfdetr`: if it ever matches YOLO on the gold set, switching detector and

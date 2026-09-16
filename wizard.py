@@ -3,7 +3,9 @@
 
     uv run wizard.py [--port 8780]
 
-Opens a page served from this computer only (127.0.0.1). It asks for the footage,
+Opens a page served from this computer only (127.0.0.1); with --network (or sharing
+switched on in the app), people on this network can use it too, with an access code
+(crossing_count/network.py). It asks for the footage,
 lets you draw each camera, asks Traffic In or Out and RetailNext's number,
 counts automatically while showing what it is doing, then plays each crossing
 it found for a quick yes/no before writing the report. The logo comes from
@@ -23,6 +25,7 @@ import uvicorn
 
 from crossing_count import paths, window
 from crossing_count.app import PORT, serving
+from crossing_count.network import NETWORK_PORT
 from crossing_count.wizard_app import create_wizard_app
 
 
@@ -45,6 +48,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="open it in the browser instead of its own window")
     ap.add_argument("--no-browser", action="store_true",
                     help="only the server: no window and no browser tab")
+    ap.add_argument("--network", action="store_true",
+                    help="also let people on this network use it, each on their own validation,\n"
+                         "with the access code shown on the page (it stays on until switched off)")
+    ap.add_argument("--network-port", type=int, default=NETWORK_PORT,
+                    help=f"port for the network (default {NETWORK_PORT})")
     args = ap.parse_args(argv)
     paths.prepare_data_root()
     url = f"http://127.0.0.1:{args.port}/"
@@ -62,8 +70,17 @@ def main(argv: list[str] | None = None) -> int:
           f"Your data: {paths.data_root()}\n"
           f"Quit on the page, or close its window, to stop it.", flush=True)
     app = create_wizard_app(args.sites or paths.sites_dir(), args.runs_root or paths.data_root(),
-                            logo=args.logo or paths.logo_path())
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning"))
+                            logo=args.logo or paths.logo_path(), network_port=args.network_port)
+    if args.network or paths.load_settings().get("network"):  # on until switched off on the page
+        sharing = app.state.sharing
+        if sharing.start():
+            paths.save_settings({"network": True})
+            print(f"Shared on this network: {', '.join(sharing.urls)}\n"
+                  f"Access code: {sharing.access.code}", flush=True)
+        else:
+            print(f"Not shared on this network: {sharing.error}", flush=True)
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port,
+                                           log_level="warning"))
     if show == "window":
         return window.run(server, url)
     if show == "browser":

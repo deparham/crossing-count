@@ -7,8 +7,11 @@ CCTV footage shows identifiable people. Everything here follows from that.
 Video is opened from the computer it is already on, or downloaded from the retailer's own
 RetailNext account to it. It is never uploaded, never sent to a model service, never shared
 with the makers of any library used here. The app's pages are served to this computer only
-(see [SECURITY.md](SECURITY.md)). The only things that leave are data queries to RetailNext:
-store, camera and time. No frame, count or report is ever sent anywhere by the software.
+(see [SECURITY.md](SECURITY.md)), unless someone at it switches on **sharing on this
+network**. Then people on the same network who have the access code see the footage, frames
+and reports in their own browser, and can download reports to their own computer. Nothing
+goes beyond that network. The only things that leave are data queries to RetailNext: store,
+camera and time. No frame, count or report is ever sent anywhere by the software.
 
 ## 2. What is kept, and where
 

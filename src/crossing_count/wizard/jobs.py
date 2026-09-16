@@ -41,7 +41,7 @@ class Progress:
     """What gate.py and detect.py are doing, read from their output."""
 
     cameras: int = 1
-    stage: str = "starting"  # starting, gate, detect, done
+    stage: str = "starting"  # starting, queued, gate, detect, done
     camera: str = ""
     seen: list[str] = field(default_factory=list)
     stage_pct: float = 0.0
@@ -88,8 +88,14 @@ class Progress:
         del self.log[:-300]
 
 
+# One count at a time on this computer, whoever started it (network.py): two at once would
+# each take twice as long, and run the computer out of memory with the larger detectors.
+_ONE_AT_A_TIME = threading.Lock()
+
+
 class _Job:
-    """Runs the commands one after another in a thread, feeding their output to Progress."""
+    """Runs the commands one after another in a thread, feeding their output to Progress.
+    It waits, saying so, while another count runs on this computer."""
 
     def __init__(self, commands: list[list[str]], progress: Progress,
                  finish: Callable[[str, str | None, list[str]], None]) -> None:
@@ -103,6 +109,20 @@ class _Job:
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self) -> None:
+        while not _ONE_AT_A_TIME.acquire(timeout=0.25):
+            if self.stopped:
+                self.running = False
+                self._finish("stopped", None, self.progress.log[-40:])
+                return
+            self.progress.stage = "queued"
+            self.progress.message = ("Waiting: another count is running on this computer. "
+                                     "This one starts when it finishes.")
+        try:
+            self._commands()
+        finally:
+            _ONE_AT_A_TIME.release()
+
+    def _commands(self) -> None:
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}
         status: str = "done"
         error: str | None = None

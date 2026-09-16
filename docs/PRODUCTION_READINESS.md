@@ -67,11 +67,11 @@ counted by hand, which costs annotation hours, not programming.
 
 | Item | Status | Evidence | Remaining |
 |---|---|---|---|
-| Lint, types and tests on every change | **Done** | `.github/workflows/checks.yml`; 273 tests | — |
+| Lint, types and tests on every change | **Done** | `.github/workflows/checks.yml`; 280 tests | — |
 | Dependencies checked for known vulnerabilities | **Done** | `pip-audit` job; none found on 16 Sep 2026 across 307 packages | — |
 | One formatting standard, enforced | **Not started** | `ruff format --check` would rewrite 87 of 108 files | A one-off reformat commit, then add the check |
 | Signed installers | **Partly** | Signing wired into the Windows build; publisher metadata; SHA-256 in release notes; `docs/INSTALL_WINDOWS.md` | Needs a certificate (about US$10 a month for Azure Trusted Signing); until then both systems warn |
-| Local-only by construction | **Done** | `localweb.py` Host/Origin guard; `tests/test_localweb.py` | An uncommitted change to `wizard.py` binds to `0.0.0.0`; it must not be committed (see `docs/SECURITY.md`) |
+| Local by default; shared on the network only when switched on | **Done** | `localweb.py` Host/Origin guard; `network.py` (a second listener, an access code with lock-out, `HttpOnly`/`SameSite=Strict` cookie); `wizard_app.HOST_ONLY`; a validation per person; counts one at a time; `tests/test_localweb.py`, `tests/test_network.py`; tried by hand on a Mac from a second tab on its network address | Plain HTTP: share only on the company's own network. Whether colleagues using it over the network is within AGPL internal use needs a lawyer (`docs/LICENSING.md`) |
 | Licensing understood and written down | **Done** | `LICENSE`, `NOTICE`, `docs/LICENSING.md` with every dependency | A lawyer should confirm the AGPL position before any build leaves the company |
 | Security and privacy written down | **Done** | `docs/SECURITY.md`, `docs/PRIVACY.md` | — |
 | Deleting footage-derived data on a schedule | **Not started** | Everything is kept until someone deletes it (`docs/PRIVACY.md` section 4) | The largest privacy gap: automatic deletion of old runs, frames and examples, keeping the verified record |

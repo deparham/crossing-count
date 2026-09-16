@@ -197,6 +197,37 @@ the time and the checker's name (asked once, then remembered). Running a
 checked count again asks first: the check starts afresh, and the old one, with
 a copy of its report, is kept in `runs/<video>/wizard/history/`.
 
+### Sharing on this network
+
+**Share on this network** (in the header) lets colleagues on the same network use
+CrossingCount from their own browser, without installing it. Tick the box and the
+panel shows two addresses (this computer's name, such as
+`http://Front-Desk-Mac.local:8781/`, and its network address) and an access code. **Copy
+link** gives an address with the code in it. From the command line:
+
+```bash
+uv run wizard.py --network
+```
+
+- **Separate work.** Everyone works on their own validation. Two people cannot open the
+  same footage at once; it can be taken over once it has been left for 15 minutes, never
+  while it is counting.
+- **Counts queue.** Counts run on this computer one at a time, and a waiting one says so.
+- **Kept on this computer:** RetailNext keys, updates, settings, the examples folder,
+  quitting and "Show the file". People on the network pick footage from its footage
+  folders only. They can use its connected RetailNext brands, and so can download footage
+  from those stores.
+- **Who is on it.** The panel lists everyone using it now, with the footage they have open.
+- **Switching off.** It stays on across restarts until switched off. Switching off shuts
+  everyone else out at once; their work is saved, and a count already running finishes.
+- **The code** is new each time sharing starts.
+
+The first time, the computer may ask whether CrossingCount may accept incoming
+connections: allow it. Share only on the company's own network. The connection is plain
+HTTP, and everyone with the code sees the footage and reports (see
+[docs/SECURITY.md](docs/SECURITY.md), and [docs/LICENSING.md](docs/LICENSING.md) on
+Ultralytics' AGPL).
+
 ## Training a head detector (`label.py`, `train_heads.py`)
 
 The current detector learned from side-on photos, so from overhead it loses

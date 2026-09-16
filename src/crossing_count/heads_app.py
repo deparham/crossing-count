@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
+from . import network, paths
 from .heads import HeadLabels, LabelError, add_video
 from .localweb import WEB_DIR
 from .wizard import default_folders, list_videos
@@ -68,6 +69,10 @@ def create_label_app(root: Path | None = None, folders: list[Path] | None = None
     @app.post("/api/add")
     def add(a: AddIn) -> dict[str, Any]:
         path = Path(a.path).expanduser()
+        if network.CLIENT.get() is not None and not network.within(
+                path, [*(folders or default_folders()), paths.data_root() / "footage"]):
+            raise HTTPException(403, "On the network, footage comes from the footage folders of "
+                                     "the computer running CrossingCount.")
         if not path.is_file():
             raise HTTPException(400, f"There is no file at {path}")
         with adding.lock:

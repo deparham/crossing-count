@@ -157,6 +157,8 @@
   <span class="sep"></span><h1>Count wizard</h1>
   <span id="vname" class="muted">No footage chosen yet</span>
   <div class="tools">
+    <a href="#" id="netLink" hidden title="Let people on this network use CrossingCount">Share on this network</a>
+    <span id="netBadge" class="muted" hidden></span>
     <a href="#" id="shareLink" hidden>Colleagues' apps</a>
     <a href="#" id="updToken" hidden>Get update notices</a>
     <a href="/runs/" target="_blank" rel="noopener">Validation runs</a>
@@ -180,6 +182,12 @@
   <div class="grid2"><label>GitHub token <input id="updTokenIn" type="password" autocomplete="off" spellcheck="false"></label></div>
   <button id="updTokenSave" class="primary">Save</button>
   <span class="muted">Kept in this computer's Keychain (Credential Manager on Windows), never in a file.</span>
+</div>
+<div class="card" id="netCard" hidden>
+  <div class="big">Share on this network</div>
+  <div class="muted">People on this network (the office Wi-Fi, for example) open CrossingCount in their browser with an address and the code below, and each works on their own validation. Their counts run on this computer, one at a time. RetailNext keys, updates, settings and quitting stay with this computer, and they pick footage from its footage folders only. The code is new each time sharing is switched on. This computer may ask whether CrossingCount may accept incoming connections: allow it, or nobody can connect.</div>
+  <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-weight:600"><input type="checkbox" id="netOn"> Let people on this network use CrossingCount</label>
+  <div id="netInfo" style="margin-top:10px"></div>
 </div>
 <div class="card" id="shareCard" hidden>
   <div class="big">Colleagues' apps</div>
@@ -419,6 +427,7 @@ const V = $("video"), C = $("canvas"), ctx = C.getContext("2d");
 const HC = $("hcanvas"), hctx = HC.getContext("2d"), TL = $("timeline"), tctx = TL.getContext("2d");
 const W = { st: null, key: "footage", timer: null, ch: null, cur: null, mode: null, back: [], polls: 0,
             videoKey: null, drawn: null, h: null, hcam: null, hseg: null, flash: null, hrate: 1, settings: null };
+W.netReady = Promise.resolve().then(() => netRefresh());  // this computer, or someone on the network?
 
 function esc(x) { return String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 function msg(text, cls) { $("msg").innerHTML = text ? `<span class="${cls || "muted"}">${esc(text)}</span>` : ""; }
@@ -437,7 +446,9 @@ function period() {
 }
 async function api(path, body) {
   const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  const j = await r.json().catch(() => ({}));
+  const raw = await r.text();
+  let j = {};
+  try { j = raw ? JSON.parse(raw) : {}; } catch (e) { j = { detail: raw.slice(0, 300) }; }
   if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
   return j;
 }
@@ -511,11 +522,12 @@ const RN_DIR = { in: "traffic in", out: "traffic out", both: "traffic in and out
 const rnSubName = (v) => v.trim().toLowerCase().replace(/^https?:\/\//, "").split("/")[0].split(".")[0];
 async function rnSetup() {
   let st;
+  await W.netReady;  // on another computer, what stays with this one is not offered
   try { st = await api("/api/retailnext"); } catch (e) { return; }
   $("rnCard").hidden = false;  // asks for the brand; a brand not connected yet asks for its key
   if (!$("rnDay").value) $("rnDay").value = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
   rnSubs(st.subscriptions || [], st);
-  $("shareLink").hidden = !st.can_share;
+  $("shareLink").hidden = !st.can_share || W.remote;
   if (!$("rnSub").value) {
     let last = "";
     try { last = localStorage.getItem("rnSub") || ""; } catch (e) { /* no storage here */ }
@@ -531,7 +543,8 @@ function rnSubs(subs, lists) {  // lists: which are this computer's own, which b
   $("rnBrands").innerHTML = subs.length
     ? "Brands: " + subs.map((s) => inApp.includes(s) && !own.includes(s)
         ? `${esc(s)} <span class="muted">(built into this app)</span>`
-        : `${esc(s)} <a href="#" data-forget="${esc(s)}">remove</a>`).join(" · ")
+        : W.remote ? esc(s) : `${esc(s)} <a href="#" data-forget="${esc(s)}">remove</a>`).join(" · ")
+    : W.remote ? "No brand connected yet: brands are connected on the computer running CrossingCount."
     : "No brand connected yet: type one above and enter its API key.";
 }
 $("rnBrands").addEventListener("click", async (e) => {
@@ -557,6 +570,8 @@ function stored(key, value) {  // this browser's memory of a choice ("" when it 
 function updId(u) { return u.installed ? `b${u.latest}` : String(u.latest || u.head || ""); }
 async function checkUpdate() {  // a newer version: on GitHub, or on this computer and not yet running
   let u;
+  await W.netReady;
+  if (W.remote) return;  // the computer running CrossingCount updates it
   try { u = await api("/api/update"); } catch (e) { return; }
   W.update = u;
   const ready = u.supported && u.available, newer = ready && u.behind > 0;
@@ -650,6 +665,48 @@ $("shareTokenBtn").addEventListener("click", async () => {
     msg(`Done: the builds started now carry the token. ${r.notes.join(" ")}`, r.notes.length ? "warn" : "ok");
   } catch (e) { msg(e.message, "err"); } finally { $("shareTokenBtn").disabled = false; }
 });
+// ---------- sharing on this network ----------
+async function netRefresh() {
+  let n;
+  try { n = await api("/api/network"); } catch (e) { return; }
+  W.remote = !n.on_host;
+  if (W.remote) {  // someone on another computer: what stays with that computer is not offered
+    for (const id of ["netLink", "quitApp", "updateApp", "updToken", "shareLink", "updBanner", "updCard", "shareCard"]) $(id).hidden = true;
+    $("netBadge").hidden = false; $("netBadge").textContent = "On the network";
+    $("exDir").disabled = true; $("exDir").title = "Set on the computer running CrossingCount";
+    return;
+  }
+  $("netLink").hidden = false;
+  $("netLink").textContent = n.on ? `Shared on this network (${n.people.length})` : "Share on this network";
+  $("netOn").checked = !!n.on;
+  if (!n.on) {
+    $("netInfo").innerHTML = n.error ? `<div class="err">${esc(n.error)}</div>` : "";
+    return;
+  }
+  const people = n.people.length
+    ? n.people.map((p) => `<li>${esc(p.who)}: ${p.footage ? esc(p.footage) : "no footage open"}${p.counting ? " · counting" : ""}${p.idle_s > 120 ? ` · idle ${Math.round(p.idle_s / 60)} min` : ""}</li>`).join("")
+    : '<li class="muted">Nobody yet</li>';
+  $("netInfo").innerHTML = `<div>Access code <b style="font:600 22px ui-monospace,monospace;letter-spacing:2px;margin-left:6px">${esc(n.code)}</b></div>
+    <div style="margin-top:8px">Send a link (the code is in it), or say the address and the code:</div>
+    ${n.addresses.map((a, i) => `<div style="display:flex;gap:8px;align-items:center;margin-top:6px"><code>${esc(a)}</code><button data-netcopy="${esc(n.links[i])}">Copy link</button></div>`).join("")}
+    <div style="margin-top:12px"><b>Using it now</b><ul style="margin:4px 0 0;padding-left:20px">${people}</ul></div>`;
+}
+$("netLink").addEventListener("click", (e) => { e.preventDefault(); $("netCard").hidden = !$("netCard").hidden; netRefresh(); });
+$("netOn").addEventListener("change", async () => {
+  const on = $("netOn").checked;
+  if (!on && !confirm("Stop sharing? People on the network lose access at once (their work is saved, and a count already running finishes).")) { $("netOn").checked = true; return; }
+  $("netOn").disabled = true; msg(on ? "Starting to share on this network…" : "");
+  try { await api("/api/network", { on }); msg(on ? "Shared on this network: send the link or the code." : "No longer shared on this network.", "ok"); }
+  catch (e) { msg(e.message, "err"); }
+  finally { $("netOn").disabled = false; netRefresh(); }
+});
+$("netInfo").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-netcopy]");
+  if (!b) return;
+  try { await navigator.clipboard.writeText(b.dataset.netcopy); msg("Link copied.", "ok"); }
+  catch (err) { prompt("Copy this link:", b.dataset.netcopy); }
+});
+setInterval(() => { if (!W.remote && (!$("netCard").hidden || $("netOn").checked)) netRefresh(); }, 10000);
 $("quitApp").addEventListener("click", async () => {
   const busy = (W.st && W.st.job && W.st.job.status === "running") || $("rnJob");
   if (!confirm(busy ? "A count or download is still running and will stop. Quit CrossingCount?" : "Quit CrossingCount? Everything is saved.")) return;
@@ -659,6 +716,11 @@ $("quitApp").addEventListener("click", async () => {
 async function rnBrand() {  // a connected brand: its stores; one not connected yet: ask for its key
   const sub = rnSubName($("rnSub").value);
   let known = W.rnSubs.includes(sub);
+  if (sub && !known && W.remote) {  // keys are kept on the computer running CrossingCount only
+    $("rnKey").hidden = true; $("rnStores").innerHTML = "";
+    msg(`${sub} is not connected on the computer running CrossingCount: connect it there.`, "warn");
+    return;
+  }
   if (sub && !known) {  // its key may be on this computer already (the other copy saved it): nothing to type
     try {
       const r = await api("/api/retailnext/reconnect", { subscription: sub });
@@ -1506,7 +1568,7 @@ function madeHtml(path) {
   const pdf = W.st && W.st.report && W.st.report.pdf
     ? ` · <a href="/api/report.pdf?k=${k}" download style="color:var(--accent)">PDF</a>` : "";
   return `<div class="ok">Report saved.</div><div><a href="/api/report.pptx?k=${k}" download style="color:var(--accent)">Download ${esc(name)}</a>${pdf}</div>
-    <div class="muted" style="font-size:12px;margin-top:4px">${esc(path)}</div><button id="reveal" style="margin-top:8px">Show the file</button>`;
+    <div class="muted" style="font-size:12px;margin-top:4px">${esc(path)}</div>${W.remote ? "" : '<button id="reveal" style="margin-top:8px">Show the file</button>'}`;
 }
 $("make").addEventListener("click", async () => {
   msg("Making the report: picking the busiest moment, taking snapshots of each crossing…");
