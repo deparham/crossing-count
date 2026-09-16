@@ -33,6 +33,20 @@ from crossing_count.detector import Backbone, RfDetrBackbone, YoloBackbone
 from crossing_count.util import default_run_dir
 
 
+def results_folder(detector: str, model: str, default_model: str, mode: str,
+                   main_folder: bool = False) -> str:
+    """Where one detection run's results go. Each detector and each set of weights keeps its
+    own folder, so they can be compared on the same clip; the default detector with its own
+    weights, or --main-folder, uses the camera's own folder (the wizard's)."""
+    if main_folder:
+        return "derotated"  # output_dir(): the camera's own folder
+    if detector != "yolo":
+        return f"{detector}-{mode}"
+    if model != default_model:
+        return f"{Path(model).stem}-{mode}"
+    return mode
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("video", type=Path)
@@ -48,6 +62,9 @@ def main(argv: list[str] | None = None) -> int:
                          "Its results go to <camera>/<detector>-<mode>/, so detectors can be "
                          "compared on the same clip")
     ap.add_argument("--model", default="yolo26m.pt", help="weights file in models/")
+    ap.add_argument("--main-folder", action="store_true",
+                    help="write to each camera's own folder whatever the detector: where the "
+                         "wizard reads results\n(candidates.json still records the detector)")
     ap.add_argument("--rfdetr-weights", default="rf-detr-large-2026.pth",
                     help="RF-DETR Large weights file in models/")
     ap.add_argument("--device", help="torch device (default: mps if available, else cpu)")
@@ -76,14 +93,8 @@ def main(argv: list[str] | None = None) -> int:
     for m in modes:
         opts = DetectOptions(mode=m, model=args.model, device=args.device, det_fps=args.det_fps,
                              record=args.record, backbone=args.detector)
-        # each detector and each set of weights keeps its own results, so they can be
-        # compared on the same clip; today's default (YOLO, its own weights) stays put
-        if args.detector != "yolo":
-            where = f"{args.detector}-{m}"
-        elif args.model != ap.get_default("model"):
-            where = f"{Path(args.model).stem}-{m}"
-        else:
-            where = m
+        where = results_folder(args.detector, args.model, ap.get_default("model"), m,
+                               args.main_folder)
         print(f"\n[{args.detector} {m}]", file=sys.stderr)
         try:
             res = run_detect(args.video, args.configs, run_dir, opts=opts, sample_s=args.sample,

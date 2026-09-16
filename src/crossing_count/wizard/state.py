@@ -47,6 +47,7 @@ from ..version import app_version
 from . import schema
 from .items import (
     CHOICES,
+    DETECTOR_CHOICES,
     DIRECTIONS,
     FOUND,
     GROUND_TRUTH_SPEC,
@@ -64,6 +65,7 @@ from .items import (
     prompt_priority,
     review_items,
     row_numbers,
+    unavailable,
     watch_stretches,
 )
 from .jobs import Progress, _Job, pipeline_commands
@@ -749,6 +751,8 @@ class Wizard:
     def set_model(self, model: str) -> None:
         if model not in MODELS:
             raise WizardError(f"unknown detector {model!r}")
+        if why := unavailable(model):
+            raise WizardError(why)
         with self._lock:
             self.state["model"] = model
             self._save()
@@ -1456,7 +1460,9 @@ class Wizard:
         with self._lock:
             return {**self.state, "dirs": self.dirs(), "counts": self.counts(), "fps": self.fps,
                     "run_dir": str(self.run_dir), "history": self.history(),
-                    "intervals": self.intervals(), "comparison": self.comparison()}
+                    "intervals": self.intervals(), "comparison": self.comparison(),
+                    "detectors": [{"model": m, **DETECTOR_CHOICES[m], "unavailable": unavailable(m)}
+                                  for m in MODELS]}
 
     # ---- pictures ----------------------------------------------------------------------
 

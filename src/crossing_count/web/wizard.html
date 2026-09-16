@@ -310,12 +310,8 @@
     <div class="big">Count</div>
     <div class="muted" id="runWhat"></div>
     <label class="muted" style="display:inline-block;margin-top:8px">Detector
-      <select id="model">
-        <option value="yolo26m.pt">Accurate (YOLO26, the default)</option>
-        <option value="yolo26s.pt">Fast (YOLO26, misses more people)</option>
-        <option value="yolo11m.pt">Accurate (YOLO11, what earlier counts used)</option>
-        <option value="yolo11s.pt">Fast (YOLO11, misses more people)</option>
-      </select></label>
+      <select id="model"></select></label>
+    <div id="modelSpeed" class="muted" style="margin-top:4px"></div>
     <div id="modelWarn" class="warn" hidden style="margin-top:6px">The fast detector merges people walking together: on one busy clip the check found half the exits it did with the accurate one. Use it only on quiet entrances.</div>
     <div style="margin-top:12px;display:flex;gap:8px"><button id="start" class="primary">Start counting</button><button id="stop" hidden>Stop</button></div>
   </div>
@@ -936,12 +932,19 @@ ENTER.count = () => {
   $("runWhat").textContent = `${s.cameras.map((c) => c.sensor).join(" and ")} · ${s.dirs.map((d) => LABEL[d]).join(" and ")} · ${period()}. ` +
     "It finds the moments with movement near the line, then detects and tracks people there. You can do other work meanwhile." +
     (s.history && s.history.length ? ` Earlier checks of this video are kept in its history (${s.history.length}).` : "");
-  $("model").value = s.model; $("modelWarn").hidden = !SMALL_MODELS.includes(s.model);
+  $("model").innerHTML = (s.detectors || []).map((d) => `<option value="${esc(d.model)}"${d.unavailable ? " disabled" : ""}>${esc(d.label)}${d.unavailable ? " (not available here)" : ""}</option>`).join("");
+  $("model").value = s.model; showModel(s.model);
   if (s.job.status !== "idle") { $("runCard").hidden = false; pollJob(); }
   if (s.job.status === "running") W.timer = setInterval(pollJob, 1000);
 };
 const SMALL_MODELS = ["yolo26s.pt", "yolo11s.pt"];  // faster, and they miss more people
-$("model").addEventListener("change", async () => { $("modelWarn").hidden = !SMALL_MODELS.includes($("model").value); try { setState(await api("/api/model", { model: $("model").value })); } catch (e) { msg(e.message, "err"); } });
+function showModel(m) {  // how long the chosen detector takes, and why any cannot be chosen
+  const all = W.st.detectors || [], d = all.find((x) => x.model === m) || {};
+  $("modelWarn").hidden = !SMALL_MODELS.includes(m);
+  $("modelSpeed").textContent = [d.speed ? `Roughly ${d.speed} on a recent Mac.` : "",
+    ...all.filter((x) => x.unavailable).map((x) => x.unavailable)].filter(Boolean).join(" ");
+}
+$("model").addEventListener("change", async () => { showModel($("model").value); try { setState(await api("/api/model", { model: $("model").value })); } catch (e) { msg(e.message, "err"); } });
 $("start").addEventListener("click", async () => {
   const done = Object.keys(W.st.answers || {}).length + (W.st.added || []).length;
   if (done && !confirm(`This count has been checked (${done} answers). Running it again starts a new check: `

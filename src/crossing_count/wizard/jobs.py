@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 from .. import paths
 from ..util import fmt_hms
+from .items import RFDETR
 
 if TYPE_CHECKING:
     from .state import Wizard
@@ -164,7 +165,12 @@ def pipeline_commands(w: Wizard) -> list[list[str]]:
     cfgs = [c["config"] for c in cams]
     tiles = [a for c in cams for a in ("--tile", f"{c['sensor']}={c['picture']}")]
     out = ["--out-dir", str(w.run_dir)]
+    model = str(w.state["model"])
+    # RF-DETR runs on the whole picture: de-rotated, it takes hours (items.DETECTOR_CHOICES).
+    # Its results go where the wizard reads them; candidates.json records which detector.
+    which = (["--detector", "rfdetr", "--naive", "--main-folder"] if model == RFDETR
+             else ["--model", model])
     return [
         [*tool("gate"), str(w.video), *cfgs, *tiles, *out],
-        [*tool("detect"), str(w.video), *cfgs, "--model", w.state["model"], "--record", *out],
+        [*tool("detect"), str(w.video), *cfgs, *which, "--record", *out],
     ]

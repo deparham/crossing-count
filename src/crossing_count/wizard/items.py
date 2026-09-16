@@ -8,6 +8,7 @@ the gold set all use these, so they ask the same questions of the same footage.
 
 from __future__ import annotations
 
+import importlib.util
 import random
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,8 +27,25 @@ LABELS = {"in": "Traffic In", "out": "Traffic Out"}
 # people per frame than YOLO11 at the same speed on this footage (16 Sep 2026, CN-123
 # 11:30, two cameras); whether that counts better is not known until a clip is counted by
 # hand, and every result records which weights produced it.
-MODELS = ("yolo26m.pt", "yolo26s.pt", "yolo11m.pt", "yolo11s.pt")
+RFDETR = "rfdetr-large"  # RF-DETR Large on the whole picture (detector.RfDetrBackbone)
+RFDETR_WEIGHTS = "rf-detr-large-2026.pth"
+MODELS = ("yolo26m.pt", "yolo26s.pt", "yolo11m.pt", "yolo11s.pt", RFDETR)
 SMALL_MODELS = ("yolo26s.pt", "yolo11s.pt")  # faster, and they miss more people
+# What the page offers. Speeds were measured on an M-series Mac on 16 Sep 2026 (CN-123,
+# two cameras, all footage active), per camera for 15 minutes of footage; none is known
+# for the ones without. RF-DETR runs on the whole picture only: inside the de-rotated
+# pipeline it resizes each of ~30 crops a frame to 704 px, about 8 hours a camera.
+DETECTOR_CHOICES: dict[str, dict[str, str | None]] = {
+    "yolo26m.pt": {"label": "Accurate: YOLO26 (the default)",
+                   "speed": "about 30 minutes a camera for 15 minutes of footage"},
+    "yolo26s.pt": {"label": "Fast: YOLO26 small (misses more people)", "speed": None},
+    "yolo11m.pt": {"label": "Accurate: YOLO11 (what earlier counts used)",
+                   "speed": "about 30 minutes a camera for 15 minutes of footage"},
+    "yolo11s.pt": {"label": "Fast: YOLO11 small (misses more people)",
+                   "speed": "about 9 minutes a camera for 15 minutes of footage"},
+    RFDETR: {"label": "RF-DETR Large, whole picture (Apache-2.0; not yet proven by a hand count)",
+             "speed": "about 6 minutes a camera for 15 minutes of footage"},
+}
 TWIN_WINDOW_S = 2.0  # same direction this close on another camera: maybe one person seen twice
 # Rule rejections offered to the checker. Measured on checked clips (11:30 CN-123, YD-612):
 # "never touched the filter zone" and "out and back on one track" were real about half the
@@ -217,3 +235,20 @@ def mark_twins(items: list[dict[str, Any]]) -> None:
                 continue
             it["twin"] = {"id": other["id"], "camera": other["camera"], "t": other["t"]}
             break
+
+
+def unavailable(model: str) -> str | None:
+    """Why a detector cannot run in this copy of the app, or None when it can."""
+    if model != RFDETR:
+        return None
+    if importlib.util.find_spec("rfdetr") is None:
+        return ("RF-DETR is not installed in this copy: the installed app leaves it out until "
+                "it has proved itself against hand counts. From the project folder, run "
+                "uv sync --group detectors.")
+    from ..detector import weights_path
+
+    try:
+        weights_path(RFDETR_WEIGHTS)
+    except FileNotFoundError:
+        return f"RF-DETR's weights are not in models/ ({RFDETR_WEIGHTS}; see the README)."
+    return None
