@@ -46,7 +46,8 @@ VERSION = re.search(r'__version__ = "([^"]+)"',
 VERSION_FILE = None
 if sys.platform == "win32":
     numbers = tuple(int(x) for x in (VERSION.split(".") + ["0", "0", "0", "0"])[:4])
-    VERSION_FILE = str(Path(WORKPATH) / "version_info.txt")
+    VERSION_FILE = str(Path(workpath) / "version_info.txt")  # PyInstaller's build folder
+    Path(workpath).mkdir(parents=True, exist_ok=True)
     Path(VERSION_FILE).write_text(f"""VSVersionInfo(
   ffi=FixedFileInfo(filevers={numbers}, prodvers={numbers}, mask=0x3f, flags=0x0,
                     OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),

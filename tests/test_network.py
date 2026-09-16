@@ -209,12 +209,13 @@ def test_sharing_starts_and_stops(footage: dict[str, Any]) -> None:
     assert not sharing.on
     with pytest.raises(OSError):
         urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2)
-    with socket.socket() as busy:
-        busy.bind(("127.0.0.1", port))
-        busy.listen()
-        assert not sharing.start() and "in use" in str(sharing.error)
-    assert sharing.start()
+    assert sharing.start()  # at once again, on the port just closed (Linux keeps it a while)
     try:
         assert sharing.status()["code"] != first  # a new code each time
     finally:
         sharing.stop()
+    other = network.Sharing(footage["app"], _free_port(), bind="127.0.0.1")
+    with socket.socket() as busy:  # another program listening there
+        busy.bind(("127.0.0.1", other.port))
+        busy.listen()
+        assert not other.start() and "in use" in str(other.error)

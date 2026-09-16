@@ -178,6 +178,8 @@ class Sharing:
                 return True
             self.error = None
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                if sys.platform != "win32":  # as uvicorn binds: a port just closed is free
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 try:
                     probe.bind((self.bind, self.port))
                 except OSError as exc:
