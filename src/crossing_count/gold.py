@@ -33,7 +33,7 @@ import functools
 import hashlib
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -606,8 +606,16 @@ def _detectors(run_dir: Path, sensors: Iterable[str]) -> list[dict[str, Any]]:
             continue
         weights = next((d / name for d in paths.models_dirs() if (d / name).is_file()), None)
         out[name] = {"model": name, "mode": det.get("mode"), "conf": det.get("conf"),
-                     "sha256": _sha(str(weights), weights.stat().st_mtime) if weights else None}
+                     "backbone": det.get("backbone") or "yolo",
+                     "sha256": det.get("weights_sha256")
+                     or (_sha(str(weights), weights.stat().st_mtime) if weights else None)}
     return list(out.values())
+
+
+def detector_of(c: Mapping[str, Any]) -> set[tuple[str, str, str]]:
+    """Which detector (and which weights) a clip's automatic count used."""
+    return {(str(d.get("backbone") or "yolo"), str(d.get("model") or "?"), str(d.get("sha256")))
+            for d in c.get("detectors") or []}
 
 
 def score_camera(real: list[tuple[float, str]], unsure: list[float], items: list[dict[str, Any]],
@@ -749,6 +757,14 @@ def evaluate(which: str, root: Path | None = None, note: str = "",
         add(by_split.setdefault(c["split"], {}), c["by_direction"])
         for g in c["groups"]:
             add(by_group.setdefault(g, {}), c["by_direction"])
+    # one score, one detector: a number over clips counted by different detectors (or
+    # different weights) would say nothing about either
+    used = {d for c in scored for d in detector_of(c)}
+    if len(used) > 1:
+        said = "; ".join(sorted(f"{b} {m} ({(s or '?')[:12]})" for b, m, s in used))
+        raise GoldError(f"These clips' automatic counts used different detectors ({said}): a "
+                        f"score over them would mix detectors. Run the automatic count again "
+                        f"with one detector, or score the clips of each separately.")
     n = sum(v["truth"] for v in total.values())
     made = datetime.now().astimezone()
     ids = {r["id"] for r in recs}

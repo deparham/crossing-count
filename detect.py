@@ -22,13 +22,14 @@ from pathlib import Path
 
 from crossing_count.candidates import (
     DetectOptions,
+    backbone_factory,
     fmt_summary,
     run_detect,
     write_detection,
-    yolo_factory,
 )
 from crossing_count.config import ConfigError
 from crossing_count.detect_debug import write_detect_debug
+from crossing_count.detector import Backbone, RfDetrBackbone, YoloBackbone
 from crossing_count.util import default_run_dir
 
 
@@ -42,7 +43,13 @@ def main(argv: list[str] | None = None) -> int:
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--naive", action="store_true", help="YOLO on the raw picture (baseline)")
     mode.add_argument("--compare", action="store_true", help="run de-rotated and naive, compare")
+    ap.add_argument("--detector", choices=("yolo", "rfdetr"), default="yolo",
+                    help="which detector finds the people (rfdetr: uv sync --group detectors).\n"
+                         "Its results go to <camera>/<detector>-<mode>/, so detectors can be "
+                         "compared on the same clip")
     ap.add_argument("--model", default="yolo11s.pt", help="weights file in models/")
+    ap.add_argument("--rfdetr-weights", default="rf-detr-large-2026.pth",
+                    help="RF-DETR Large weights file in models/")
     ap.add_argument("--device", help="torch device (default: mps if available, else cpu)")
     ap.add_argument("--det-fps", type=float, default=10.0, help="frames per second analysed")
     ap.add_argument("--seed", type=int, default=0,
@@ -59,21 +66,28 @@ def main(argv: list[str] | None = None) -> int:
     run_dir = args.out_dir or default_run_dir(args.video, args.sample)
     modes = ["derotated", "naive"] if args.compare else ["naive"] if args.naive else ["derotated"]
 
+    try:
+        backbone: Backbone = (YoloBackbone(args.model, args.device) if args.detector == "yolo"
+                              else RfDetrBackbone(args.rfdetr_weights, args.device))
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     by_mode = {}
     for m in modes:
         opts = DetectOptions(mode=m, model=args.model, device=args.device, det_fps=args.det_fps,
-                             record=args.record)
-        print(f"\n[{m}]", file=sys.stderr)
+                             record=args.record, backbone=args.detector)
+        where = m if args.detector == "yolo" else f"{args.detector}-{m}"
+        print(f"\n[{args.detector} {m}]", file=sys.stderr)
         try:
             res = run_detect(args.video, args.configs, run_dir, opts=opts, sample_s=args.sample,
-                             factory=yolo_factory(opts), progress=True)
+                             factory=backbone_factory(opts, backbone), progress=True)
         except (ConfigError, FileNotFoundError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         by_mode[m] = res
         for r in res:
-            out = write_detection(r, run_dir, m)
-            print(f"\n{r.cfg.sensor} [{m}]  rule: {r.cfg.rule}")
+            out = write_detection(r, run_dir, where)
+            print(f"\n{r.cfg.sensor} [{args.detector} {m}]  rule: {r.cfg.rule}")
             print("\n".join(fmt_summary(r)))
             print(f"  wrote {out}/candidates.json, discarded.json, unexplained.json")
             if args.debug:

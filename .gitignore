@@ -46,3 +46,6 @@ src/crossing_count/builtin.dat
 gold/
 validations/
 audit/
+
+# macOS folder metadata
+.DS_Store

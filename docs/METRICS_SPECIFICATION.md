@@ -135,6 +135,13 @@ uses them.
 
 ## 6. What every result records
 
+**Which detector.** Every recorded detection set names the detector that made it: backbone
+(`yolo`, `rfdetr`), model, weights file and its SHA-256, picture size or resolution,
+threshold, device and library version — in `candidates.json` under `detector`, and inside
+the recorded `detections.pkl`, so a replay still says what produced it. A crossing-level
+score **refuses** to run over clips whose automatic counts used different detectors or
+different weights: the number would describe neither. Tests: `tests/test_detectors.py`.
+
 Crossing-level scorings (gold page, `bench/experiments/`): engine and matching versions,
 tolerance, minimum sample, Ground Truth Specification version, dataset version and content
 hash with each clip's checksum, app version, detector and its weights' SHA-256, tracking
@@ -142,3 +149,18 @@ and rule settings. Count-level summaries: engine version, the minimum truth for
 percentages, minimum clusters, bootstrap size and seed, traffic thresholds; each
 validation's result records its app version, engine version, status, what counted as a
 person, the specification version, the system and where its numbers came from.
+
+## 7. What the checking costs
+
+Whether a clip can be validated at all is a number too, so `bench.py` reports it per
+**camera-hour** of footage:
+
+| Measure | How |
+|---|---|
+| Questions per camera-hour | review items (crossings to confirm, possible misses) ÷ camera-hours |
+| Review minutes per camera-hour | measured from the times of the answers themselves where the decision log has them (gaps over 2 minutes count as a break, not reviewing); otherwise estimated at 7.5 s a question, the rate measured on the 11:30 clip |
+| Share of footage left to watch | movement near the line the tool could not explain, as a share of the footage |
+| Things, not people | tracks that never move more than 3% of the picture height for at least 5 seconds — mannequins, racks, posters — and the questions they cause, per camera-hour. Counted separately from other false positives: the fix is an exclusion zone for that camera, which is a finding for the customer, not a weakness of the model. |
+
+Saved with every benchmark run, so they can be followed across releases.
+Tests: `tests/test_detectors.py`.

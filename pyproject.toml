@@ -22,6 +22,9 @@ dependencies = [
 build = [
     "pyinstaller>=6.22.3",
 ]
+detectors = [
+    "rfdetr>=1.10,<2",
+]
 dev = [
     "pytest>=8.0",
     "mypy>=1.10",

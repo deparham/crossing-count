@@ -25,11 +25,12 @@ import json
 import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from . import paths
-from .candidates import CameraDetection, DetectOptions, replay_factory, run_detect
+from .candidates import CameraDetection, DetectOptions, output_dir, replay_factory, run_detect
 from .config import load_config
 from .export import CSV_COLUMNS
 from .gating import camera_dir
@@ -49,6 +50,10 @@ from .wizard import (
 
 WINDOW_S = 2.0  # a proposal and a verified crossing this close (camera, direction) are one
 WATCH_MARGIN_S = 1.0  # a crossing this close to a stretch of movement is seen when watching it
+SECONDS_PER_ITEM = 7.5  # a Y/N question, when the review was not timed (measured: 190 in ~24 min)
+IDLE_GAP_S = 120.0  # a gap this long between answers is a break, not reviewing
+STATIC_MOVE_FRAC = 0.03  # a track that never moves further than this (picture heights) ...
+STATIC_MIN_S = 5.0  # ... for this long is a thing, not a person: a mannequin, a rack, a poster
 HAND = "hand count"
 CHECKED = "checked"
 FIELDS = ("verified", "counted", "counted_real", "duplicates", "wrong_direction", "false",
@@ -192,11 +197,35 @@ def locate_video(run_dir: Path, truth: Truth) -> Path:
     raise BenchError(f"video not found ({', '.join(names) or 'unknown'}); give its path")
 
 
-def _configs(run_dir: Path, sensors: set[str]) -> list[Path]:
+def variants(run_dir: Path) -> list[str]:
+    """Every recorded detection set in this run: "derotated" (the camera's own folder) and
+    any other detector or mode kept beside it, e.g. "rfdetr-derotated"."""
+    found = set()
+    for cam_dir, _ in _activities(run_dir):
+        if (cam_dir / "detections.pkl").is_file():
+            found.add("derotated")
+        found |= {d.name for d in cam_dir.iterdir()
+                  if d.is_dir() and (d / "detections.pkl").is_file()}
+    return sorted(found)
+
+
+def detector_of(run_dir: Path, variant: str = "derotated") -> dict[str, Any]:
+    """Which detector and weights produced a recorded set."""
+    for cam_dir, _ in _activities(run_dir):
+        cand = _json(output_dir(run_dir, cam_dir.name, variant) / "candidates.json")
+        if cand and cand.get("detector"):
+            d = dict(cand["detector"])
+            return {k: d.get(k) for k in ("backbone", "model", "mode", "conf", "imgsz",
+                                          "resolution", "weights", "weights_sha256", "device",
+                                          "library") if d.get(k) is not None}
+    return {}
+
+
+def _configs(run_dir: Path, sensors: set[str], variant: str = "derotated") -> list[Path]:
     """The drawing each camera was counted with, for cameras with recorded detections."""
     out: list[Path] = []
     for cam_dir, act in _activities(run_dir):
-        if not (cam_dir / "detections.pkl").is_file():
+        if not (output_dir(run_dir, cam_dir.name, variant) / "detections.pkl").is_file():
             continue
         p = Path(str(act.get("config", {}).get("path", "")))
         found = next((c for c in (p, paths.data_root() / p, paths.SOURCE_ROOT / p)
@@ -208,8 +237,8 @@ def _configs(run_dir: Path, sensors: set[str]) -> list[Path]:
     return out
 
 
-def replay(video: Path, run_dir: Path, configs: list[str | Path], allow_config_change: bool = False
-           ) -> tuple[list[CameraDetection], list[str]]:
+def replay(video: Path, run_dir: Path, configs: list[str | Path], allow_config_change: bool = False,
+           variant: str = "derotated") -> tuple[list[CameraDetection], list[str]]:
     """Today's tracking and rule on the recorded detections. The run folder is only read.
 
     A drawing changed since the count ran stops the replay, unless allow_config_change:
@@ -217,7 +246,7 @@ def replay(video: Path, run_dir: Path, configs: list[str | Path], allow_config_c
     """
     if not allow_config_change:
         return run_detect(video, configs, run_dir, opts=DetectOptions(),
-                          factory=replay_factory(run_dir)), []
+                          factory=replay_factory(run_dir, variant)), []
     notes: list[str] = []
     tmp = Path(tempfile.mkdtemp(prefix="bench-"))
     try:
@@ -230,9 +259,12 @@ def replay(video: Path, run_dir: Path, configs: list[str | Path], allow_config_c
                 notes.append(f"{cfg.sensor}: the drawing changed since the count ran")
                 act["config"]["sha256"] = cfg.sha256
             (dst / "activity.json").write_text(json.dumps(act), encoding="utf-8")
-            shutil.copy2(src / "detections.pkl", dst / "detections.pkl")
+            kept = output_dir(tmp, cfg.sensor, variant)
+            kept.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(output_dir(run_dir, cfg.sensor, variant) / "detections.pkl",
+                         kept / "detections.pkl")
         return run_detect(video, configs, tmp, opts=DetectOptions(),
-                          factory=replay_factory(tmp)), notes
+                          factory=replay_factory(tmp, variant)), notes
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -303,34 +335,82 @@ def rates(n: dict[str, Any]) -> dict[str, float | None]:
             "precision_counted": pct(found, n["counted"])}
 
 
-def bench_clip(run_dir: Path, video: Path | None = None,
-               allow_config_change: bool = False) -> dict[str, Any]:
+def static_objects(r: CameraDetection, items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Tracks that never move: a mannequin, a rack, a poster - not a person.
+
+    They are their own kind of false positive, and their own fix: a camera surrounded by
+    human-shaped merchandise needs an exclusion zone, which is a finding for the customer,
+    not a weakness of the model.
+    """
+    tile = (r.candidates.get("picture") or {}).get("tile") or {}
+    height = float(tile.get("y1", 0)) - float(tile.get("y0", 0)) or 1.0
+    limit = STATIC_MOVE_FRAC * height
+    still = []
+    for t in r.tracks:
+        if len(t.samples) < 2 or t.samples[-1].t - t.samples[0].t < STATIC_MIN_S:
+            continue
+        x0, y0 = t.samples[0].x, t.samples[0].y
+        if max(abs(s.x - x0) + abs(s.y - y0) for s in t.samples) <= limit:
+            still.append(t)
+    ids = {t.track_id for t in still}
+    return {"tracks": len(still),
+            "seconds": round(sum(t.samples[-1].t - t.samples[0].t for t in still), 1),
+            "items": sum(1 for i in items if i.get("track_id") in ids
+                         or set(i.get("tracks") or []) & ids)}
+
+
+def review_minutes(run_dir: Path, items: int) -> tuple[float, str]:
+    """How long the checking took: measured from the answers' own times where they were
+    recorded, otherwise estimated from the number of questions."""
+    st = _json(run_dir / "wizard" / "state.json") or {}
+    stamps = sorted(str(d["at"]) for d in st.get("decisions", [])
+                    if d.get("action") in ("answer", "add", "undo", "watched", "hand_count_added")
+                    and d.get("at"))
+    if len(stamps) >= 5:
+        times = [datetime.fromisoformat(s) for s in stamps]
+        worked = sum((b - a).total_seconds() for a, b in zip(times, times[1:], strict=False)
+                     if (b - a).total_seconds() <= IDLE_GAP_S)
+        if worked > 0:
+            return round(worked / 60, 1), "measured from the answers' times"
+    return round(items * SECONDS_PER_ITEM / 60, 1), f"estimated at {SECONDS_PER_ITEM:g} s a question"
+
+
+def bench_clip(run_dir: Path, video: Path | None = None, allow_config_change: bool = False,
+               variant: str = "derotated") -> dict[str, Any]:
     truth = find_truth(run_dir)
     if truth is None:
         raise BenchError("no finished count by a person in this run")
     video = video or locate_video(run_dir, truth)
-    configs: list[str | Path] = [*_configs(run_dir, set(truth.crossings))]
+    configs: list[str | Path] = [*_configs(run_dir, set(truth.crossings), variant)]
     if not configs:
-        raise BenchError(f"no recorded detections for {', '.join(truth.crossings)}: run the "
+        raise BenchError(f"no recorded detections for {', '.join(truth.crossings)}"
+                         f"{'' if variant == 'derotated' else f' [{variant}]'}: run the "
                          f"automatic count on this video first")
-    results, notes = replay(video, run_dir, configs, allow_config_change)
+    results, notes = replay(video, run_dir, configs, allow_config_change, variant)
     cams: dict[str, dict[str, Any]] = {}
+    footage_s = 0.0
     for r in results:
         sensor = r.cfg.sensor
         pic = int(r.candidates.get("picture", {}).get("index", 0))
         items = review_items(sensor, pic, r.candidates, r.discarded, r.unexplained, truth.dirs,
                              float("inf"))
         stretches = watch_stretches(sensor, pic, r.unexplained)
+        duration = float(r.candidates.get("processed_duration_s") or 0.0)
+        footage_s += duration
         cams[sensor] = {"by_direction": score_camera(truth.crossings[sensor], items, stretches,
                                                      truth.dirs),
                         "check_items": len(items),
-                        "watch_s": round(sum(s["end"] - s["start"] for s in stretches), 1)}
+                        "watch_s": round(sum(s["end"] - s["start"] for s in stretches), 1),
+                        "footage_s": duration, "static": static_objects(r, items)}
     notes += [f"{c}: no recorded detections, not scored" for c in truth.crossings if c not in cams]
-    return {"clip": run_dir.name, "video": str(video),
+    minutes, how = review_minutes(run_dir, sum(c["check_items"] for c in cams.values()))
+    return {"clip": run_dir.name, "video": str(video), "variant": variant,
+            "detector": detector_of(run_dir, variant),
             "truth": {"kind": truth.kind, "source": truth.source, "independent": truth.independent,
                       "partial": truth.kind != HAND and truth.kind.startswith(HAND),
                       "dirs": truth.dirs, "notes": truth.notes},
-            "cameras": cams, "notes": notes}
+            "cameras": cams, "footage_s": round(footage_s, 1),
+            "review_minutes": minutes, "review_minutes_how": how, "notes": notes}
 
 
 def totals(clips: list[dict[str, Any]], independent_only: bool) -> dict[str, Any]:
@@ -338,22 +418,39 @@ def totals(clips: list[dict[str, Any]], independent_only: bool) -> dict[str, Any
     tool counted in the unwatched part would look wrong."""
     by_dir: dict[str, dict[str, Any]] = {}
     check_items, watch_s, n = 0, 0.0, 0
+    footage_s, minutes, static_tracks, static_items = 0.0, 0.0, 0, 0
     for clip in clips:
         t = clip["truth"]
         if t.get("partial") or (independent_only and not t["independent"]):
             continue
         n += 1
+        minutes += float(clip.get("review_minutes") or 0.0)
         for cam in clip["cameras"].values():
             check_items += cam["check_items"]
             watch_s += cam["watch_s"]
+            footage_s += float(cam.get("footage_s") or 0.0)
+            static_tracks += int((cam.get("static") or {}).get("tracks", 0))
+            static_items += int((cam.get("static") or {}).get("items", 0))
             for d, counts in cam["by_direction"].items():
                 acc = by_dir.setdefault(d, dict.fromkeys(FIELDS, 0))
                 for k in FIELDS:
                     acc[k] += counts[k]
     for acc in by_dir.values():
         acc.update(rates(acc))
+    hours = footage_s / 3600
+
+    def per_hour(x: float) -> float | None:
+        return round(x / hours, 1) if hours else None
+
+    # what the service costs to run: this decides whether a clip can be validated at all
     return {"clips": n, "by_direction": by_dir, "check_items": check_items,
-            "watch_s": round(watch_s, 1)}
+            "watch_s": round(watch_s, 1), "camera_hours": round(hours, 2),
+            "review_minutes": round(minutes, 1),
+            "items_per_camera_hour": per_hour(check_items),
+            "review_minutes_per_camera_hour": per_hour(minutes),
+            "watch_share_pct": round(100.0 * watch_s / footage_s, 1) if footage_s else None,
+            "static_tracks": static_tracks, "static_items": static_items,
+            "static_items_per_camera_hour": per_hour(static_items)}
 
 
 def settings() -> dict[str, Any]:

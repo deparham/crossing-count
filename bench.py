@@ -25,8 +25,16 @@ from pathlib import Path
 from typing import Any
 
 from crossing_count import paths
-from crossing_count.bench import BenchError, bench_clip, benchmark_runs, settings, totals
+from crossing_count.bench import (
+    BenchError,
+    bench_clip,
+    benchmark_runs,
+    settings,
+    totals,
+    variants,
+)
 from crossing_count.config import ConfigError
+from crossing_count.evaluate import MIN_SAMPLE
 from crossing_count.util import default_run_dir, write_json_atomic
 
 
@@ -39,9 +47,21 @@ def _dur(s: float) -> str:
     return f"{s // 60} min {s % 60} s" if s >= 60 else f"{s} s"
 
 
+def said_detector(d: dict[str, Any]) -> str:
+    if not d:
+        return "unknown detector"
+    bits = [str(d.get("backbone") or "?"), str(d.get("model") or "")]
+    if d.get("mode"):
+        bits.append(str(d["mode"]))
+    if d.get("weights_sha256"):
+        bits.append(f"weights {str(d['weights_sha256'])[:12]}")
+    return " ".join(b for b in bits if b)
+
+
 def show_clip(c: dict[str, Any]) -> None:
     t = c["truth"]
     print(f"\n{c['clip']}\n  truth: {t['kind']} ({t['source']})")
+    print(f"  detector: {said_detector(c.get('detector') or {})}")
     if t["partial"]:
         print("  (a hand count of part of the footage: shown here, left out of the totals)")
     elif not t["independent"]:
@@ -76,6 +96,16 @@ def show_totals(title: str, tot: dict[str, Any]) -> None:
               f"wrong direction {n['wrong_direction']}, nobody {n['false']}.")
     print(f"  Work: {tot['check_items']} Y/N questions, {_dur(tot['watch_s'])} of movement "
           f"to watch.")
+    if tot.get("camera_hours"):
+        print(f"  Per camera-hour of footage ({tot['camera_hours']} h): "
+              f"{tot['items_per_camera_hour']} questions, "
+              f"{tot['review_minutes_per_camera_hour']} minutes of checking, "
+              f"{tot['watch_share_pct']}% of the footage left as movement to watch.")
+    if tot.get("static_tracks"):
+        print(f"  Things, not people: {tot['static_tracks']} track(s) that never moved "
+              f"(mannequins, racks, posters) made {tot['static_items']} question(s), "
+              f"{tot['static_items_per_camera_hour']} per camera-hour. A camera surrounded by "
+              f"them needs an exclusion zone.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -83,6 +113,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("videos", nargs="*", type=Path)
     ap.add_argument("--allow-config-change", action="store_true",
                     help="score cameras whose drawing changed since the count ran (on a copy)")
+    ap.add_argument("--detector", action="append", metavar="SET", dest="detectors",
+                    help="which recorded detection set to score: derotated (the default, YOLO),\n"
+                         "naive, rfdetr-derotated, ... Repeat to compare detectors on the same "
+                         "clips")
+    ap.add_argument("--all-detectors", action="store_true",
+                    help="score every recorded detection set found, and compare them")
     args = ap.parse_args(argv)
     root = paths.data_root()
     jobs: list[tuple[Path, Path | None]]
@@ -95,31 +131,68 @@ def main(argv: list[str] | None = None) -> int:
         print("No clip has a finished count by a person yet. Count one by hand in the wizard "
               "(Manual), or check an automatic count, then run this again.")
         return 2
+    wanted = args.detectors or (sorted({v for d, _ in jobs for v in variants(d)})
+                                if args.all_detectors else ["derotated"])
+    by_set: dict[str, dict[str, Any]] = {}
     clips, skipped = [], []
-    for run_dir, video in jobs:
-        try:
-            clips.append(bench_clip(run_dir, video, args.allow_config_change))
-        except (BenchError, ConfigError) as e:
-            hint = " (or pass --allow-config-change)" if isinstance(e, ConfigError) else ""
-            skipped.append(f"{run_dir.name}: {e}{hint}")
-    for c in clips:
-        show_clip(c)
-    hand, every = totals(clips, independent_only=True), totals(clips, independent_only=False)
-    if hand["clips"]:
-        show_totals("Crossing recall on hand counts", hand)
-    else:
-        print("\nNo full hand count among these clips, so crossing recall cannot be measured: "
-              "count one clip by hand in the wizard (Manual) to get it.")
-    show_totals("All clips", every)
+    for variant in wanted or ["derotated"]:
+        got: list[dict[str, Any]] = []
+        for run_dir, video in jobs:
+            try:
+                got.append(bench_clip(run_dir, video, args.allow_config_change, variant))
+            except (BenchError, ConfigError) as e:
+                hint = " (or pass --allow-config-change)" if isinstance(e, ConfigError) else ""
+                skipped.append(f"{run_dir.name} [{variant}]: {e}{hint}")
+        clips += got
+        for c in got:
+            show_clip(c)
+        hand, every = totals(got, independent_only=True), totals(got, independent_only=False)
+        if hand["clips"]:
+            show_totals(f"Crossing recall on hand counts [{variant}]", hand)
+        else:
+            print(f"\nNo full hand count among these clips [{variant}], so crossing recall cannot "
+                  f"be measured: count one clip by hand in the wizard (Manual) to get it.")
+        show_totals(f"All clips [{variant}]", every)
+        by_set[variant] = {"hand_counts": hand, "all": every,
+                           "detector": next((c["detector"] for c in got if c.get("detector")), {})}
+    if len(by_set) > 1:
+        compare(by_set)
     for s in skipped:
         print(f"skipped {s}")
     out = root / "bench" / f"{datetime.now().astimezone():%Y%m%d-%H%M%S}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     write_json_atomic(out, {"made_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                             "settings": settings(), "clips": clips, "skipped": skipped,
-                            "totals": {"hand_counts": hand, "all": every}})
+                            "detectors": {k: v["detector"] for k, v in by_set.items()},
+                            "totals": {k: {"hand_counts": v["hand_counts"], "all": v["all"]}
+                                       for k, v in by_set.items()}})
     print(f"\nSaved {out}")
     return 0 if clips else 1
+
+
+def compare(by_set: dict[str, dict[str, Any]]) -> None:
+    """Detectors side by side on the same clips, at crossing level. No winner is declared
+    here: with few crossings the difference means nothing, and it says so."""
+    print("\nDetectors on the same clips (crossing level, hand counts only)")
+    print(f"  {'detection set':<22}{'verified':>9}{'counted':>9}{'recall':>8}{'precision':>11}"
+          f"{'questions/h':>13}{'static/h':>10}")
+    enough = True
+    for name, v in by_set.items():
+        tot = v["hand_counts"]
+        n = sum(x["verified"] for x in tot["by_direction"].values()) if tot["by_direction"] else 0
+        counted = sum(x["counted_real"] for x in tot["by_direction"].values())
+        recall = _pct(round(100.0 * counted / n, 1)) if n else "–"
+        prec = sum(x["counted"] for x in tot["by_direction"].values())
+        enough = enough and n >= MIN_SAMPLE
+        print(f"  {name:<22}{n:>9}{counted:>9}{recall:>8}"
+              f"{_pct(round(100.0 * counted / prec, 1)) if prec else '–':>11}"
+              f"{tot.get('items_per_camera_hour') or '–'!s:>13}"
+              f"{tot.get('static_items_per_camera_hour') or '–'!s:>10}")
+    if not enough:
+        print(f"  Too few verified crossings to tell these apart (at least {MIN_SAMPLE} per "
+              f"detection set, on clips counted fully by hand). These are counts, not a result.")
+    for name, v in by_set.items():
+        print(f"  {name}: {said_detector(v['detector'])}")
 
 
 if __name__ == "__main__":

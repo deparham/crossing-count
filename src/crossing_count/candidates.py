@@ -35,12 +35,12 @@ from . import video as vid
 from .config import BoundGeometry, ConfigError, SiteConfig, bind, load_config
 from .crossing import IN, OUT, find_crossings
 from .detector import (
+    Backbone,
     DerotatedDetector,
     Detection,
     Detector,
     NaiveDetector,
-    load_model,
-    pick_device,
+    YoloBackbone,
     tracking_region,
 )
 from .gating import camera_dir
@@ -98,6 +98,7 @@ class DetectOptions:
     track_new: float = 0.2  # ByteTrack: a new track needs at least this confidence
     assoc_box: str = "full"  # "full" person boxes, or "compact" lower-body boxes
     record: bool = False  # keep every frame's detections, so tracking can be re-run fast
+    backbone: str = "yolo"  # which detector finds the people: yolo, or rfdetr (detector.py)
 
     def tracker_kw(self) -> dict[str, Any]:
         return {"high": self.track_high, "low": self.track_low, "new": self.track_new,
@@ -114,7 +115,7 @@ class RecordingDetector:
         self.inner = inner
         self.name = inner.name
         self.frames: dict[float, list[Detection]] = {}
-        for attr in ("crop_px", "imgsz", "device", "specs"):
+        for attr in ("crop_px", "imgsz", "device", "specs", "backbone"):
             if hasattr(inner, attr):
                 setattr(self, attr, getattr(inner, attr))
 
@@ -153,22 +154,29 @@ class ReplayDetector:
         data = pickle.loads(path.read_bytes())
         self.frames: dict[float, list[Detection]] = data["frames"]
         self.name = f"replay:{data['mode']}:{data['model']}"
+        # what produced these detections: kept so a replay says which detector it replays
+        self.recorded: dict[str, Any] = dict(data.get("detector") or {})
 
     def detect(self, frames: Any, times: Any) -> list[list[Detection]]:
         return [list(self.frames.get(round(float(t), 3), [])) for t in times]
 
 
-def yolo_factory(opts: DetectOptions) -> DetectorFactory:
-    model = load_model(opts.model)
-    device = pick_device(opts.device)
+def backbone_factory(opts: DetectOptions, backbone: Backbone | None = None) -> DetectorFactory:
+    """The crop pipeline (naive or de-rotated) over a detector backbone. The pipeline is the
+    same whichever backbone runs, so a comparison changes only the detector."""
+    box = backbone if backbone is not None else YoloBackbone(opts.model, opts.device)
 
     def make(cfg: SiteConfig, geom: BoundGeometry, tile: Tile,
              region: NDArray[np.uint8]) -> Detector:
         cls = DerotatedDetector if opts.mode == "derotated" else NaiveDetector
-        det: Detector = cls(model, geom, tile, region, device, conf=opts.conf)
+        det: Detector = cls(box, geom, tile, region, conf=opts.conf)
         return RecordingDetector(det) if opts.record else det
 
     return make
+
+
+def yolo_factory(opts: DetectOptions) -> DetectorFactory:
+    return backbone_factory(opts)
 
 
 def replay_factory(run_dir: Path, mode: str = "derotated") -> DetectorFactory:
@@ -714,9 +722,6 @@ def run_detect(
             cfg.stitch_gap_max_s, 0.08 * tile.height, JUMP_BASE_FRAC * tile.height,
             MAX_SPEED_FRAC * tile.height, progress, opts.tracker_kw())
         wall = time.monotonic() - wall0
-        recorded = None
-        if isinstance(detector, RecordingDetector):
-            recorded = {"model": opts.model, "mode": detector.name, "frames": detector.frames}
         det_meta: dict[str, Any] = {"mode": detector.name, "model": opts.model, "conf": opts.conf,
                                     "det_fps": opts.det_fps, "tracker": opts.tracker_kw()}
         for attr in ("crop_px", "imgsz", "device"):
@@ -725,6 +730,14 @@ def run_detect(
         if hasattr(detector, "specs"):
             det_meta["crops_per_frame"] = len(detector.specs)
         det_meta["static_objects_ignored"] = n_static
+        # which detector, which weights: a score means nothing without them
+        box = getattr(detector, "backbone", None)
+        det_meta.update(box.about() if box is not None else
+                        getattr(detector, "recorded", {}) or {"backbone": detector.name})
+        recorded = None
+        if isinstance(detector, RecordingDetector):
+            recorded = {"model": opts.model, "mode": detector.name, "detector": det_meta,
+                        "frames": detector.frames}
         meta = {
             "video": {"filename": info.filename, "fingerprint": info.fingerprint},
             "config": {"path": cfg.source, "sha256": cfg.sha256, "site": cfg.site,

@@ -752,6 +752,39 @@ upright, then maps results back to the video's own pixels; the frame is never
 dewarped. `--naive` runs the detector on the raw picture instead, and
 `--compare` runs both on the same clip and prints them side by side.
 
+**Which detector finds the people.** The crops, the foot point, the
+static-object filter, the tracking and the counting rule are the same whichever
+detector runs: a detector is only "pictures in, boxes and scores out"
+(`Backbone` in `detector.py`), so a comparison changes one thing only.
+
+| `--detector` | What it is | Licence |
+|---|---|---|
+| `yolo` (default) | Ultralytics YOLO11, `models/yolo11s.pt` | AGPL-3.0 |
+| `rfdetr` | RF-DETR Large, 704×704, `models/rf-detr-large-2026.pth` | Apache-2.0 |
+
+RF-DETR is an optional dependency group, so it never enters the app's bundle
+until it has won a comparison:
+
+```bash
+uv sync --group detectors
+curl -L -o models/rf-detr-large-2026.pth https://storage.googleapis.com/rfdetr/rf-detr-large-2026.pth
+```
+
+(SHA-256 `0f4e20e19a99c0f8a62b5685f57f6c8b5c371c59081feda6752a0561a79ccf38`,
+130 MB. The XL and 2XL variants need the `rfdetr[plus]` extension and are
+licensed PML 1.0, so they are not used.)
+
+Each detector writes to its own folder (`<camera>/rfdetr-derotated/`), so one
+clip can hold several recorded sets, and `uv run bench.py --all-detectors`
+scores them side by side at crossing level. Every recorded set names the
+detector, its weights' SHA-256, the picture size and the threshold, and a
+gold-set score refuses to run over clips whose counts used different detectors.
+
+Measured on this Mac (MPS), per picture: YOLO 60 ms at 640 px and 10 ms on a
+320 px crop; RF-DETR 67 ms at its own 704 px. So RF-DETR costs about the same
+on whole pictures, and about six times more inside the de-rotated pipeline,
+which asks for roughly twenty crops a frame.
+
 Anything detected in the people-free median frame (clothing racks, mannequins)
 is treated as static and ignored when later detections match it closely.
 
@@ -766,7 +799,9 @@ mkdir -p models && curl -L -o models/yolo11s.pt https://github.com/ultralytics/a
 
 Ultralytics is forced offline and its usage analytics are switched off. Its
 licence is AGPL-3.0, which is fine for internal use; distributing this tool
-would need Ultralytics' commercial licence.
+would need Ultralytics' commercial licence. RF-DETR is Apache-2.0, so if it
+ever matches YOLO on the gold set, switching would remove that question
+altogether — which is a better reason to compare them than accuracy alone.
 
 ## 4. See the proposed numbers
 
