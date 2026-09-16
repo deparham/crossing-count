@@ -77,6 +77,32 @@ def quote(truth: int, system: int | None) -> dict[str, Any]:
             "reason": reason}
 
 
+def window_headline(system_name: str, people: str, system: int, truth: int, unsure: int = 0,
+                    when: str = "") -> str:
+    """The result in one sentence, for someone who reads nothing else: which way the system
+    was wrong, by how many people, and a percentage only on enough crossings (quote). Unclear
+    crossings give a span: none of them real, or all of them."""
+    lo, hi = int(system) - (int(truth) + unsure), int(system) - int(truth)
+    if not unsure:
+        said = (f"counted the same number of {people} as were verified ({truth})" if hi == 0 else
+                f"counted {abs(hi)} {'fewer' if hi < 0 else 'more'} {people} than were verified "
+                f"({system} against {truth})")
+    else:
+        span = (f"up to {-lo} fewer" if hi == 0 else f"up to {hi} more" if lo == 0
+                else f"between {-hi} and {-lo} fewer" if hi < 0
+                else f"between {lo} and {hi} more" if lo > 0
+                else f"between {-lo} fewer and {hi} more")
+        said = (f"counted {span} {people} than were verified ({system} against {truth}, and "
+                f"{unsure} more that were unclear)")
+    if truth < MIN_VERIFIED_FOR_PCT:
+        said += "; too few crossings for a percentage"
+    elif unsure:
+        said += f": {100 * lo / (truth + unsure):+.1f}% to {100 * hi / truth:+.1f}%"
+    elif hi:
+        said += f": {'an undercount' if hi < 0 else 'an overcount'} of {100 * abs(hi) / truth:.1f}%"
+    return f"{when}{system_name} {said}."
+
+
 def metrics(rows: Sequence[Row]) -> dict[str, Any]:
     """Count error measures over some intervals (one direction, or both summed)."""
     errs = [int(r["system"]) - int(r["truth"]) for r in rows]

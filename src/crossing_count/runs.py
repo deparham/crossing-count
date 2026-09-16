@@ -13,7 +13,9 @@ four characters keep IDs from different computers of a team apart), and writes a
     intervals.csv    verified against the system, interval by interval
     crossings.csv    every verified crossing (and every unsure one, marked not counted)
     decisions.json   the validation's own decision log
-    <report>.pptx    the report as it was made
+    <report>.pptx    the report, and the same as <report>.pdf, with the validation ID on
+                     page 1 (rendered again from what the draft said; a draft made before
+                     reports kept that is copied as it was made)
 
 The files are made read-only and verify() checks them against the manifest. The wizard
 refuses any change to a finalised validation: a correction is a new version, finalised
@@ -37,6 +39,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import auditlog, evaluate, provenance, validation
+from .report_pdf import build_pdf
+from .report_pptx import build_report
 
 if TYPE_CHECKING:
     from .wizard import Wizard
@@ -92,6 +96,20 @@ def _csv(rows: list[list[Any]]) -> str:
     return buf.getvalue()
 
 
+def _final_report(made: dict[str, Any], report: Path, folder: Path, vid: str) -> None:
+    """The draft report again, from the data it was made with, now saying its validation ID."""
+    try:
+        kept = json.loads(Path(str(made.get("data") or "")).read_text(encoding="utf-8"))
+        data = dict(kept["data"])
+    except (OSError, ValueError, KeyError, TypeError):
+        shutil.copy2(report, folder / report.name)  # made before reports kept their data
+        return
+    data["identity"] = {**(data.get("identity") or {}), "validation_id": vid}
+    logo = Path(kept["logo"]) if kept.get("logo") else None
+    build_report(data, folder / report.name, logo)
+    build_pdf(data, folder / report.with_suffix(".pdf").name, logo)
+
+
 def write(w: Wizard, root: Path, shared: Path | None = None) -> dict[str, Any]:
     """Finalise: the run's folder, its files and manifest, read-only. Returns its summary."""
     from .wizard import TWIN_WINDOW_S
@@ -121,7 +139,7 @@ def write(w: Wizard, root: Path, shared: Path | None = None) -> dict[str, Any]:
     put("crossings.csv", _csv([["validation_id", "clock", "seconds", "camera", "direction",
                                 "people", "how_found", "status"], *counted, *unsure]))
     put("decisions.json", json.dumps(st.get("decisions", []), indent=2, ensure_ascii=False))
-    shutil.copy2(report, folder / report.name)
+    _final_report(st.get("report") or {}, report, folder, vid)
     for p in sorted(folder.iterdir()):
         files[p.name] = provenance.file_sha256(p)
     geometry = w.geometry()

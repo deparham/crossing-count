@@ -2,7 +2,8 @@
 
 Where CrossingCount stands as a thing a customer pays for and a vendor may argue with.
 Status is one of **Done**, **Partly**, **Not started**, or **Blocked on data**. Evidence is
-a test name, a file or a measurement — never an assertion. Written 16 September 2026.
+a test name, a file or a measurement — never an assertion. Written 16 September 2026,
+updated 17 September 2026.
 
 Blocked on data means the code is there and the number cannot exist yet: it needs clips
 counted by hand, which costs annotation hours, not programming.
@@ -50,7 +51,7 @@ counted by hand, which costs annotation hours, not programming.
 | Tamper-evident audit log | **Done** | `auditlog.py` hash chain; `tests/test_runs.py::test_the_audit_log_shows_any_edit` | — |
 | Manifests say what was compared with what | **Done** | `runs.write`: software, hardware, footage checksum, lines, correspondence, sampling, detector and weights | — |
 | Which detector produced every number | **Done** | `detector.py` backbones; `candidates.json` → `detector`; `gold.evaluate` refuses mixed detectors; `tests/test_detectors.py` | — |
-| Typed, validated state files with migrations | **Not started** | State is dicts tagged `wizard/1`, upgraded by filling defaults | Phase G: typed models for wizard state, gold clips and manifests; explicit migrations; a clear message naming the file and the problem |
+| Typed, validated state files with migrations | **Partly** | `wizard/schema.py`: a wizard state file is checked on opening (JSON, required fields, fingerprint, schema version) and an older one migrated without losing a field; the message names the file and the problem; `tests/test_schema.py` | Gold clips and manifests are still checked field by field where they are read, not against a schema |
 
 ## 5. The service
 
@@ -60,13 +61,13 @@ counted by hand, which costs annotation hours, not programming.
 | Things that never move counted separately | **Done** | `bench.static_objects`; `tests/test_detectors.py` | — |
 | Detector comparison | **Done, inconclusive** | README "What the first comparison found": RF-DETR de-rotated reports ~57 people a frame where 11–13 are in view and runs at 0.1× real time; RF-DETR naive is faster than YOLO de-rotated | No winner without hand-counted clips; RF-DETR's duplicate merging needs its own thresholds before it is comparable in the de-rotated pipeline |
 | One way to count, one way to check, one way to score | **Done** | Legacy `count.py`, `review.py`, `export.py` and their pages deleted; `bench.py` and `gold.py` share `evaluate.match` | — |
-| A report a non-technical buyer can read | **Partly** | PowerPoint with scope, sample size, per-level error, checks and method | Phase H: a PDF beside it, and page 1 led by the result in plain language with the validation ID, sampling mode, dataset and spec versions |
+| A report a non-technical buyer can read | **Done** | PowerPoint and PDF from the same data (`report_pptx.py`, `report_pdf.py`); page 1 opens with the result in words, then the sample it rests on, the caveats (store totals, marked footage, lines drawn by eye), and the validation ID, sampling mode, specification, gold set and footage; a finalised report carries its ID; `tests/test_report_pdf.py`, `tests/test_runs.py::test_a_finalised_validation_is_kept_and_locked` | Not yet read by a buyer: the wording is untested on the people it is for |
 
 ## 6. Running it
 
 | Item | Status | Evidence | Remaining |
 |---|---|---|---|
-| Lint, types and tests on every change | **Done** | `.github/workflows/checks.yml`; 261 tests | — |
+| Lint, types and tests on every change | **Done** | `.github/workflows/checks.yml`; 273 tests | — |
 | Dependencies checked for known vulnerabilities | **Done** | `pip-audit` job; none found on 16 Sep 2026 across 307 packages | — |
 | One formatting standard, enforced | **Not started** | `ruff format --check` would rewrite 87 of 108 files | A one-off reformat commit, then add the check |
 | Signed installers | **Partly** | Signing wired into the Windows build; publisher metadata; SHA-256 in release notes; `docs/INSTALL_WINDOWS.md` | Needs a certificate (about US$10 a month for Azure Trusted Signing); until then both systems warn |
@@ -85,5 +86,5 @@ Not ready: **nothing has been counted by hand in full**, so the automatic counte
 is unknown and no percentage has an uncertainty range behind it. That is the one thing no
 amount of code fixes, and everything in section 3 marked *blocked on data* waits on it.
 
-Also outstanding: typed state files (section 4), a buyer's report in PDF (section 5),
-automatic deletion of old footage-derived data (section 6), and a code-signing certificate.
+Also outstanding: schemas for gold clips and manifests (section 4), automatic deletion of
+old footage-derived data (section 6), and a code-signing certificate.

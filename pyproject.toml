@@ -16,6 +16,7 @@ dependencies = [
     "keyring>=25.7.0",
     "tzdata>=2026.4",
     "pywebview>=6.2.1",
+    "reportlab>=4.2",
 ]
 
 [dependency-groups]

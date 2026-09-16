@@ -41,6 +41,7 @@ from ..config import ConfigError, bind, load_config
 from ..export import INTERVAL_MIN, sensor_accuracy
 from ..gating import camera_dir
 from ..manual import intervals_for, merge_ranges, unwatched_ranges
+from ..report_pdf import build_pdf
 from ..report_pptx import build_report
 from ..util import default_run_dir, fmt_hms, same_store, write_json_atomic
 from ..version import app_version
@@ -55,6 +56,7 @@ from .items import (
     MAX_GROUP,
     MIN_WATCHED_PCT,
     MODELS,
+    PEOPLE,
     RULE_CHOICES,
     SMALL_MODELS,
     TWIN_WINDOW_S,
@@ -1059,6 +1061,8 @@ class Wizard:
         if report.get("path") and Path(report["path"]).is_file():
             kept = folder / f"{stem}.pptx"
             shutil.copy2(report["path"], kept)
+        if report.get("pdf") and Path(report["pdf"]).is_file():  # the same report, kept alike
+            shutil.copy2(report["pdf"], folder / f"{stem}.pdf")
         c = self.counts()
         out = folder / f"{stem}.json"
         write_json_atomic(out, {**self.state, "archived_at": _now(), "archive_reason": reason,
@@ -1141,6 +1145,21 @@ class Wizard:
                 "detector": det, "video_s": round(video_s, 1),
                 "processing_s": round(took, 1) if took else None,
                 "realtime_x": round(video_s / took, 2) if took else None}
+
+    def _gold_version(self) -> str:
+        """The gold set's frozen version as it stands (gold.py): the clips the detector's own
+        accuracy is measured on. Not the ground truth of this validation, which is its own."""
+        from .. import gold  # gold.py uses the wizard's constants: imported only when needed
+
+        try:
+            now = gold.manifest(self.root)
+        except (OSError, ValueError, KeyError) as exc:
+            return f"could not be read ({exc})"
+        if not now["clips"]:
+            return "none yet"
+        version = gold.version_of(now, self.root)
+        return (f"{version}, {len(now['clips'])} clips" if version != "unreleased" else
+                f"changed since its last frozen version ({len(now['clips'])} clips)")
 
     def _made_with(self) -> str:
         """Which detector and build proposed the crossings, and how long that took."""
@@ -1712,7 +1731,33 @@ class Wizard:
                       "it shows how close the sensor came, not how well the automatic counter "
                       "did.")
         method.append(f"Report made with CrossingCount {app_version()}, {__copyright__}.")
+        # page 1, for someone who reads nothing else: the result in people and which way,
+        # what it rests on, and what could not be known. The method above stays as it is.
+        opening = sampling.when(st.get("sampling"), f"{start:%H:%M} to {end:%H:%M} on "
+                                f"{start:%d/%m/%Y}" if start and end else "")
+        headline = [] if c["incomplete"] else [  # when and where once, on the first sentence
+            validation.window_headline(system, PEOPLE[d], int(st["sensor"][d]), c["verified"][d],
+                                       c["unsure"][d], "" if k else opening)
+            for k, d in enumerate(d for d in self.dirs() if st["sensor"].get(d) is not None)]
+        caveats = list(dict.fromkeys((st.get("sensor_source") or {}).get("warnings") or []))
+        if not foot["clean"]:
+            caveats.append(f"Not independent of {system}: the footage shows its own tracks and "
+                           f"counts ({'; '.join(foot['why_marked'])}).")
+        if lines and min(x["strength"] for x in lines.values()) < 2:
+            caveats.append(f"A counting line was drawn by eye: part of any difference from "
+                           f"{system} may be where the line is, not the sensor.")
+        identity = {
+            "validation_id": (st.get("final") or {}).get("id"),
+            "sampling": sampling.label(st.get("sampling")),
+            "specification": f"Ground Truth Specification v{spec}",
+            "gold_set": self._gold_version(),
+            "footage": ("clean: no RetailNext marks" + (", checked in the picture"
+                                                       if foot["checked_in_picture"] else "")
+                        + f"; {foot['obtained_words']}") if foot["clean"]
+            else f"marked: {'; '.join(foot['why_marked'])}",
+        }
         return {
+            "headline": headline, "identity": identity, "caveats": caveats,
             "count_label": "MANUAL COUNT" if self.manual() else "VERIFIED COUNT",
             "frames_title": ("VALIDATION FRAMES — BUSIEST MOMENT" if self.manual()
                              else "VALIDATION FRAMES — AUTOMATED DETECTION OVERLAY"),
@@ -1770,9 +1815,15 @@ class Wizard:
             words = f"{store['code']} {store['name']} camera validation {when}"
             out = self.dir / (re.sub(r"[^A-Za-z0-9 ._-]+", "-", words).strip() + ".pptx")
             build_report(data, out, logo)
-            self.state["report"] = {"path": str(out), "made_at": _now()}
+            pdf = build_pdf(data, out.with_suffix(".pdf"), logo)
+            # what the report says, kept: finalising renders it again with the validation's ID
+            kept = out.with_suffix(".report.json")
+            write_json_atomic(kept, {"logo": str(logo) if logo else None, "data": data})
+            self.state["report"] = {"path": str(out), "pdf": str(pdf), "data": str(kept),
+                                    "made_at": _now()}
             self.state["result"] = self.result()  # for putting validations together
             self._decide("report_made", after={"file": out.name,
-                                               "sha256": provenance.file_sha256(out)})
+                                               "sha256": provenance.file_sha256(out),
+                                               "pdf_sha256": provenance.file_sha256(pdf)})
             self._save()
             return out

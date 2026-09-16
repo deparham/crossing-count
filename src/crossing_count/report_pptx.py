@@ -2,9 +2,13 @@
 
 Page 1 follows the original: logo and date, "<store> <code> Traffic System",
 the CAMERA VALIDATION tag, the capture details, three cards (verified count,
-system count, accuracy) and a detection-overlay frame. The pages after it hold
-the details: how the count was made, every verified crossing with its time,
-and a close-up of each one. A4 portrait, like the PDF.
+system count, accuracy) and a detection-overlay frame. Before the cards it says
+the result in words (which way, by how many people); after them what the sample
+describes, what could not be known, and the record (validation ID, sampling,
+specification, gold set, footage). The frame moves to a page of its own when page
+1 has no room for it. The pages after it hold the details: how the count was made,
+every verified crossing with its time, and a close-up of each one. A4 portrait,
+like the PDF (report_pdf.py), which lays out the same data.
 """
 
 from __future__ import annotations
@@ -66,8 +70,9 @@ def _write(shape: Any, text: str, size: float, *, bold: bool = False, color: RGB
         tf.vertical_anchor = anchor
 
 
-def _lines(shape: Any, lines: list[str], size: float, color: RGBColor = NAVY) -> None:
-    """Paragraphs in a text box, the first one bold."""
+def _lines(shape: Any, lines: list[str], size: float, color: RGBColor = NAVY,
+           bold_all: bool | None = None) -> None:
+    """Paragraphs in a text box: the first one bold, or all or none of them (bold_all)."""
     tf = shape.text_frame
     tf.word_wrap = True
     for k, line in enumerate(lines):
@@ -76,7 +81,7 @@ def _lines(shape: Any, lines: list[str], size: float, color: RGBColor = NAVY) ->
         run = p.add_run()
         run.text = line
         run.font.size = Pt(size)
-        run.font.bold = k == 0
+        run.font.bold = k == 0 if bold_all is None else bold_all
         run.font.name = SANS
         run.font.color.rgb = color
 
@@ -134,6 +139,38 @@ def _value_size(value: str, base: float) -> float:
     return base if len(value) <= 5 else round(base * 5 / len(value), 1)
 
 
+IDENTITY = (("validation_id", "Validation ID"), ("sampling", "Sampling"),
+            ("specification", "Ground truth"), ("gold_set", "Gold data set"),
+            ("footage", "Footage"))
+
+
+def identity_rows(data: dict[str, Any]) -> list[tuple[str, str]]:
+    """What the result rests on, for page 1: a report made before finalising says it is a
+    draft, where the validation ID will be."""
+    ident = data.get("identity") or {}
+    if not ident:
+        return []
+    return [(name, str(ident[k]) if ident.get(k) is not None else
+             "draft: no ID until the validation is finalised" if k == "validation_id" else "–")
+            for k, name in IDENTITY]
+
+
+def card_value(r: dict[str, Any], complete: bool) -> tuple[str, str]:
+    """The third card of a direction: its accuracy, or on too few crossings the difference in
+    people, or INCOMPLETE."""
+    unsure, span = int(r.get("unsure") or 0), r.get("accuracy_range")
+    few = complete and r.get("rate") is False  # too few crossings for a percentage
+    if not complete:  # footage nobody watched may hold people missing from the count
+        value = "INCOMPLETE"
+    elif few:  # the difference in people, in the slot a percentage would take
+        value = f"{int(r['system']) - int(r['verified']):+d}".replace("-", "−")
+    elif unsure and span:
+        value = _pct(span[0]) if span[0] == span[1] else f"{_pct(span[0])[:-1]}–{_pct(span[1])}"
+    else:
+        value = _pct(r["accuracy"])
+    return ("DIFFERENCE" if few else "SENSOR ACCURACY"), value
+
+
 def _header(slide: Any, data: dict[str, Any], logo: Path | None) -> None:
     if logo is not None and logo.is_file():
         _picture(slide, str(logo), 0.52, 0.26, 2.0, 0.74)
@@ -151,7 +188,8 @@ def _footer(slide: Any) -> Any:
     return _box(slide, 4.6, 11.05, 3.04, 0.25)  # "Page k of N", written once all pages exist
 
 
-def _cover(slide: Any, data: dict[str, Any]) -> None:
+def _cover(slide: Any, data: dict[str, Any]) -> bool:
+    """Page 1. Returns whether the busiest moment's picture fitted on it."""
     title = f"{data['store_name']} {data['store_code']} Traffic System"
     size = 28.0 if len(title) <= 28 else max(17.0, 28.0 * 28 / len(title))  # stay on one line
     _write(_box(slide, 0.62, 1.27, 7.1, 0.6), title, size, bold=True, font=SERIF)
@@ -160,36 +198,32 @@ def _cover(slide: Any, data: dict[str, Any]) -> None:
     pill.text_frame.word_wrap = False
     _write(pill, "CAMERA VALIDATION", 10, bold=True, color=PILL_TEXT, align=PP_ALIGN.CENTER,
            spacing=1.6, anchor=MSO_ANCHOR.MIDDLE)
-    _write(_box(slide, 0.62, 2.52, 7.0, 0.5), data["store_code"], 24, bold=True)
     rows = data["directions"]
     captured = f"Captured {data['captured_date']} Cameras {data['location']} {data['time_range']}"
     if len(rows) == 1:
         captured += f"  ·  {rows[0]['label']}"
-    _write(_box(slide, 0.62, 3.08, 7.0, 0.35), captured, 14, color=GREY)
+    top = 3.70
+    if headline := data.get("headline") or []:  # the result in words leads, where the code was
+        height = 0.06 + 0.24 * sum(1 + len(t) // 80 for t in headline)
+        _lines(_box(slide, 0.53, 2.42, 7.2, height), headline, 13, bold_all=True)
+        _write(_box(slide, 0.62, 2.48 + height, 7.0, 0.3), captured, 12, color=GREY)
+        top = 2.48 + height + 0.45
+    else:
+        _write(_box(slide, 0.62, 2.52, 7.0, 0.5), data["store_code"], 24, bold=True)
+        _write(_box(slide, 0.62, 3.08, 7.0, 0.35), captured, 14, color=GREY)
 
     one = len(rows) == 1
     card_h = 1.49 if one else 1.08
-    top = 3.70
     kind = str(data.get("count_label", "VERIFIED COUNT")).split()[0]  # VERIFIED or MANUAL
     complete = bool(data.get("complete", True))
     for r in rows:
         tag = "" if one else f" {r['key'].upper()}"
         unsure = int(r.get("unsure") or 0)
-        span = r.get("accuracy_range")
-        few = complete and r.get("rate") is False  # too few crossings for a percentage
-        if not complete:  # footage nobody watched may hold people missing from the count
-            accuracy = "INCOMPLETE"
-        elif few:  # the difference in people, in the slot a percentage would take
-            accuracy = f"{int(r['system']) - int(r['verified']):+d}".replace("-", "−")
-        elif unsure and span:
-            accuracy = (_pct(span[0]) if span[0] == span[1]
-                        else f"{_pct(span[0])[:-1]}–{_pct(span[1])}")
-        else:
-            accuracy = _pct(r["accuracy"])
+        third, accuracy = card_value(r, complete)
         verified = f"{r['verified']}–{r['verified'] + unsure}" if unsure else str(r["verified"])
         cards = ((f"{kind}{tag or ' COUNT'}", verified),
                  (f"SYSTEM{tag or ' COUNT'}", str(r["system"])),
-                 (f"DIFFERENCE{tag}" if few else f"SENSOR ACCURACY{tag}", accuracy))
+                 (f"{third}{tag}", accuracy))
         for j, (label, value) in enumerate(cards):
             left, hi = 0.53 + j * 2.47, j == 2
             _panel(slide, left, top, 2.24, card_h, TEAL if hi else CARD_BG, shadow=True)
@@ -216,17 +250,39 @@ def _cover(slide: Any, data: dict[str, Any]) -> None:
         height = 0.08 + 0.18 * sum(1 + len(t) // 95 for t in said)
         _lines(_box(slide, 0.53, top - 0.04, 7.2, height), said, 10)
         top += height + 0.12
+    if caveats := data.get("caveats") or []:  # what could not be known, on the first page
+        height = 0.08 + 0.18 * sum(1 + len(t) // 90 for t in caveats)
+        _lines(_box(slide, 0.53, top - 0.04, 7.2, height), caveats, 10, color=WARN_TEXT,
+               bold_all=True)
+        top += height + 0.12
+    if ident := identity_rows(data):
+        record = [f"{name}: {value}" for name, value in ident]
+        height = 0.06 + 0.16 * sum(1 + len(t) // 110 for t in record)
+        _lines(_box(slide, 0.53, top - 0.04, 7.2, height), record, 9, color=GREY, bold_all=False)
+        top += height + 0.12
+    return _frame(slide, data, top)
 
+
+FRAME_MIN_H = 2.2  # inches: a smaller frame shows nothing; it gets a page of its own instead
+
+
+def _frame(slide: Any, data: dict[str, Any], top: float) -> bool:
+    """The busiest moment's picture below `top`, if there is room. Returns whether it is placed
+    (or there is none)."""
+    frame = data.get("frame")
+    if not frame or not Path(frame).is_file():
+        return True
+    img_top = top + 0.42
+    if TABLE_TOP_MAX - 0.3 - img_top < FRAME_MIN_H:
+        return False
     _write(_box(slide, 0.5, top, 7.27, 0.3),
            str(data.get("frames_title", "VALIDATION FRAMES — AUTOMATED DETECTION OVERLAY")),
            12, bold=True, align=PP_ALIGN.CENTER, spacing=2.5)
-    img_top = top + 0.42
-    frame = data.get("frame")
-    if frame and Path(frame).is_file():
-        _, h = _picture(slide, frame, 0.91, img_top, 6.45, TABLE_TOP_MAX - 0.3 - img_top)
-        if data.get("frame_caption"):
-            _write(_box(slide, 0.5, img_top + h + 0.06, 7.27, 0.25), data["frame_caption"], 9,
-                   color=GREY, align=PP_ALIGN.CENTER)
+    _, h = _picture(slide, frame, 0.91, img_top, 6.45, TABLE_TOP_MAX - 0.3 - img_top)
+    if data.get("frame_caption"):
+        _write(_box(slide, 0.5, img_top + h + 0.06, 7.27, 0.25), data["frame_caption"], 9,
+               color=GREY, align=PP_ALIGN.CENTER)
+    return True
 
 
 def _cell(cell: Any, text: str, *, header: bool = False, shade: bool = False) -> None:
@@ -443,9 +499,13 @@ def build_report(data: dict[str, Any], out: Path, logo: Path | None = None) -> P
         page_boxes.append(_footer(slide))
         return slide
 
-    _cover(new_page(), data)
+    fitted = _cover(new_page(), data)
     _breakdown(new_page, data)
     _details(new_page, data)
+    if not fitted:  # the first page is full: the picture before the snapshots, at full size
+        slide = new_page()
+        _write(_box(slide, 0.62, 1.27, 7.1, 0.5), "Validation frame", 24, bold=True, font=SERIF)
+        _frame(slide, data, 1.95)
     _snapshots(new_page, data)
     for k, box in enumerate(page_boxes, 1):
         _write(box, f"Page {k} of {len(page_boxes)}", 10, color=GREY, align=PP_ALIGN.RIGHT)

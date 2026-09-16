@@ -127,9 +127,18 @@ Videos are listed), with or without the sensor's marks, then choose how to count
 4. **RetailNext.** Enter the sensor's number.
 
 Both end with the **report**: an A4-portrait PowerPoint in the layout of iTOi's
-camera validation report. The first page has the count, the system count, the
-accuracy, and a picture of the busiest moment. The pages after it list every
-crossing with its time and show a snapshot of each one. The count is labelled
+camera validation report, and the same report as a PDF. The first page is written
+for someone who reads nothing else. It opens with the result in words, which way
+and by how many people ("In the busiest 15 minutes of 22/08/2026, RetailNext counted
+7 fewer people coming in than were verified (41 against 48): an undercount of
+14.6%"). Then come the count, the system count and the accuracy, what the sample
+describes and how much it rests on, and anything that could not be known (such as
+"RetailNext's numbers are the store's total"). Last is the record: the validation
+ID (a draft says it is a draft), the sampling mode, the Ground Truth Specification
+version, the gold data set's version, and whether the footage was clean or showed
+RetailNext's marks. A picture of the busiest moment follows on page 1 when there
+is room, otherwise on a page of its own. The pages after it keep the method as
+before, list every crossing with its time and show a snapshot of each one. The count is labelled
 VERIFIED COUNT (automatic, then checked by a person) or MANUAL COUNT. The logo
 comes from `assets/logo.png`.
 
@@ -232,7 +241,8 @@ height bubbles rather than heads. It is not used.
   every other file in the folder;
 - `result.json`, `intervals.csv` (verified against the system, interval by interval),
   `crossings.csv` (every verified crossing, and every unsure one marked not counted),
-  `decisions.json` and the report as it was made.
+  `decisions.json`, and the report as a PowerPoint and a PDF: rendered again from what
+  the draft said, with the validation ID on page 1.
 
 The files are read-only, and the **Validation runs** page (header) checks every one
 against its manifest each time it opens. A finalised validation refuses any change; to

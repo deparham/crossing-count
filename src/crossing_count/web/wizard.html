@@ -1502,8 +1502,10 @@ function showExamples(ex) {
     : `<span class="err">Learning examples not saved: ${esc(ex.error)}</span>`;
 }
 function madeHtml(path) {
-  const name = path.split(/[\\/]/).pop();
-  return `<div class="ok">Report saved.</div><div><a href="/api/report.pptx?k=${Date.now()}" download style="color:var(--accent)">Download ${esc(name)}</a></div>
+  const name = path.split(/[\\/]/).pop(), k = Date.now();
+  const pdf = W.st && W.st.report && W.st.report.pdf
+    ? ` · <a href="/api/report.pdf?k=${k}" download style="color:var(--accent)">PDF</a>` : "";
+  return `<div class="ok">Report saved.</div><div><a href="/api/report.pptx?k=${k}" download style="color:var(--accent)">Download ${esc(name)}</a>${pdf}</div>
     <div class="muted" style="font-size:12px;margin-top:4px">${esc(path)}</div><button id="reveal" style="margin-top:8px">Show the file</button>`;
 }
 $("make").addEventListener("click", async () => {

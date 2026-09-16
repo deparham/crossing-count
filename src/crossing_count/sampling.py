@@ -170,6 +170,34 @@ def _ordinal(n: Any) -> str:
     return "" if n == 1 else f"{n}{suffix} "
 
 
+def label(rec: Mapping[str, Any] | None) -> str:
+    """The sampling mode in a few words, for the record on a report's first page."""
+    if not rec:
+        return "chosen by hand, not by a sampling rule"
+    seed, role = rec.get("seed"), rec.get("role")
+    lv = validation.TRAFFIC_NAMES.get(str(rec.get("level")), "").lower()
+    return {"peak": f"peak: the {_ordinal(rec.get('rank'))}busiest {rec.get('length_min')} "
+                    f"minutes of the day, by the system's own count",
+            "control": f"control window of {lv}, drawn at random (seed {seed})",
+            "stratum": f"across traffic levels: this window {lv}, drawn at random (seed {seed})",
+            "random": f"at random (seed {seed})",
+            }.get(str(role), "chosen by hand from the day's windows")
+
+
+def when(rec: Mapping[str, Any] | None, period: str = "") -> str:
+    """Where a result sits in the trading day, to open its headline ("At peak trading on ...")."""
+    if not rec:
+        return f"From {period}, " if period else ""
+    day = _day(rec.get("day"))
+    lv = validation.TRAFFIC_NAMES.get(str(rec.get("level")), "").lower()
+    return {"peak": f"In the {_ordinal(rec.get('rank'))}busiest {rec.get('length_min')} minutes "
+                    f"of {day}, ",
+            "control": f"In a control window of {lv} on {day}, ",
+            "stratum": f"In a window of {lv} on {day}, ",
+            "random": f"In a window drawn at random on {day}, ",
+            }.get(str(rec.get("role")), f"In a window chosen by hand on {day}, ")
+
+
 def scope(rec: Mapping[str, Any] | None, period: str = "") -> str:
     """What the result describes, in plain words, for the report's first page."""
     if not rec:

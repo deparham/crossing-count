@@ -115,7 +115,9 @@ def test_hand_count_and_report(manual: Wizard, tmp_path: Path) -> None:
     assert c["verified"] == {"in": 2} and c["accuracy"]["in"]["accuracy_pct"] == 100.0
     assert c["status"] == "complete"
     pages = texts(manual.make_report())
-    assert "MANUAL COUNT" in pages[0] and "BUSIEST MOMENT" in pages[0]
+    assert "MANUAL COUNT" in pages[0] and "Validation ID: draft" in pages[0]
+    assert "RetailNext counted the same number of people coming in as were verified (2)" in pages[0]
+    assert "BUSIEST MOMENT" in pages[-2]  # page 1 is full: the picture has a page of its own
     assert "Counted by hand" in "\n".join(pages)
 
     examples = tmp_path / "shared"

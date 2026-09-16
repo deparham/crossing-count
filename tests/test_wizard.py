@@ -127,6 +127,10 @@ def test_count_check_and_report(two_tile_video: dict[str, Any], review_run_dir: 
     w.set_store(name="Lismore", code="SYN-1", report_date="25/08/2026")
     pages = texts(w.make_report())
     assert "Lismore SYN-1 Traffic System" in pages[0] and "VERIFIED COUNT" in pages[0]
+    # skipped movement leaves the validation incomplete: no result is put in words
+    assert "people coming in" not in pages[0] and "Validation incomplete" in pages[0]
+    assert "Validation ID: draft" in pages[0] and "Footage: clean" in pages[0]
+    assert Path(w.state["report"]["pdf"]).read_bytes().startswith(b"%PDF")
     assert "SYSTEM COUNT" in pages[0] and "ACCURACY" in pages[0] and "25/08/2026" in pages[0]
     assert f"Page 1 of {len(pages)}" in pages[0] and "Crossing details" in pages[1]
     assert "Detected, confirmed" in pages[1]
@@ -241,6 +245,7 @@ def test_a_check_is_logged_and_kept_when_the_count_runs_again(
     assert h["answers"] == len(rest) + 1 and h["verified"] == {"in": 1} and h["by"] == "Pat"
     kept = json.loads(Path(h["file"]).read_text())
     assert kept["answers"][first["id"]] == "yes" and Path(kept["report_copy"]).is_file()
+    assert Path(kept["report_copy"]).with_suffix(".pdf").is_file()
     assert w.state["decisions"][0]["kept"] == h["file"]
 
 
@@ -402,4 +407,7 @@ def test_wizard_page_api(two_tile_video: dict[str, Any], review_run_dir: Path,
     assert made.status_code == 200, made.text
     r = client.get("/api/report.pptx")
     assert r.status_code == 200 and r.headers["content-type"] == PPTX
+    r = client.get("/api/report.pdf")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/pdf"
+    assert r.content.startswith(b"%PDF")
     assert client.get("/video", headers={"Range": "bytes=0-9"}).status_code == 206

@@ -935,6 +935,14 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         path = Path(made["path"])
         return FileResponse(path, media_type=PPTX, filename=path.name)
 
+    @app.get("/api/report.pdf")
+    def report_pdf() -> FileResponse:
+        made = wiz().state.get("report")
+        if not made or not made.get("pdf") or not Path(made["pdf"]).is_file():
+            raise HTTPException(404, "No PDF report yet: make the report again.")
+        path = Path(made["pdf"])
+        return FileResponse(path, media_type="application/pdf", filename=path.name)
+
     @app.post("/api/reveal")
     def reveal() -> dict[str, bool]:
         made = wiz().state.get("report")

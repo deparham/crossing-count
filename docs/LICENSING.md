@@ -65,6 +65,7 @@ their transitive dependencies).
 | uvicorn | 0.52.4 | BSD-3-Clause | Free, attribution. |
 | pywebview | 6.2.1 | BSD-3-Clause | The app's own window. |
 | python-pptx | 1.0.2 | MIT | Writes the report. |
+| reportlab | 5.0.1 | BSD-3-Clause | Writes the report as a PDF (standard fonts only, none bundled). |
 | lxml | 6.1.3 | BSD-3-Clause | Through python-pptx. |
 | pillow | 12.3.0 | MIT-CMU | Through python-pptx. |
 | keyring | 25.7.0 | MIT | Keychain and Credential Manager. |

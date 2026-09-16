@@ -23,6 +23,7 @@ VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv", ".avi")
 DIRECTIONS = ("in", "out")
 CHOICES = {"in": ["in"], "out": ["out"], "both": ["in", "out"]}
 LABELS = {"in": "Traffic In", "out": "Traffic Out"}
+PEOPLE = {"in": "people coming in", "out": "people going out"}  # in a sentence
 # The detector's weights, best first: the wizard's default is MODELS[0]. YOLO26 sees more
 # people per frame than YOLO11 at the same speed on this footage (16 Sep 2026, CN-123
 # 11:30, two cameras); whether that counts better is not known until a clip is counted by

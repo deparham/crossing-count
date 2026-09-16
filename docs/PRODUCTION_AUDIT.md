@@ -27,7 +27,7 @@ the sensor's numbers and to export footage, with keys in the system credential s
 | Count by hand | wizard hand step (watched ranges from `manual.py`, per-camera counts, uncertain marks) | hand counts with coverage |
 | Persistence | JSON under `runs/<video>/` (`wizard/state.json`, `history/`), `settings.json`, credential store (keyring) | |
 | Sensor data | `retailnext.py` (locations, traffic per 15 minutes, busiest window, video export), wizard `use_retailnext` | sensor counts |
-| Reporting | `report_pptx.py` (customer PowerPoint), `runs.py` (CSV files of a finalised validation) | report |
+| Reporting | `report_pptx.py` (customer PowerPoint), `report_pdf.py` (the same as a PDF, from the same data), `runs.py` (CSV files of a finalised validation) | report |
 | Evaluation | `bench.py` (where verified crossings fall), `evaluate.py` + `gold.py` + `gold.html` (gold set, crossing-level scoring, experiment records) | scores |
 | Training | `heads.py`, `label.py`, `train_heads.py` (parked: no better than the current detector); `examples.py` (learning examples to a shared folder) | |
 | App shell | `wizard_app.py` (FastAPI), `window.py` (pywebview window), `app.py` (one executable), `updates.py` (git), `releases.py` + `builtin.py` (GitHub builds, self-update, built-in keys) | |
@@ -135,6 +135,7 @@ From the installed packages' own metadata (direct dependencies and notable other
 | fastapi / starlette / uvicorn | 0.141.1 / 1.6.0 / 0.52.4 | MIT / BSD-3 / BSD-3 | |
 | pydantic | 2.13.5 | MIT | |
 | python-pptx / lxml | 1.0.2 / 6.1.3 | MIT / BSD-3 | |
+| reportlab | 5.0.1 | BSD-3 | The PDF report |
 | keyring | 25.7.0 | MIT | |
 | pywebview / pyobjc | 6.2.1 / 12.2.2 | BSD-3 / MIT | Windows: Edge WebView2 runtime (Microsoft, redistributable) |
 | Pillow | 12.3.0 | MIT-CMU | |
