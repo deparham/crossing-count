@@ -44,6 +44,7 @@ from ..manual import intervals_for, merge_ranges, unwatched_ranges
 from ..report_pptx import build_report
 from ..util import default_run_dir, fmt_hms, same_store, write_json_atomic
 from ..version import app_version
+from . import schema
 from .items import (
     CHOICES,
     DIRECTIONS,
@@ -123,19 +124,20 @@ class Wizard:
         self._job: _Job | None = None
         info = vid.probe(self.video)
         self.fps = float(info.fps_reported or 0) or 10.0  # for stepping one frame at a time
+        self.filled_in: list[str] = []  # what an older state file did not have (schema.py)
+        self.state: dict[str, Any]
         if self.path.is_file():
-            state = json.loads(self.path.read_text(encoding="utf-8"))
-            if state.get("fingerprint") != info.fingerprint:
-                raise WizardError(f"{self.path} belongs to a different video with the same "
-                                  f"name; move that folder away to start again")
-            if state["job"]["status"] == "running":  # the app was closed during a count
-                state["job"].update(status="stopped", error="The count was interrupted.")
-            self.state: dict[str, Any] = state
+            try:
+                self.state, self.filled_in = schema.load_state(self.path, info.fingerprint)
+            except schema.StateError as exc:
+                raise WizardError(str(exc)) from None
+            if self.state["job"]["status"] == "running":  # the app was closed during a count
+                self.state["job"].update(status="stopped", error="The count was interrupted.")
         else:
             audit = vid.audit_timebase(self.video)
             interval = vid.parse_filename_interval(info.filename)
             self.state = {
-                "schema": "wizard/1", "video": str(self.video), "filename": info.filename,
+                "schema": schema.SCHEMA, "video": str(self.video), "filename": info.filename,
                 "fingerprint": info.fingerprint, "duration_s": round(audit.duration_s, 3),
                 "clock_start": interval.start if interval else None,
                 "clock_end": interval.end if interval else None,
@@ -147,15 +149,8 @@ class Wizard:
                 "answers": {}, "added": [], "watched": [], "watch": None, "report": None,
                 "version": 0, "created_at": _now(),
             }
+            schema.migrate(self.state)
             self._save()
-        for key, value in (("mode", None), ("marks", None), ("examples", None), ("people", {}),
-                           ("decisions", []), ("sensor_intervals", {}), ("sensor_cameras", {}),
-                           ("sensor_source", None), ("sampling", None),
-                           ("rules", {"children": "count", "staff": "count"}),
-                           ("manual", {"counts": [], "watched": {}, "positions": {},
-                                       "done": False, "next_id": 1})):
-            self.state.setdefault(key, value)
-        self.state["store"].setdefault("operator", "")
 
     def _save(self) -> None:
         self.state["version"] = int(self.state.get("version", 0)) + 1
