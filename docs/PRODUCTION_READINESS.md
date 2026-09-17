@@ -12,7 +12,7 @@ counted by hand, which costs annotation hours, not programming.
 
 | Item | Status | Evidence | Remaining |
 |---|---|---|---|
-| A written definition, versioned, recorded with every count | **Done** | `docs/GROUND_TRUTH_SPECIFICATION.md` v1.2; `specification` in each result and gold clip; `tests/test_gold.py`, `tests/test_runs.py` | — |
+| A written definition, versioned, recorded with every count | **Done** | `docs/GROUND_TRUTH_SPECIFICATION.md` v1.3; `specification` in each result and gold clip; `tests/test_gold.py`, `tests/test_runs.py` | — |
 | Rules for children and staff, set per validation to match the sensor | **Done** | Spec section 4; `Wizard.set_rules`; `tests/test_gold.py::test_what_counts_as_a_person_is_set_per_validation` | — |
 | Uncertain crossings marked, never counted, never scored | **Done** | Spec section 3; `tests/test_annotation.py` | — |
 | Corrections keep what was there before, with a reason | **Done** | `Wizard.manual_edit`; decision log and audit log; `tests/test_annotation.py` | — |
@@ -24,7 +24,8 @@ counted by hand, which costs annotation hours, not programming.
 | Counts made on clean footage, checked in the picture itself | **Done** | Spec section 10.1; `independence.py`; `tests/test_independence.py::test_what_the_picture_shows_beats_what_anyone_says` | — |
 | Automatic checks judged the same way as hand counts | **Done** | `Wizard.footage_marked`; `tests/test_independence.py::test_a_check_on_marked_footage_is_not_independent_either` | — |
 | Earlier results audited and reclassified | **Done** (code) | `independence.audit` / `reclassify`; runs page; `tests/test_independence.py::test_earlier_results_are_found_and_kept_out_of_the_comparison` | **Run it on this computer's own runs**: the Perri Cutten 392 check was made on marked footage and still counts as clean until the audit is run from the Validation runs page |
-| Gold clips refused unless clean; unproven ones provisional | **Done** | `gold.problems`, `gold.provisional`; `tests/test_independence.py::test_provisional_clips_are_kept_listed_and_left_out_of_scoring` | — |
+| Gold clips on marked footage kept apart from clean ones; unproven clean ones provisional | **Done** | `gold.tier`, `gold.evaluate` (by tier; test set clean only; a window counted both ways once), `gold.provisional`; `tests/test_gold.py::test_marked_clips_are_scored_apart_and_never_in_the_test_set`, `tests/test_independence.py::test_provisional_clips_are_kept_listed_and_left_out_of_scoring` | — |
+| How far RetailNext's marks sway a count | **Blocked on data** | `gold.marks_effect`: windows counted on clean and marked footage matched crossing by crossing, with the shift towards the system's number; `tests/test_gold.py::test_windows_counted_both_ways_show_how_far_the_marks_move_a_count` | Needs 5 windows counted both ways, ideally by different people |
 | The line is where the sensor counts | **Partly** | `correspondence.py`; calibrate-on-marked flow; `tests/test_independence.py` (calibrated vs by eye, alignment on real exports: same camera 0.62, different cameras below 0.1) | RetailNext's API exposes no line geometry, so the strongest route is unavailable; drawn-by-eye lines remain the weakest evidence and are labelled as such |
 | A camera is never silently the wrong camera | **Done** | `Setup._without_marks`; `Wizard.unconfirmed`; `tests/test_independence.py::test_a_camera_matched_by_its_name_alone_blocks_the_run` | — |
 

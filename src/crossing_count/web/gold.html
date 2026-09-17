@@ -65,12 +65,19 @@
   <div class="card">
     <div class="big">What the gold set is</div>
     <div class="muted">Clips a person counted by hand, watching every moment: every crossing was looked for, not only those the tool pointed at. The automatic counter is scored against them and never trained on them. Each store is in one set for good: <b>train</b> and <b>validation</b> (together, the development set) for measuring changes, <b>test</b> held back for a final check. A clip counted by two people keeps only the crossings both counted; the moments they disagree on are left out and listed.</div>
+    <div class="muted" style="margin-top:8px"><b>Clean and marked footage.</b> A count on footage showing RetailNext's own tracks and counts can lean towards RetailNext's answer. Such clips are kept as <b>marked</b>: scored in the development set but always shown apart from clean clips, never in the test set, and never in anything said about RetailNext's accuracy. A window counted both ways keeps both, and shows how far the marks sway a count.</div>
     <div class="sets" id="sets"></div>
   </div>
 
   <div class="card">
     <div class="big">Clips</div>
     <div class="scroll"><table id="clips"></table></div>
+  </div>
+
+  <div class="card">
+    <div class="big">Do RetailNext's marks sway a count?</div>
+    <div class="muted">Windows counted on clean footage and again on footage showing RetailNext's marks, ideally by different people or days apart. The two counts are matched crossing by crossing; where RetailNext's own number for the window is known, it shows whether the marked count moved towards it.</div>
+    <div id="effect" style="margin-top:8px"></div>
   </div>
 
   <div class="card">
@@ -91,6 +98,7 @@
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
       <button id="dev" class="primary">Score on the development set</button>
       <button id="test">Final check on the test set</button>
+      <label class="muted" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="cleanOnly"> Clean footage only</label>
     </div>
     <div id="testNote" class="muted" style="margin-top:6px"></div>
     <div id="status" style="margin-top:10px"></div>
@@ -128,7 +136,7 @@ function render() {
   $("dataset").textContent = G.dataset;
   $("sets").innerHTML = ["train", "validation", "test"].map((k) => {
     const s = G.sets[k];
-    return `<div>${NAMES[k]}<b>${s.clips} clip${s.clips === 1 ? "" : "s"}</b>${s.stores.length} store${s.stores.length === 1 ? "" : "s"} · ${s.crossings} crossings</div>`;
+    return `<div>${NAMES[k]}<b>${s.clips} clip${s.clips === 1 ? "" : "s"}</b>${s.stores.length} store${s.stores.length === 1 ? "" : "s"} · ${s.crossings} crossings${s.marked ? ` · ${s.marked} on marked footage` : ""}</div>`;
   }).join("");
   $("clips").innerHTML = G.clips.length
     ? `<tr><th>Clip</th><th>Set</th><th>Period</th><th>Cameras</th><th>Counted by</th><th>Crossings</th><th>Two people</th><th>Tags</th></tr>` +
@@ -137,15 +145,17 @@ function render() {
         const two = !a ? '<span class="muted">not yet</span>'
           : a.disagreements ? `<span class="warn">${a.agreed} agreed, ${a.disagreements} disputed</span>` : `<span class="ok">agree (${a.agreed})</span>`;
         return `<tr><td>${esc(c.store.code)} ${esc(c.store.name)}<div class="muted" style="font-size:12px">${esc(c.id)}</div></td>` +
-          `<td><span class="pill ${c.split === "test" ? "test" : ""}">${NAMES[c.split]}</span></td><td>${esc(period(c.period))}</td>` +
+          `<td><span class="pill ${c.split === "test" ? "test" : ""}">${NAMES[c.split]}</span>${c.tier === "marked" ? '<div><span class="pill warn" title="Counted on footage showing RetailNext\'s marks">marked footage</span></div>' : ""}</td><td>${esc(period(c.period))}</td>` +
           `<td>${c.cameras.map(esc).join("<br>")}</td><td>${c.reviews.map((r) => esc(r.reviewer)).join(", ")}</td>` +
           `<td>${c.crossings}${c.uncertain ? ` <span class="muted">(+${c.uncertain} uncertain)</span>` : ""}</td><td>${two}</td>` +
           `<td>${[...["traffic", "lighting", "occlusion"].filter((k) => c.conditions[k]).map((k) => `${k}:${c.conditions[k]}`), ...c.tags]
             .map((t) => `<span class="pill">${esc(G.labels[t] || t)}</span>`).join("")}${c.notes ? `<div class="muted" style="font-size:12px">${esc(c.notes)}</div>` : ""}` +
+          `${c.tier === "marked" ? `<div class="muted" style="font-size:12px">${esc(c.scoring)}</div>` : ""}` +
           `${(c.provisional || []).length ? `<div class="warn" style="font-size:12px">Provisional, left out of scoring: ${c.provisional.map(esc).join("; ")}</div>` : ""}</td></tr>`;
       }).join("")
     : `<tr><td class="muted">No gold clip yet. Count a clip by hand in the wizard (Manual), watching every moment, then keep it on the report page.</td></tr>`;
-  $("testNote").textContent = `Tune only on the development set: the test set is for a final check, and each use is recorded (so far: ${G.test_scorings}).`;
+  $("testNote").textContent = `Tune only on the development set: the test set is for a final check, and each use is recorded (so far: ${G.test_scorings}). The test set is scored on clean footage only.`;
+  renderEffect(G.marks_effect);
   $("version").innerHTML = !G.clips.length ? '<span class="muted">Nothing to freeze yet.</span>'
     : G.version === "unreleased" ? `<span class="warn">Not frozen as it is now</span> <span class="muted">(contents ${esc(G.content_hash.slice(0, 12))})</span>`
     : `<span class="ok">The set matches ${esc(G.version)}.</span>`;
@@ -158,9 +168,22 @@ function render() {
   if (G.shared) $("dataset").textContent = `${G.dataset} · shared: ${G.shared}`;
   $("history").innerHTML = G.experiments.length
     ? `<tr><th>When</th><th>Set</th><th>Dataset</th><th>Clips</th><th>Crossings</th><th>Recall</th><th>Precision</th><th>Version</th></tr>` +
-      G.experiments.map((e) => `<tr class="pick" data-id="${esc(e.id)}"><td>${esc(when(e.made_at))}</td><td>${esc(e.set)}</td><td class="muted">${esc(e.dataset_version || "")}</td><td>${e.clips}</td><td>${e.crossings}</td>` +
+      G.experiments.map((e) => `<tr class="pick" data-id="${esc(e.id)}"><td>${esc(when(e.made_at))}</td><td>${esc(e.set)}</td><td class="muted">${esc(e.dataset_version || "")}</td><td>${e.clips}${e.tiers && e.tiers.marked ? ` <span class="warn">(${e.tiers.marked} marked)</span>` : e.clean_only ? ' <span class="muted">(clean only)</span>' : ""}</td><td>${e.crossings}</td>` +
         `<td>${e.sufficient ? pct(e.recall) : '<span class="muted">sample too small</span>'}</td><td>${e.sufficient ? pct(e.precision) : "–"}</td><td class="muted">${esc(e.app_version)}</td></tr>`).join("")
     : `<tr><td class="muted">None yet.</td></tr>`;
+}
+function renderEffect(m) {
+  if (!m) { $("effect").innerHTML = ""; return; }
+  const DIR = { in: "In", out: "Out" };
+  const rows = m.pairs.map((p) => !p.comparable
+    ? `<tr><td>${esc(p.window)}</td><td colspan="5" class="muted">${esc(p.reason)}</td></tr>`
+    : `<tr><td>${esc(p.store.code)} ${esc(period(p.period))}</td><td>${p.agreed} of ${p.agreed + p.disagreements}${p.agreement_pct != null ? ` (${p.agreement_pct}%)` : ""}</td>` +
+      `<td>${p.only_clean} · ${p.only_marked}${p.direction_disagreements ? ` · ${p.direction_disagreements} other way` : ""}</td>` +
+      `<td>${Object.entries(p.by_direction).map(([d, v]) => `${DIR[d]}: ${v.clean} → ${v.marked}${v.system != null ? ` <span class="muted">(${esc(p.system)} ${v.system}${v.towards_system ? `, ${v.towards_system === "towards" ? "towards it" : v.towards_system === "away" ? "away from it" : "no nearer"}` : ""})</span>` : ""}`).join("<br>")}</td>` +
+      `<td>${p.same_person.length ? `<span class="${p.memory_warning ? "warn" : "muted"}">same person${p.days_apart != null ? `, ${p.days_apart} days apart` : ""}</span>` : '<span class="muted">different people</span>'}</td></tr>`).join("");
+  $("effect").innerHTML = `<div class="${m.windows >= m.needed ? "" : "muted"}">${esc(m.sentence)}</div>` +
+    (m.memory_warnings ? `<div class="warn" style="margin-top:4px">${m.memory_warnings} window(s) were counted both ways by the same person within a week: remembering the first count can make the two agree more than the marks alone would.</div>` : "") +
+    (m.pairs.length ? `<div class="scroll" style="margin-top:8px"><table><tr><th>Window</th><th>Crossings matched</th><th>Only clean · only marked</th><th>Count, clean → marked</th><th>Counted by</th></tr>${rows}</table></div>` : "");
 }
 function pct(v) { return v == null ? "–" : `${v}%`; }
 function ci(r) { return r ? ` <span class="muted">(${r[0]}–${r[1]})</span>` : ""; }
@@ -178,6 +201,8 @@ function showResult(e) {
   if (e.limits.length) html += `<ul class="limits warn">${e.limits.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>`;
   if (t) {
     html += `<div class="scroll"><table>${HEAD}${row("All", t.all)}${Object.entries(t.by_direction).map(([d, m]) => row(d === "in" ? "In" : "Out", m)).join("")}</table></div>`;
+    const tiers = e.by_tier || {};
+    if (tiers.marked) html += `<h3>Clean and marked footage apart</h3><div class="scroll"><table>${HEAD}${row(`Clean footage (${e.tiers.clean} clip${e.tiers.clean === 1 ? "" : "s"})`, tiers.clean && tiers.clean.all)}${row(`Marked footage (${e.tiers.marked} clip${e.tiers.marked === 1 ? "" : "s"})`, tiers.marked.all)}</table></div>`;
     const sets = Object.entries(e.by_split || {});
     if (sets.length > 1) html += `<h3>By set</h3><div class="scroll"><table>${HEAD}${sets.map(([k, m]) => row(NAMES[k], m.all)).join("")}</table></div>`;
     const tags = Object.entries(e.by_tag || {});
@@ -187,7 +212,7 @@ function showResult(e) {
       The possible-miss list showed ${w.misses_on_list} of the ${w.misses} crossings the tool missed${w.misses_on_list_pct != null ? ` (${w.misses_on_list_pct}%)` : ""}; ${w.real_misses_per_100_listed ?? "–"} of every 100 it listed were real misses.</div>`;
   }
   html += `<h3>Clips</h3><ul>${e.clips.map((c) => c.scored
-      ? `<li>${esc(c.id)}: ${Object.values(c.by_direction).reduce((a, m) => a + m.found, 0)} found, ${Object.values(c.by_direction).reduce((a, m) => a + m.missed, 0)} missed, ${Object.values(c.by_direction).reduce((a, m) => a + m.false, 0)} false <span class="muted">(automatic count ${esc(c.run)})</span></li>`
+      ? `<li>${esc(c.id)}${c.tier === "marked" ? ' <span class="warn">(marked footage)</span>' : ""}: ${Object.values(c.by_direction).reduce((a, m) => a + m.found, 0)} found, ${Object.values(c.by_direction).reduce((a, m) => a + m.missed, 0)} missed, ${Object.values(c.by_direction).reduce((a, m) => a + m.false, 0)} false <span class="muted">(automatic count ${esc(c.run)})</span></li>`
       : `<li class="muted">${esc(c.id)}: not scored. ${esc(c.reason)}</li>`).join("")}</ul>`;
   const det = (e.detectors || []).map((d) => `${esc(d.model)}${d.sha256 ? ` (${d.sha256.slice(0, 12)})` : ""}`).join(", ");
   const ds = e.dataset && e.dataset.version ? `${e.dataset.id} ${e.dataset.version}` : e.dataset;
@@ -200,7 +225,7 @@ async function score(which) {
   $("dev").disabled = $("test").disabled = true;
   $("status").innerHTML = '<span class="muted">Replaying the automatic counts on the gold clips…</span>';
   try {
-    await api("/api/gold/score", { which });
+    await api("/api/gold/score", { which, clean_only: $("cleanOnly").checked });
     for (;;) {
       await pause(1000);
       const j = await api("/api/gold/score");

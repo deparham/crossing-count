@@ -1,11 +1,18 @@
 """The gold set: clips a person counted in full, kept to measure the automatic count.
 
-A gold clip is a count by hand in the wizard (Manual) on clean footage that watched at
-least MIN_WATCHED_PCT of every counted camera's footage: every crossing in it was looked
-for, not only those the tool pointed at, and nothing the sensor drew could sway it.
-("Every crossing the tool proposed was checked" is a different thing and never makes a
-gold clip.) Each clip is one JSON file under gold/<dataset>/, written only from people's
-counts, never by a model. See docs/DATASET_SPECIFICATION.md.
+A gold clip is a count by hand in the wizard (Manual) that watched at least MIN_WATCHED_PCT
+of every counted camera's footage: every crossing in it was looked for, not only those the
+tool pointed at. ("Every crossing the tool proposed was checked" is a different thing and
+never makes a gold clip.) Each clip is one JSON file under gold/<dataset>/, written only
+from people's counts, never by a model. See docs/DATASET_SPECIFICATION.md.
+
+A clip is one of two tiers, by its footage (independence.py: what the picture shows first):
+  clean   nothing of the sensor's on the picture. The answer key: every score, the test set.
+  marked  RetailNext's tracks and counts on the picture, which can sway a count towards the
+          sensor's. Scored in the development set only, and always shown apart from clean
+          clips; never in the test set, never in anything said about the sensor's accuracy.
+A window counted on both keeps two clips (the marked one's id ends in -marked). Such pairs
+measure how far the marks move a count (marks_effect()), instead of guessing it.
 
 Each store is in train, validation or test by a fixed rule on its code (the same on
 every computer, so a team sharing clips agrees on it), so no store's footage is on both
@@ -56,7 +63,7 @@ from .evaluate import (
     summary,
 )
 from .gating import camera_dir
-from .manual import merge_ranges
+from .manual import intervals_for, merge_ranges
 from .util import write_json_atomic
 from .validation import TRAFFIC, TRAFFIC_NAMES, traffic_level
 from .version import app_version
@@ -89,6 +96,9 @@ OCCLUSION = {"none": "People hardly ever hidden", "some": "People sometimes hidd
 CONVENTION = "In = into the store: the side the counting line's triangles point to."
 CLOCK_SLACK_S = 1.0  # an automatic count's footage must cover the clip to within this
 FEW_STORES = 3  # fewer stores than this in a set: results may not carry over to others
+TIERS = ("clean", "marked")
+MARKED_SUFFIX = "-marked"  # a marked clip's id: the clean clip of the same window keeps the plain id
+PAIRS_FOR_A_VERDICT = 5  # windows counted both ways before anything is said about the marks' effect
 
 
 class GoldError(Exception):
@@ -140,11 +150,6 @@ def problems(state: dict[str, Any]) -> list[str]:
                  "looks only where the tool pointed.")]
     out = []
     m, dur = state.get("manual") or {}, float(state["duration_s"])
-    f = independence.of_state(state)  # the picture, the download, the name, the answer
-    if not f["clean"]:
-        out.append("This footage shows RetailNext's own tracks and counts ("
-                   + "; ".join(f["why_marked"]) + "), which can sway a count towards the "
-                   "sensor's: a gold clip is counted on clean footage. " + independence.CLEAN_PATH)
     if not m.get("done"):
         out.append("Finish counting first.")
     elif not m.get("specification"):
@@ -167,10 +172,52 @@ def problems(state: dict[str, Any]) -> list[str]:
     return out
 
 
+def footage_tier(state: dict[str, Any]) -> str:
+    """clean or marked: what this count's footage is (the picture, the download, the name,
+    the answer; independence.py)."""
+    return "clean" if independence.of_state(state)["clean"] else "marked"
+
+
+TIER_WORDS = {
+    ("clean", "dev"): "Clean footage: scored in the development set.",
+    ("clean", "test"): "Clean footage: kept for the final check on the test set.",
+    ("marked", "dev"): ("Counted on footage showing RetailNext's marks: scored in the development "
+                        "set, shown apart from clean clips; never in the test set or in anything "
+                        "said about RetailNext's accuracy."),
+    ("marked", "test"): ("Counted on footage showing RetailNext's marks, in a test-set store: the "
+                         "test set is clean footage only, so it is not scored. Counted on clean "
+                         "footage too, it shows how far the marks sway a count."),
+}
+
+
+def tier_words(tier_: str, split: str) -> str:
+    return TIER_WORDS[(tier_, "test" if split == "test" else "dev")]
+
+
 def clip_id(state: dict[str, Any]) -> str:
+    """The window's id: store, start and length; a count on marked footage ends in -marked."""
     start = datetime.fromisoformat(state["clock_start"])
     words = f"{state['store']['code']}-{start:%Y%m%d-%H%M%S}-{round(float(state['duration_s']) / 60)}m"
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", words).strip("-")
+    base = re.sub(r"[^A-Za-z0-9._-]+", "-", words).strip("-")
+    return base + (MARKED_SUFFIX if footage_tier(state) == "marked" else "")
+
+
+def window_id(clip: str) -> str:
+    """The window a clip id names, whichever footage it was counted on."""
+    return clip.removesuffix(MARKED_SUFFIX)
+
+
+def _system_counts(state: dict[str, Any], dirs: list[str]) -> dict[str, Any] | None:
+    """The system's own numbers for exactly this window, kept with the count: whole 15-minute
+    intervals only (a part interval's number covers people outside the clip)."""
+    sensor = state.get("sensor") or {}
+    if any(sensor.get(d) is None for d in dirs) or not state.get("clock_start"):
+        return None
+    ivs = intervals_for(datetime.fromisoformat(state["clock_start"]), float(state["duration_s"]))
+    if not ivs or not all(i["full"] for i in ivs):
+        return None
+    return {"system": str((state.get("sensor_source") or {}).get("system") or "RetailNext"),
+            "counts": {d: int(sensor[d]) for d in dirs}}
 
 
 def find(state: dict[str, Any], root: Path | None = None,
@@ -208,6 +255,8 @@ def save(state: dict[str, Any], run_dir: Path, tags: Iterable[str], notes: str =
     bad = problems(state)
     if bad:
         raise GoldError(" ".join(bad))
+    footage = independence.of_state(state)
+    tier_ = "clean" if footage["clean"] else "marked"
     tags = sorted(set(tags))
     unknown = [t for t in tags if t not in TAGS]
     if unknown:
@@ -222,7 +271,7 @@ def save(state: dict[str, Any], run_dir: Path, tags: Iterable[str], notes: str =
     review = {
         "reviewer": reviewer, "at": _now(), "run": str(run_dir),
         "video": {"filename": state["filename"], "fingerprint": state["fingerprint"]},
-        "marked": False, "footage": independence.of_state(state),  # clean: problems() says so
+        "marked": tier_ == "marked", "footage": footage,
         "specification": m["specification"],
         "watched_pct": {c["sensor"]: round(_watched_pct(m["watched"].get(c["sensor"], []), dur), 1)
                         for c in state["cameras"]},
@@ -233,6 +282,8 @@ def save(state: dict[str, Any], run_dir: Path, tags: Iterable[str], notes: str =
                        **({"note": c["note"]} if c.get("note") else {})}
                       for c in sorted(m["counts"], key=lambda c: float(c["t"]))
                       if c["direction"] in dirs],
+        # to see whether a count on marked footage moved towards the sensor's (marks_effect)
+        "system_counts": _system_counts(state, dirs),
     }
     cams = [{"sensor": c["sensor"], "picture": c["picture"], "config": c.get("config")}
             for c in state["cameras"]]
@@ -248,8 +299,13 @@ def save(state: dict[str, Any], run_dir: Path, tags: Iterable[str], notes: str =
                           "tz": state.get("tz") or ""},
                "duration_s": dur, "video": _video_facts(state), "cameras": cams, "dirs": dirs,
                "direction_convention": CONVENTION, "specification": m["specification"],
-               "rules": rules, "reviews": [], "tags": [], "notes": "", "created_at": _now()}
+               "tier": tier_, "rules": rules, "reviews": [], "tags": [], "notes": "",
+               "created_at": _now()}
     else:
+        if tier(rec) != tier_:  # kept before tiers, under the plain id
+            raise GoldError(f"This window's gold clip {rec['id']} was counted on "
+                            f"{tier(rec)} footage before clean and marked counts were kept apart, "
+                            f"and this count is on {tier_} footage: they cannot share a clip.")
         if rec["dirs"] != dirs:
             raise GoldError(f"This clip was counted for {' and '.join(rec['dirs']).upper()}: "
                             f"count the same traffic.")
@@ -353,24 +409,40 @@ def truth(rec: dict[str, Any]) -> tuple[dict[str, list[tuple[float, str]]], dict
         "where": [f"{d['camera']} {d['clock']} ({d['what']})" for d in disputes]}
 
 
-def provisional(rec: dict[str, Any]) -> list[str]:
-    """Why a clip is not trusted as gold: kept and listed, but left out of scoring unless
-    asked. A count on footage showing RetailNext's marks, or on footage never checked for
-    them in the picture (clips kept before that check), is not independent of the sensor."""
-    why = []
+def _review_marked(r: dict[str, Any]) -> bool:
+    f = r.get("footage")
+    return bool(r.get("marked") or (f and not f.get("clean"))
+                or independence.name_says_marked(str((r.get("video") or {}).get("filename") or "")))
+
+
+def tier(rec: dict[str, Any]) -> str:
+    """clean or marked. Marked wins: a clip is marked when it says so or any of its counts
+    was on marked footage (clips kept before tiers say nothing)."""
+    marked = rec.get("tier") == "marked" or any(_review_marked(r) for r in rec["reviews"])
+    return "marked" if marked else "clean"
+
+
+def marked_why(rec: dict[str, Any]) -> list[str]:
+    """What showed each count's footage to be marked."""
+    out = []
     for r in rec["reviews"]:
-        who, f = r.get("reviewer") or "someone", r.get("footage")
-        name = str((r.get("video") or {}).get("filename") or "")
-        if r.get("marked") or (f and not f.get("clean")):
-            detail = "; ".join((f or {}).get("why_marked") or [])
-            why.append(f"{who} counted it on footage showing RetailNext's marks"
-                       + (f" ({detail})" if detail else ""))
-        elif independence.name_says_marked(name):
-            why.append(f"{who} counted it on footage whose name says it shows RetailNext's marks")
-        elif not f or not f.get("checked_in_picture"):
-            why.append(f"{who}'s footage was not checked for RetailNext's marks in the picture "
-                       f"(kept before that check): save the count again to check it")
-    return why
+        if _review_marked(r):
+            detail = "; ".join((r.get("footage") or {}).get("why_marked") or [])
+            out.append(f"{r.get('reviewer') or 'someone'} counted it on footage showing "
+                       f"RetailNext's marks" + (f" ({detail})" if detail else ""))
+    return out
+
+
+def provisional(rec: dict[str, Any]) -> list[str]:
+    """Why a clean clip is not trusted as clean: its footage was never checked for
+    RetailNext's marks in the picture (kept before that check). Kept and listed, left out of
+    scoring unless asked. A marked clip is not provisional: it is the marked tier."""
+    if tier(rec) == "marked":
+        return []
+    return [f"{r.get('reviewer') or 'someone'}'s footage was not checked for RetailNext's marks in "
+            f"the picture (kept before that check): save the count again to check it"
+            for r in rec["reviews"]
+            if not (r.get("footage") or {}).get("checked_in_picture")]
 
 
 def describe(rec: dict[str, Any]) -> dict[str, Any]:
@@ -384,7 +456,8 @@ def describe(rec: dict[str, Any]) -> dict[str, Any]:
                         for r in rec["reviews"]],
             "crossings": sum(len(v) for v in real.values()),
             "uncertain": sum(len(v) for v in unsure.values()), "agreement": agree,
-            "provisional": provisional(rec)}
+            "tier": tier(rec), "window": window_id(rec["id"]), "marked_why": marked_why(rec),
+            "scoring": tier_words(tier(rec), rec["split"]), "provisional": provisional(rec)}
 
 
 DECISIONS = ("in", "out", "none", "uncertain")
@@ -469,7 +542,7 @@ def manifest(root: Path | None = None, shared: Path | None = None,
     files = _clip_files(root, shared)
     entries = []
     for p, rec in files:
-        entry = {"id": rec["id"], "split": rec["split"], "sha256": _sha_file(p),
+        entry = {"id": rec["id"], "split": rec["split"], "tier": tier(rec), "sha256": _sha_file(p),
                  "crossings": describe(rec)["crossings"]}
         if why := provisional(rec):  # listed, never silently dropped
             entry["provisional"] = why
@@ -487,6 +560,7 @@ def manifest(root: Path | None = None, shared: Path | None = None,
             "crossings": sum(e["crossings"] for e in entries),
             "splits": {str(r["store"]["code"]): r["split"] for _, r in files},
             "provisional": [e["id"] for e in entries if e.get("provisional")],
+            "tiers": {k: sum(1 for e in entries if e["tier"] == k) for k in TIERS},
             "clips": entries}
 
 
@@ -645,7 +719,8 @@ def score_clip(rec: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
     keys = [*rec["tags"], *(f"{k}:{cond[k]}" for k in ("traffic", "lighting", "occlusion")
                             if cond.get(k))]
     base = {"id": rec["id"], "split": rec["split"], "tags": rec["tags"], "groups": keys,
-            "store": rec["store"]["code"], "scored": False}
+            "store": rec["store"]["code"], "tier": tier(rec), "window": window_id(rec["id"]),
+            "scored": False}
     real, unsure, agree = truth(rec)
     base.update(agreement=agree, uncertain=sum(len(v) for v in unsure.values()))
     hit = find_run(rec, (root or paths.data_root()) / "runs")
@@ -726,33 +801,53 @@ def experiments_dir(root: Path | None = None) -> Path:
 
 
 def evaluate(which: str, root: Path | None = None, note: str = "",
-             shared: Path | None = None, include_provisional: bool = False) -> dict[str, Any]:
+             shared: Path | None = None, include_provisional: bool = False,
+             clean_only: bool = False) -> dict[str, Any]:
     """Score the automatic count on the development clips (train and validation) or, when
     asked, on the held-out test clips, which needs a frozen version of the set. The result
-    is kept as an experiment record naming the dataset version it used. Provisional clips
-    (provisional()) are left out, and named, unless asked for."""
+    is kept as an experiment record naming the dataset version it used.
+
+    Left out, and named: provisional clips (provisional()) unless asked for; marked clips from
+    the test set always, and from the development set when clean_only. Clean and marked clips
+    are scored apart (by_tier); the totals count a window counted both ways once, from its
+    clean count."""
     if which not in ("development", "test"):
         raise GoldError("Score the development set or the test set.")
     chosen = DEVELOPMENT if which == "development" else ("test",)
+    clean_only = clean_only or which == "test"
     current = manifest(root, shared)
     version = version_of(current, root)
     if which == "test" and version == "unreleased":
         raise GoldError("Freeze the gold set first (Versions, on the gold page): a test-set score "
                         "must name a frozen version of the set.")
     in_set = [r for r in clips(root, shared) if r["split"] in chosen]
-    left_out = [{"id": r["id"], "why": why} for r in in_set
-                if (why := provisional(r)) and not include_provisional]
+    left_out: list[dict[str, Any]] = []
+    for r in in_set:
+        if clean_only and tier(r) == "marked":
+            left_out.append({"id": r["id"], "tier": "marked", "why": [
+                "counted on footage showing RetailNext's marks: " + (
+                    "the test set is clean footage only" if which == "test"
+                    else "clean footage only was asked for")]})
+        elif (why := provisional(r)) and not include_provisional:
+            left_out.append({"id": r["id"], "tier": "clean", "why": why})
     recs = [r for r in in_set if r["id"] not in {x["id"] for x in left_out}]
     if not recs:
         raise GoldError(f"No gold clip in the {which} set yet"
-                        + (f" ({len(left_out)} provisional clip(s) left out: see the gold page)."
+                        + (f" ({len(left_out)} clip(s) left out: see the gold page)."
                            if left_out else "."))
     results = [score_clip(r, root) for r in recs]
     scored = [c for c in results if c["scored"]]
+    clean_windows = {c["window"] for c in scored if c["tier"] == "clean"}
     total: dict[str, dict[str, int]] = {}
     by_split: dict[str, dict[str, dict[str, int]]] = {}
     by_group: dict[str, dict[str, dict[str, int]]] = {}
+    by_tier: dict[str, dict[str, dict[str, int]]] = {}
+    twice = 0
     for c in scored:
+        add(by_tier.setdefault(c["tier"], {}), c["by_direction"])
+        if c["tier"] == "marked" and c["window"] in clean_windows:
+            twice += 1  # the same window's clean count is in the totals already
+            continue
         add(total, c["by_direction"])
         add(by_split.setdefault(c["split"], {}), c["by_direction"])
         for g in c["groups"]:
@@ -768,13 +863,31 @@ def evaluate(which: str, root: Path | None = None, note: str = "",
     n = sum(v["truth"] for v in total.values())
     made = datetime.now().astimezone()
     ids = {r["id"] for r in recs}
-    said_left = (f"{len(left_out)} provisional clip(s) left out: not known to have been "
-                 f"counted on clean footage.")
-    left_note = [said_left] if left_out else []
-    exp = {"id": f"{made:%Y%m%d-%H%M%S}-{which}", "made_at": made.isoformat(timespec="seconds"),
-           "set": which, "splits": list(chosen),
+    tiers = {k: sum(1 for c in scored if c["tier"] == k) for k in TIERS}
+    notes = []
+    provisional_out = [x for x in left_out if x["tier"] == "clean"]
+    if provisional_out:
+        notes.append(f"{len(provisional_out)} provisional clip(s) left out: not known to have been "
+                     f"counted on clean footage.")
+    marked_out = len(left_out) - len(provisional_out)
+    if marked_out:
+        notes.append(f"{marked_out} clip(s) counted on marked footage left out: "
+                     + ("the test set is clean footage only." if which == "test"
+                        else "clean footage only was asked for."))
+    if tiers["marked"]:
+        notes.append(f"{tiers['marked']} of the {len(scored)} scored clip(s) were counted on footage "
+                     f"showing RetailNext's marks, which can sway a count towards the sensor's: "
+                     f"the clean-footage row is the one to rely on.")
+    if twice:
+        notes.append(f"{twice} window(s) counted on both clean and marked footage: the totals "
+                     f"count each once, from its clean count.")
+    exp_id, k = f"{made:%Y%m%d-%H%M%S}-{which}", 2
+    while (experiments_dir(root) / f"{exp_id}.json").exists():  # never over an earlier scoring
+        exp_id, k = f"{made:%Y%m%d-%H%M%S}-{which}-{k}", k + 1
+    exp = {"id": exp_id, "made_at": made.isoformat(timespec="seconds"),
+           "set": which, "splits": list(chosen), "clean_only": clean_only,
            "dataset": {"id": DATASET, "version": version, "content_hash": current["content_hash"],
-                       "clips": [{k: c[k] for k in ("id", "split", "sha256")}
+                       "clips": [{k: c.get(k) for k in ("id", "split", "tier", "sha256")}
                                  for c in current["clips"] if c["id"] in ids]},
            "app_version": app_version(),
            "settings": {**bench.settings(), "engine": CROSSING_ENGINE, "matching": MATCHING,
@@ -782,11 +895,12 @@ def evaluate(which: str, root: Path | None = None, note: str = "",
                         "ground_truth_specification": GROUND_TRUTH_SPEC},
            "detectors": sorted({d["model"]: d for c in scored for d in c["detectors"]}.values(),
                                key=lambda d: str(d["model"])),
-           "clips": results, "totals": summary(total) if total else None,
+           "clips": results, "totals": summary(total) if total else None, "tiers": tiers,
+           "by_tier": {k: summary(v) for k, v in by_tier.items()},
            "by_split": {k: summary(v) for k, v in by_split.items()},
            "by_tag": {k: summary(v) for k, v in sorted(by_group.items())},
-           "workload": _workload(scored), "note": note, "provisional_left_out": left_out,
-           "limits": _limits(recs, scored, n) + left_note}
+           "workload": _workload(scored), "note": note, "provisional_left_out": provisional_out,
+           "left_out": left_out, "limits": _limits(recs, scored, n) + notes}
     write_json_atomic(experiments_dir(root) / f"{exp['id']}.json", exp)
     return exp
 
@@ -801,7 +915,9 @@ def experiments(root: Path | None = None) -> list[dict[str, Any]]:
         tot = (e.get("totals") or {}).get("all") or {}
         ds = e.get("dataset")
         out.append({"id": e["id"], "made_at": e["made_at"], "set": e["set"],
-                    "app_version": e.get("app_version"),
+                    "app_version": e.get("app_version"), "clean_only": e.get("clean_only", True),
+                    "tiers": e.get("tiers") or {"clean": sum(1 for c in e.get("clips", [])
+                                                             if c.get("scored")), "marked": 0},
                     "dataset_version": ds.get("version") if isinstance(ds, dict) else ds,
                     "clips": sum(1 for c in e.get("clips", []) if c.get("scored")),
                     "crossings": tot.get("truth", 0), "recall": tot.get("recall"),
@@ -809,14 +925,103 @@ def experiments(root: Path | None = None) -> list[dict[str, Any]]:
     return out
 
 
+# ---- how far RetailNext's marks sway a count -----------------------------------------------
+
+def _reviewers(rec: dict[str, Any]) -> set[str]:
+    return {str(r["reviewer"]).casefold() for r in rec["reviews"]}
+
+
+def _counted_at(rec: dict[str, Any]) -> list[datetime]:
+    return [datetime.fromisoformat(r["at"]) for r in rec["reviews"] if r.get("at")]
+
+
+def marks_effect(root: Path | None = None, shared: Path | None = None) -> dict[str, Any]:
+    """Windows counted on clean and on marked footage: the two counts matched crossing by
+    crossing (as two people's counts are), each direction's count on both, and, where the
+    system's own number for the window is known, whether the marked count moved towards it.
+    Nothing is concluded from fewer than PAIRS_FOR_A_VERDICT windows."""
+    by_window: dict[str, dict[str, dict[str, Any]]] = {}
+    for rec in clips(root, shared):
+        by_window.setdefault(window_id(rec["id"]), {})[tier(rec)] = rec
+    pairs: list[dict[str, Any]] = []
+    for window, both in sorted(by_window.items()):
+        if set(both) != set(TIERS):
+            continue
+        c, m = both["clean"], both["marked"]
+        row: dict[str, Any] = {"window": window, "store": c["store"], "period": c["period"],
+                               "split": c["split"], "clean_id": c["id"], "marked_id": m["id"]}
+        if (c["dirs"] != m["dirs"] or sorted(x["sensor"] for x in c["cameras"])
+                != sorted(x["sensor"] for x in m["cameras"]) or c.get("rules") != m.get("rules")):
+            pairs.append({**row, "comparable": False, "reason": (
+                "not counted the same way (other traffic, cameras, or rules for children and "
+                "staff)")})
+            continue
+        dirs, cams = list(c["dirs"]), [x["sensor"] for x in c["cameras"]]
+        real_c, _, _ = truth(c)
+        real_m, _, _ = truth(m)
+        got = dict.fromkeys(("agreed", "direction_disagreements", "only_first", "only_second",
+                             "disagreements"), 0)
+        for cam in cams:
+            g = agreement(real_c.get(cam, []), real_m.get(cam, []), dirs)
+            for k in got:
+                got[k] += int(g[k])
+        system = next((r["system_counts"] for r in [*c["reviews"], *m["reviews"]]
+                       if r.get("system_counts")), None)
+        per_dir = {}
+        for d in dirs:
+            nc = sum(1 for cam in cams for _, dd in real_c.get(cam, []) if dd == d)
+            nm = sum(1 for cam in cams for _, dd in real_m.get(cam, []) if dd == d)
+            s = (system or {}).get("counts", {}).get(d)
+            way = (None if s is None or nm == nc else
+                   "towards" if abs(nm - s) < abs(nc - s) else
+                   "away" if abs(nm - s) > abs(nc - s) else "neither")
+            per_dir[d] = {"clean": nc, "marked": nm, "shift": nm - nc, "system": s,
+                          "towards_system": way}
+        same = sorted(_reviewers(c) & _reviewers(m))
+        gap = min((abs((a - b).total_seconds()) / 86400 for a in _counted_at(c)
+                   for b in _counted_at(m)), default=None)
+        union = got["agreed"] + got["disagreements"]
+        pairs.append({**row, "comparable": True, **got, "only_clean": got["only_first"],
+                      "only_marked": got["only_second"],
+                      "agreement_pct": round(100.0 * got["agreed"] / union, 1) if union else None,
+                      "by_direction": per_dir, "system": (system or {}).get("system"),
+                      "same_person": same, "days_apart": None if gap is None else round(gap, 1),
+                      "memory_warning": bool(same) and (gap is None or gap < 7)})
+    ok = [p for p in pairs if p["comparable"]]
+    totals = {k: sum(p[k] for p in ok) for k in ("agreed", "direction_disagreements",
+                                                 "only_clean", "only_marked", "disagreements")}
+    union = totals["agreed"] + totals["disagreements"]
+    shift = {d: sum(p["by_direction"][d]["shift"] for p in ok if d in p["by_direction"])
+             for d in ("in", "out")}
+    ways = [v["towards_system"] for p in ok for v in p["by_direction"].values()
+            if v["towards_system"]]
+    towards, away = ways.count("towards"), ways.count("away")
+    if len(ok) < PAIRS_FOR_A_VERDICT:
+        sentence = (f"{len(ok)} window(s) counted on both clean and marked footage: at least "
+                    f"{PAIRS_FOR_A_VERDICT} are needed before anything is said about how far "
+                    f"RetailNext's marks sway a count.")
+    else:
+        sentence = (f"Across {len(ok)} windows counted both ways, the count on marked footage "
+                    f"matched the clean count on {round(100.0 * totals['agreed'] / union, 1) if union else '–'}% "
+                    f"of crossings; it found {totals['only_marked']} the clean count did not and "
+                    f"missed {totals['only_clean']} it did. Where the count moved and the "
+                    f"system's number is known, it moved towards the system's number {towards} "
+                    f"time(s) and away {away} time(s).")
+    return {"pairs": pairs, "windows": len(ok), "needed": PAIRS_FOR_A_VERDICT, "totals": {
+        **totals, "agreement_pct": round(100.0 * totals["agreed"] / union, 1) if union else None,
+        "shift": shift, "towards_system": towards, "away_from_system": away},
+        "memory_warnings": sum(1 for p in ok if p["memory_warning"]), "sentence": sentence}
+
+
 def overview(root: Path | None = None, shared: Path | None = None) -> dict[str, Any]:
     recs = clips(root, shared)
-    sets: dict[str, dict[str, Any]] = {s: {"clips": 0, "stores": set(), "crossings": 0}
-                                       for s in SPLITS}
+    sets: dict[str, dict[str, Any]] = {s: {"clips": 0, "marked": 0, "stores": set(),
+                                           "crossings": 0} for s in SPLITS}
     described = [describe(r) for r in recs]
     for d in described:
         s = sets[d["split"]]
         s["clips"] += 1
+        s["marked"] += d["tier"] == "marked"
         s["stores"].add(d["store"]["code"])
         s["crossings"] += d["crossings"]
     exps = experiments(root)
@@ -830,5 +1035,6 @@ def overview(root: Path | None = None, shared: Path | None = None) -> dict[str, 
                                                  "crossings", "content_hash")}
                          | {"clips": len(r.get("clips", []))} for r in releases(root)],
             "checks": check(root, shared), "shared": str(folder(shared)) if shared else None,
+            "marks_effect": marks_effect(root, shared),
             "tolerance_s": TOLERANCE_S, "min_sample": MIN_SAMPLE,
             "specification": GROUND_TRUTH_SPEC}

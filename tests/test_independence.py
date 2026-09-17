@@ -46,9 +46,7 @@ def test_what_the_picture_shows_beats_what_anyone_says(
     f = w.footage()
     assert not f["clean"] and f["why_marked"] == ["RetailNext's lines are visible in picture 1"]
     assert w.footage_marked() and f["obtained"] == "by_hand"
-    assert any("RetailNext's own tracks" in p for p in gold.problems(w.state))
-    with pytest.raises(gold.GoldError, match="RetailNext's own tracks"):
-        gold.save(w.state, w.run_dir, [], "", tmp_path)
+    assert gold.footage_tier(w.state) == "marked"  # a count on it is a marked gold clip
 
 
 def test_a_check_on_marked_footage_is_not_independent_either() -> None:
@@ -110,12 +108,17 @@ def test_provisional_clips_are_kept_listed_and_left_out_of_scoring(
     path = gold.folder(tmp_path) / f"{clip['id']}.json"
     rec = json.loads(path.read_text())
     assert rec["reviews"][0]["footage"]["clean"] and rec["reviews"][0]["footage"]["checked_in_picture"]
+    rec["reviews"][0]["footage"]["checked_in_picture"] = False  # kept before that check
+    path.write_text(json.dumps(rec))
+    assert gold.provisional(rec)[0].startswith("Alex's footage was not checked")
+    assert gold.manifest(tmp_path)["provisional"] == [clip["id"]]
+    with pytest.raises(gold.GoldError, match="1 clip.s. left out"):
+        gold.evaluate("development", tmp_path)  # the only clip is not known to be clean
+    rec.pop("tier")
     rec["reviews"][0]["marked"] = True  # as an older clip, kept from marked footage, would be
     path.write_text(json.dumps(rec))
-    assert gold.provisional(rec)[0].startswith("Alex counted it on footage showing")
-    assert gold.manifest(tmp_path)["provisional"] == [clip["id"]]
-    with pytest.raises(gold.GoldError, match="provisional clip"):
-        gold.evaluate("development", tmp_path)  # the only clip is not known to be clean
+    assert gold.tier(rec) == "marked" and gold.provisional(rec) == []  # a tier, not a doubt
+    assert gold.describe(rec)["marked_why"][0].startswith("Alex counted it on footage showing")
 
 
 def _draft(**over: Any) -> Draft:

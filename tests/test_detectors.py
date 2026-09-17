@@ -98,7 +98,7 @@ def test_a_score_may_not_mix_two_detectors(tmp_path: Path,
     def scored(rec: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
         which = "yolo11s.pt" if rec["id"] == "c1" else "yolo11m.pt"
         return {"id": rec["id"], "split": "train", "tags": [], "groups": [], "store": "S1",
-                "scored": True, "uncertain": 0, "agreement": None, "camera_hours": 0.25,
+                "tier": "clean", "window": rec["id"], "scored": True, "uncertain": 0, "agreement": None, "camera_hours": 0.25,
                 "by_direction": {}, "questions": 0, "listed": 0, "missed": 0,
                 "misses_on_list": 0, "watch_s": 0.0,
                 "detectors": [{"model": which, "backbone": "yolo", "sha256": which}]}

@@ -1,4 +1,5 @@
-"""The gold set: full counts by hand on clean footage, fixed store sets, frozen versions."""
+"""The gold set: full counts by hand, clean and marked footage apart, fixed store sets, frozen
+versions, and how far RetailNext's marks sway a count."""
 
 from __future__ import annotations
 
@@ -44,14 +45,15 @@ def _count(w: Wizard, marks: list[tuple[float, str]]) -> None:
     w.manual_done()
 
 
-def test_only_a_full_count_on_clean_footage_can_be_kept(counted: Wizard, tmp_path: Path) -> None:
+def test_only_a_full_count_can_be_kept(counted: Wizard, tmp_path: Path) -> None:
     assert "Finish counting first." in gold.problems(counted.state)
     with pytest.raises(gold.GoldError, match="watched"):
         gold.save(counted.state, counted.run_dir, [], "", tmp_path)
     _count(counted, [(0.2, "in"), (0.6, "out")])
     assert gold.problems(counted.state) == []
-    counted.state["marks"] = True  # the sensor's own tracks on the picture
-    assert any("RetailNext's own tracks" in p for p in gold.problems(counted.state))
+    counted.state["marks"] = True  # the sensor's own tracks on the picture: its own tier
+    assert gold.problems(counted.state) == [] and gold.footage_tier(counted.state) == "marked"
+    assert gold.clip_id(counted.state).endswith("-marked")
     counted.state["marks"] = False
     names = [k["name"] for k in counted.counts()["checks"] if k["ok"]]
     assert "Footage of CN-9-PB1 watched" in names and "Counting finished" in names
@@ -60,7 +62,7 @@ def test_only_a_full_count_on_clean_footage_can_be_kept(counted: Wizard, tmp_pat
     assert (clip["split"], clip["crossings"], clip["tags"]) == ("test", 2, ["groups"])
     assert clip["conditions"]["lighting"] == "low" and clip["conditions"]["traffic"] in (
         "quiet", "normal", "busy", "heavy")
-    assert (clip["rules"], clip["specification"]) == ({"children": "count", "staff": "count"}, "1.2")
+    assert (clip["rules"], clip["specification"]) == ({"children": "count", "staff": "count"}, "1.3")
     rec = json.loads((gold.folder(tmp_path) / f"{clip['id']}.json").read_text())
     first = rec["reviews"][0]["crossings"][0]
     assert (first["camera"], first["direction"]) == ("CN-9-PB1", "in")
@@ -175,3 +177,126 @@ def test_the_team_folder_holds_everyones_work(counted: Wizard, tmp_path: Path) -
     assert record["split"] == "test" and record["manual"]["counts"] and "decisions" in record
     lines = [json.loads(x) for x in (team / "index.jsonl").read_text().splitlines()]
     assert out["count"] == len(lines) and all(x["train_ok"] is False for x in lines)  # a test store
+
+
+# ---- clean and marked footage ---------------------------------------------------------------
+
+def test_clean_and_marked_counts_of_a_window_are_kept_apart(counted: Wizard, tmp_path: Path) -> None:
+    _count(counted, [(0.2, "in"), (0.6, "out")])
+    clean = gold.save(counted.state, counted.run_dir, [], "", tmp_path)
+    assert clean["tier"] == "clean" and not clean["id"].endswith("-marked")
+    assert clean["scoring"].startswith("Clean footage: kept for the final check")
+    counted.state["marks"] = True  # the same window, counted on footage showing the marks
+    marked = gold.save(counted.state, counted.run_dir, [], "", tmp_path)
+    assert marked["id"] == clean["id"] + "-marked" and marked["window"] == clean["id"]
+    assert marked["tier"] == "marked" and "not scored" in marked["scoring"]  # a test-set store
+    assert marked["marked_why"] == [("Alex counted it on footage showing RetailNext's marks "
+                                     "(the person counting said it shows RetailNext's marks)")]
+    assert gold.find(counted.state, tmp_path)["id"] == marked["id"]  # type: ignore[index]
+    counted.state["marks"] = False
+    assert gold.find(counted.state, tmp_path)["id"] == clean["id"]  # type: ignore[index]
+    assert gold.manifest(tmp_path)["tiers"] == {"clean": 1, "marked": 1}
+    over = gold.overview(tmp_path)
+    assert over["sets"]["test"] == {"clips": 2, "marked": 1, "stores": [TEST_STORE], "crossings": 4}
+    effect = over["marks_effect"]
+    assert effect["windows"] == 1 and effect["totals"]["agreed"] == 2
+    assert effect["pairs"][0]["memory_warning"]  # the same person, the same day
+    assert effect["sentence"].startswith("1 window(s) counted on both") and "at least 5" in effect["sentence"]
+    # a clip kept before tiers, under the plain id, from marked footage: never mixed with clean
+    path = gold.folder(tmp_path) / f"{clean['id']}.json"
+    rec = json.loads(path.read_text())
+    rec.pop("tier")
+    rec["reviews"][0]["marked"] = True
+    path.write_text(json.dumps(rec))
+    with pytest.raises(gold.GoldError, match="before clean and marked counts were kept apart"):
+        gold.save(counted.state, counted.run_dir, [], "", tmp_path)
+
+
+def _clip(id_: str, split: str, tier: str) -> dict[str, Any]:
+    return {"id": id_, "split": split, "store": {"code": id_[:2]}, "tags": [], "conditions": {},
+            "tier": tier, "reviews": [{"reviewer": "Alex", "footage": {
+                "clean": tier == "clean", "checked_in_picture": True}}]}
+
+
+def test_marked_clips_are_scored_apart_and_never_in_the_test_set(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    recs = [_clip("W1", "train", "clean"), _clip("W1-marked", "train", "marked"),
+            _clip("W2-marked", "validation", "marked"), _clip("T1-marked", "test", "marked"),
+            _clip("T2", "test", "clean")]
+    monkeypatch.setattr(gold, "clips", lambda root=None, shared=None: recs)
+
+    def scored(rec: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
+        counts = {"truth": 40, "pred": 38, "found": 36, "missed": 4, "false": 2}
+        return {"id": rec["id"], "split": rec["split"], "tags": [], "groups": [], "store": "S1",
+                "tier": gold.tier(rec), "window": gold.window_id(rec["id"]), "scored": True,
+                "uncertain": 0, "agreement": None, "camera_hours": 0.25,
+                "by_direction": {"in": counts}, "questions": 0, "listed": 0, "missed": 4,
+                "misses_on_list": 0, "watch_s": 0.0,
+                "detectors": [{"model": "yolo26m.pt", "backbone": "yolo", "sha256": "s"}]}
+
+    monkeypatch.setattr(gold, "score_clip", scored)
+    dev = gold.evaluate("development", tmp_path)
+    assert dev["tiers"] == {"clean": 1, "marked": 2} and not dev["clean_only"]
+    assert dev["totals"]["all"]["truth"] == 80  # W1 once (its clean count), and W2
+    assert dev["by_tier"]["clean"]["all"]["truth"] == 40
+    assert dev["by_tier"]["marked"]["all"]["truth"] == 80
+    assert any("2 of the 3 scored clip(s) were counted on footage showing" in x for x in dev["limits"])
+    assert any("1 window(s) counted on both" in x for x in dev["limits"])
+    strict = gold.evaluate("development", tmp_path, clean_only=True)
+    assert strict["tiers"] == {"clean": 1, "marked": 0}
+    assert sorted(x["id"] for x in strict["left_out"]) == ["W1-marked", "W2-marked"]
+    monkeypatch.setattr(gold, "manifest", lambda root=None, shared=None: {"content_hash": "h",
+                                                                          "clips": []})
+    monkeypatch.setattr(gold, "version_of", lambda current, root=None: "gold_v1.1")
+    test = gold.evaluate("test", tmp_path)
+    assert test["clean_only"] and [c["id"] for c in test["clips"]] == ["T2"]
+    assert test["left_out"] == [{"id": "T1-marked", "tier": "marked", "why": [
+        "counted on footage showing RetailNext's marks: the test set is clean footage only"]}]
+    brief = gold.experiments(tmp_path)
+    assert {(e["set"], e["tiers"]["marked"]) for e in brief} == {("development", 2),
+                                                                  ("development", 0), ("test", 0)}
+
+
+def _counted(id_: str, tier: str, times: list[float], who: str, day: int,
+             system: int | None = None, dirs: tuple[str, ...] = ("in",)) -> dict[str, Any]:
+    return {"id": id_, "split": "train", "store": {"code": "S1"},
+            "period": {"start": "2026-09-12T11:30:00", "end": "2026-09-12T11:45:00"},
+            "cameras": [{"sensor": "C1"}], "dirs": list(dirs), "tier": tier,
+            "rules": {"children": "count", "staff": "count"},
+            "reviews": [{"reviewer": who, "at": f"2026-09-{day:02d}T10:00:00+10:00",
+                         "footage": {"clean": tier == "clean", "checked_in_picture": True},
+                         "system_counts": None if system is None else {
+                             "system": "RetailNext", "counts": {"in": system}},
+                         "crossings": [{"camera": "C1", "t": t, "direction": dirs[0]}
+                                       for t in times]}]}
+
+
+def test_windows_counted_both_ways_show_how_far_the_marks_move_a_count(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    recs = [
+        # counted on marked footage, the count lost a crossing, towards RetailNext's 3
+        _counted("W1", "clean", [10, 20, 30, 40], "Alex", 1),
+        _counted("W1-marked", "marked", [10, 20, 30], "Sam", 9, system=3),
+        # the same person twice on one day: agrees, but memory may be why
+        _counted("W2", "clean", [5, 15], "Alex", 2), _counted("W2-marked", "marked", [5, 15], "Alex", 2),
+        _counted("W3-marked", "marked", [1], "Sam", 3),  # no clean count: not a pair
+        _counted("W4", "clean", [1], "Alex", 4),
+        _counted("W4-marked", "marked", [1], "Sam", 12, dirs=("out",)),  # other traffic
+    ]
+    monkeypatch.setattr(gold, "clips", lambda root=None, shared=None: recs)
+    effect = gold.marks_effect()
+    assert effect["windows"] == 2 and len(effect["pairs"]) == 3
+    w1, w2, w4 = effect["pairs"]
+    assert (w1["agreed"], w1["only_clean"], w1["only_marked"]) == (3, 1, 0)
+    assert w1["by_direction"]["in"] == {"clean": 4, "marked": 3, "shift": -1, "system": 3,
+                                        "towards_system": "towards"}
+    assert not w1["memory_warning"] and w1["days_apart"] == 8.0
+    assert w2["memory_warning"] and w2["by_direction"]["in"]["towards_system"] is None
+    assert not w4["comparable"] and "not counted the same way" in w4["reason"]
+    t = effect["totals"]
+    assert (t["agreed"], t["only_clean"], t["shift"], t["towards_system"]) == (5, 1, {"in": -1, "out": 0}, 1)
+    assert effect["memory_warnings"] == 1 and "at least 5" in effect["sentence"]
+    for k in range(3, 6):  # five windows: then it says what it found
+        recs += [_counted(f"X{k}", "clean", [7], "Alex", 1), _counted(f"X{k}-marked", "marked", [7], "Sam", 20)]
+    said = gold.marks_effect()["sentence"]
+    assert said.startswith("Across 5 windows counted both ways") and "towards the system's number 1" in said

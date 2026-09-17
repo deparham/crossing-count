@@ -392,6 +392,7 @@
     <div class="big">Gold set</div>
     <div class="muted">A count by hand of every moment of the footage can be kept as a gold clip. The automatic counter is measured against gold clips, never trained on them. <a href="/gold/" target="_blank" rel="noopener">Open the gold set</a></div>
     <div id="goldWhy" class="warn" style="margin-top:8px"></div>
+    <div id="goldTier" class="muted" style="margin-top:8px"></div>
     <div class="grid2">
       <label>Lighting <select id="goldLight"></select></label>
       <label>People hidden by others or objects <select id="goldOcc"></select></label>
@@ -1504,6 +1505,9 @@ async function showGold() {  // a count by hand of every moment can be kept as a
   $("goldLight").innerHTML = options(g.lighting, cond.lighting || "normal");
   $("goldOcc").innerHTML = options(g.occlusion, cond.occlusion || "none");
   $("goldWhy").textContent = g.problems.join(" ");
+  $("goldTier").innerHTML = g.tier === "marked"
+    ? `<b>Kept as marked footage.</b> ${esc(g.tier_words)} Counting the same window on clean footage as well shows how far the marks sway a count.`
+    : "";
   $("goldTags").innerHTML = Object.entries(g.tags).map(([k, label]) =>
     `<label><input type="checkbox" data-tag="${esc(k)}" ${on.has(k) ? "checked" : ""}> ${esc(label)}</label>`).join("");
   if (clip && !$("goldNotes").value) $("goldNotes").value = clip.notes || "";
@@ -1512,6 +1516,7 @@ async function showGold() {  // a count by hand of every moment can be kept as a
 function goldHtml(c) {
   const a = c.agreement, who = c.reviews.map((r) => `${esc(r.reviewer)} (${r.crossings})`).join(" and ");
   return `<div class="ok">Kept as gold clip ${esc(c.id)} (${esc(c.conditions.traffic || "")} traffic), in the ${esc(c.split)} set, counted by ${who}.</div>`
+    + `<div class="${c.tier === "marked" ? "warn" : "muted"}" style="margin-top:4px">${esc(c.scoring)}</div>`
     + (a ? `<div class="${a.status === "agreed" || a.status === "settled" ? "ok" : "warn"}" style="margin-top:6px">The two counts agree on ${a.agreed} crossing(s)${a.disagreements
             ? `; they disagree on ${a.disagreements} (${esc(a.status)}). Each is listed on the Count by hand step, with a Show button, to settle with a reason; until then it stays out of any scoring` : ""}.</div>`
        : `<div class="muted" style="margin-top:6px">Someone else can count the same footage without seeing this count: it shows how far two people agree. <button id="goldRecount" style="margin-left:6px">Count it again as someone else</button></div>`);

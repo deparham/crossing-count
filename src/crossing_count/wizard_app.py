@@ -111,6 +111,7 @@ class RulesIn(BaseModel):
 class GoldScoreIn(BaseModel):
     which: str = "development"  # or "test": the held-out stores, for a final check only
     note: str = ""
+    clean_only: bool = False  # leave out clips counted on marked footage (the test set always does)
 
 
 def _restart() -> None:
@@ -1185,7 +1186,10 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         """Can this footage's count be kept as a gold clip, and is it kept already?"""
         w = wiz()
         rec = gold.find(w.state, data(), shared())
-        return {"problems": gold.problems(w.state), "tags": gold.TAGS,
+        tier = gold.footage_tier(w.state)
+        split = gold.split_of(str(w.state["store"].get("code") or ""))
+        return {"problems": gold.problems(w.state), "tier": tier,
+                "tier_words": gold.tier_words(tier, split), "tags": gold.TAGS,
                 "lighting": gold.LIGHTING, "occlusion": gold.OCCLUSION,
                 "shared": shared() is not None, "clip": gold.describe(rec) if rec else None}
 
@@ -1232,7 +1236,8 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
         def work() -> None:
             try:
-                job.update(state="done", result=gold.evaluate(s.which, data(), s.note, shared()))
+                job.update(state="done", result=gold.evaluate(s.which, data(), s.note, shared(),
+                                                              clean_only=s.clean_only))
             except (gold.GoldError, OSError, ValueError) as exc:
                 job.update(state="failed", error=str(exc))
 

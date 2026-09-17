@@ -1,7 +1,7 @@
-# Ground Truth Specification v1.2
+# Ground Truth Specification v1.3
 
-Status: v1.2 in force from 16 September 2026 (v1.1 from 15 September, v1.0 from 14
-September 2026). Every count by hand records the version it
+Status: v1.3 in force from 17 September 2026 (v1.2 from 16 September, v1.1 from 15
+September, v1.0 from 14 September 2026). Every count by hand records the version it
 followed (`specification` in the wizard's state and in each gold clip). Counts made
 under different versions are not scored together unless the change log below says the
 versions are compatible.
@@ -82,8 +82,10 @@ and add a note; if the setting says not to count them and it matters, mark uncer
 1. **Clean footage.** Count footage without the sensor's own drawings. The sensor's
    tracks, boxes and counts on the picture are the system under test and can sway the
    count towards it. (CrossingCount downloads clean footage for a count by hand and
-   draws its own line. Footage with the sensor's marks can still be looked at, but a
-   count made on it is never a gold clip.)
+   draws its own line.) A count on footage with the sensor's marks is kept apart, as a
+   **marked** gold clip: it is scored only in the development set and always shown
+   apart from clean clips, never in the test set, and never in anything said about the
+   sensor's accuracy (section 10.1).
 2. **Nothing else shown.** While counting, the annotator sees neither the automatic
    counter's crossings nor the sensor's numbers. The sensor's numbers are entered only
    after the count is finished.
@@ -186,13 +188,16 @@ Four things say whether footage shows the marks, and **any one of them is enough
 | its name | "Export - 392 marked - ..." |
 | what was said | the answer on the wizard's marks step |
 
-The picture is never overruled by an answer. A gold clip is refused unless the footage is
-clean and was checked in the picture. Results counted on marked footage are excluded from
-every comparison with the system, and say why. Earlier results are audited on the
+The picture is never overruled by an answer. A gold clip counted on footage that is not
+clean is kept as a **marked** clip, apart from clean ones: in the development set's scores,
+shown on their own row, never in the test set. Counting the same window on both clean and
+marked footage (by different people, or days apart) measures how far the marks move a count,
+and whether towards the sensor's number (Dataset Specification, section 7). Results
+counted on marked footage are excluded from every comparison with the system, and say why. Earlier results are audited on the
 Validation runs page; those found to be on marked footage are reclassified (kept out, with
 the reason, in the audit log and a registry) — the results themselves are never edited.
-Gold clips that are not known to have been counted on clean footage are **provisional**:
-kept and listed, left out of scoring.
+Gold clips said to be clean whose footage was never checked in the picture are
+**provisional**: kept and listed, left out of scoring.
 
 ### 10.2 Line correspondence: our line is the sensor's line
 
@@ -232,3 +237,4 @@ another camera's numbers, which is a wrong report rather than a failed run.
 | 1.0 | 14 Sep 2026 | First version. |
 | 1.1 | 15 Sep 2026 | Section 9: sampling protocol (peak with control windows, stratified, random), recorded with every validation and stated on every report. What a crossing is did not change: counts made under 1.0 and 1.1 are scored together. |
 | 1.2 | 16 Sep 2026 | Section 10: independence enforced from the picture itself (not a flag), for automatic checks as well as counts by hand; line correspondence (api / calibrated / by eye) recorded per camera; camera matching confirmed by a person when it is not certain. What a crossing is did not change: counts made under 1.0, 1.1 and 1.2 are scored together, but a count on marked footage is no longer accepted as gold and is left out of comparisons. |
+| 1.3 | 17 Sep 2026 | Sections 5 and 10.1: a full count on marked footage is kept as a **marked** gold clip instead of being refused: scored in the development set only, shown apart from clean clips, never in the test set or in anything said about the sensor's accuracy; windows counted on both clean and marked footage measure how far the marks sway a count. What a crossing is did not change: counts made under 1.0 to 1.3 are scored together. |

@@ -320,15 +320,24 @@ a count that looked everywhere can answer it. "Every crossing the tool proposed
 was checked" is not that: people the tool never showed are missing from such a
 check. So:
 
-- **Gold clip.** A count by hand in the wizard (Manual), on clean footage, that
-  watched at least 99% of every counted camera's footage can be kept on the
-  report page as a gold clip, with its lighting, how often people were hidden,
+- **Gold clip.** A count by hand in the wizard (Manual) that watched at least
+  99% of every counted camera's footage can be kept on the report page as a
+  gold clip, with its lighting, how often people were hidden,
   tags (groups, people stopping or coming back, ...) and notes; its traffic
   level is worked out from the count. It is saved in `gold/gold_v1/` with the
   store, cameras, period, video facts, what counted as a person, the Ground
   Truth Specification version, every crossing (camera, time, clock, direction),
   who counted and when. Models never write to it. See
   [docs/DATASET_SPECIFICATION.md](docs/DATASET_SPECIFICATION.md).
+- **Clean and marked footage.** A count on footage showing RetailNext's marks is
+  kept as a **marked** clip, because the marks can sway a count towards
+  RetailNext's. Marked clips count in the development set's scores, always also on
+  a row of their own, and never in the test set or in anything said about
+  RetailNext's accuracy. "Clean footage only" on the gold page leaves them out.
+  Count a window on both clean and marked footage (another person, or days
+  later), and the gold page's "Do RetailNext's marks sway a count?" card shows
+  how far the two counts differ and whether the marked one moved towards
+  RetailNext's number. It says nothing until 5 windows have been counted both ways.
 - **Sets by store, fixed.** A store's set comes from its code (about one store in
   five goes to test, one in five to validation, the rest to train), the same on
   every computer and for good, so no store's footage is on both sides. Tune on
@@ -444,7 +453,7 @@ windows are shown by role and traffic level only: RetailNext's numbers stay
 hidden until the count is done, so they cannot sway it. Pick one and it exports every camera of the store
 for that window without RetailNext's marks (the sensor's own tracks on the
 picture can sway a count by hand too; "by hand on RetailNext's marked footage"
-is still there for a quick look, but never makes a gold clip), downloads it next to
+is still there; a full count on it is kept as a marked gold clip, apart from clean ones), downloads it next to
 your other footage (named like RetailNext's own exports, never over another
 file), and opens it with those choices made. Exports are jobs on your
 RetailNext account, which it deletes after 7 days. The key goes only to
@@ -572,8 +581,8 @@ records it. No detection or tracking is involved. It is the wizard's **Manual**
 mode, described under *The count wizard* above: pick the footage, name or draw
 the cameras, then press `I` and `O` at every crossing while a timeline shows
 what you have watched. The count, the watched stretches and every correction
-are saved as they happen, the report is the same PowerPoint, and a full count on
-clean footage can be kept as a gold clip.
+are saved as they happen, the report is the same PowerPoint, and a full count can
+be kept as a gold clip (on marked footage, as a marked one).
 
 (The standalone `count.py` page that did this was removed on 16 September 2026;
 the wizard does everything it did, with a decision log and the gold set. Counts
@@ -901,8 +910,8 @@ run checks:
 
 - The sensor's own tracks and height labels are burned into RetailNext exports
   and cannot be hidden, so counting is done on clean exports instead. The tool
-  checks each picture itself rather than trusting an answer: marked footage is
-  refused for gold clips, and any result counted or checked on it is left out of
+  checks each picture itself rather than trusting an answer: a gold clip on marked
+  footage is kept apart from clean ones, and any result counted or checked on it is left out of
   the comparison with the sensor, with the reason
   (docs/GROUND_TRUTH_SPECIFICATION.md, section 10). Earlier results can be
   audited for this on the *Validation runs* page.

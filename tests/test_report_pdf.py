@@ -67,7 +67,7 @@ def _data(tmp_path: Path) -> dict[str, Any]:
         "headline": [validation.window_headline("RetailNext", "people coming in", 41, 48, 0,
                                                 sampling.when(PEAK))],
         "identity": {"validation_id": None, "sampling": sampling.label(PEAK),
-                     "specification": "Ground Truth Specification v1.2", "gold_set": "none yet",
+                     "specification": "Ground Truth Specification v1.3", "gold_set": "none yet",
                      "footage": "clean: no RetailNext marks"},
         "caveats": ["RetailNext's numbers are Lismore's total: its entrances together."],
         "directions": [{"key": "in", "label": "Traffic In", "verified": 48, "unsure": 0,
@@ -93,7 +93,7 @@ def test_page_one_leads_with_the_result_and_what_it_rests_on(tmp_path: Path) -> 
     cover = pages[0]
     assert cover.index("RetailNext counted 7 fewer") < cover.index("VERIFIED")  # words first
     assert "Validation ID: draft" in cover and "Sampling: peak: the busiest" in cover
-    assert "Ground truth: Ground Truth Specification v1.2" in cover
+    assert "Ground truth: Ground Truth Specification v1.3" in cover
     assert "Footage: clean" in cover and "Lismore's total" in cover
     assert "RW-128\n" not in cover  # the code line gives way to the result
     assert "RW-128-PB1 · 11:22:10" in cover  # room for the picture on page 1

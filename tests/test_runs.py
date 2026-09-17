@@ -72,7 +72,7 @@ def test_a_finalised_validation_is_kept_and_locked(reported: Wizard, tmp_path: P
     m = json.loads((folder / "manifest.json").read_text())
     assert m["validation_id"] == vid and m["footage"]["sha256"] and m["software"]["crossingcount"]
     assert m["system_under_test"]["numbers"]["sensor"] == {"in": 2}
-    assert m["ground_truth"]["specification"] == "1.2" and m["hardware"]["cpus"]
+    assert m["ground_truth"]["specification"] == "1.3" and m["hardware"]["cpus"]
     assert m["audit_log_head"] != auditlog.GENESIS and set(m["files"]) == names - {"manifest.json"}
     assert "counted" in (folder / "crossings.csv").read_text()
     assert not (folder / "result.json").stat().st_mode & stat.S_IWUSR  # read-only
