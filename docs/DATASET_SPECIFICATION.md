@@ -144,7 +144,7 @@ The gold page runs these every time it opens:
 
 A window with both a clean and a marked clip is a **pair**. For each pair the gold page shows:
 - **Crossings matched:** the two counts are matched crossing by crossing, as two people's
-  counts are (at most 2 s apart on the same camera). Moments either marked uncertain are
+  counts are (at most 3 s apart on the same camera, after the clocks are aligned). Moments either marked uncertain are
   left out.
 - **Only one count:** the crossings only the clean count found, and those only the marked
   count found.

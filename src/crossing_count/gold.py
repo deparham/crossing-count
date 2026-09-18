@@ -58,6 +58,7 @@ from .evaluate import (
     add,
     agreement,
     consensus,
+    lag,
     match,
     score,
     summary,
@@ -694,15 +695,19 @@ def detector_of(c: Mapping[str, Any]) -> set[tuple[str, str, str]]:
 
 def score_camera(real: list[tuple[float, str]], unsure: list[float], items: list[dict[str, Any]],
                  stretches: list[dict[str, Any]], offset: float, duration: float,
-                 dirs: list[str]) -> dict[str, Any]:
+                 dirs: list[str], lag: float = 0.0) -> dict[str, Any]:
     """One camera of a clip: the tool's crossings (moved onto the clip's clock and kept to
-    its period) against the person's, and the reviewing it would have asked for."""
+    its period) against the person's, and the reviewing it would have asked for.
+
+    lag moves the tool's crossings onto the counter's clock (evaluate.lag): a count made by
+    hand is pressed after the crossing is seen, which is the counter's reaction, not the
+    tool's error."""
     def inside(t: float) -> bool:
         return 0.0 <= t <= duration
 
-    counted = [(float(i["t"]) - offset, str(i["direction"])) for i in items
+    counted = [(float(i["t"]) - offset + lag, str(i["direction"])) for i in items
                if i["kind"] == "counted" and inside(float(i["t"]) - offset)]
-    listed = [(float(i["t"]) - offset, str(i["direction"])) for i in items
+    listed = [(float(i["t"]) - offset + lag, str(i["direction"])) for i in items
               if i["kind"] == "possible" and inside(float(i["t"]) - offset)]
     s = score(real, counted, dirs, unsure)
     missed = s["at"]["missed"]
@@ -738,22 +743,35 @@ def score_clip(rec: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
     dur, dirs = float(rec["duration_s"]), list(rec["dirs"])
     cams: dict[str, Any] = {}
     by_dir: dict[str, dict[str, int]] = {}
+    found_items: dict[str, tuple[Any, list[dict[str, Any]], int]] = {}
     for r in results:
         sensor = r.cfg.sensor
         if sensor not in have:
             continue
         pic = int(r.candidates.get("picture", {}).get("index", 0))
-        items = review_items(sensor, pic, r.candidates, r.discarded, r.unexplained, dirs,
-                             float("inf"))
+        found_items[sensor] = (r, review_items(sensor, pic, r.candidates, r.discarded,
+                                               r.unexplained, dirs, float("inf")), pic)
+    # the two clocks, over the whole clip: a hand count is pressed after the crossing is seen
+    every_real = [x for sensor in found_items for x in real.get(sensor, [])]
+    every_tool = [(float(i["t"]) - offset, str(i["direction"]))
+                  for _, items, _ in found_items.values() for i in items if i["kind"] == "counted"]
+    hand_lag = lag(every_real, every_tool, dirs) if rec.get("reviews") else 0.0
+    for sensor, (r, items, pic) in found_items.items():
         cams[sensor] = score_camera(real.get(sensor, []), unsure.get(sensor, []), items,
-                                    watch_stretches(sensor, pic, r.unexplained), offset, dur, dirs)
+                                    watch_stretches(sensor, pic, r.unexplained), offset, dur,
+                                    dirs, hand_lag)
         add(by_dir, cams[sensor]["by_direction"])
     notes += [f"{c}: no automatic count of this camera, not scored"
               for c in real if c not in cams]
     work = {k: sum(c[k] for c in cams.values())
             for k in ("questions", "listed", "missed", "misses_on_list", "watch_s")}
+    if hand_lag:
+        notes.append(f"The hand count was pressed a median {abs(hand_lag):.1f}s "
+                     f"{'after' if hand_lag > 0 else 'before'} the tool's moment (a counter's "
+                     f"reaction time): the two clocks were aligned before matching.")
     return {**base, "scored": True, "run": run_dir.name, "offset_s": round(offset, 2),
-            "cameras": cams, "by_direction": by_dir, "camera_hours": dur * len(cams) / 3600,
+            "hand_lag_s": hand_lag, "cameras": cams, "by_direction": by_dir,
+            "camera_hours": dur * len(cams) / 3600,
             **work, "detectors": _detectors(run_dir, have), "notes": notes}
 
 

@@ -3,7 +3,7 @@
 Where CrossingCount stands as a thing a customer pays for and a vendor may argue with.
 Status is one of **Done**, **Partly**, **Not started**, or **Blocked on data**. Evidence is
 a test name, a file or a measurement — never an assertion. Written 16 September 2026,
-updated 17 September 2026.
+updated 19 September 2026.
 
 Blocked on data means the code is there and the number cannot exist yet: it needs clips
 counted by hand, which costs annotation hours, not programming.
@@ -39,7 +39,9 @@ counted by hand, which costs annotation hours, not programming.
 | No percentage on too few crossings | **Done** | `validation.quote` (30 verified minimum); `tests/test_engagement.py::test_eleven_against_nine_gives_the_counts_not_a_percentage` | — |
 | A percentage with an uncertainty range | **Done** | Bootstrap over whole windows, `MIN_CLUSTERS` = 5; engagements; `tests/test_engagement.py::test_windows_put_together_give_a_percentage_and_its_range` | Needs 5 finalised windows of one store; none yet |
 | Count-level metrics defined and tested | **Done** | `docs/METRICS_SPECIFICATION.md` section 2; `tests/test_validation.py` | — |
-| Crossing-level recall of the automatic counter | **Blocked on data** | `evaluate.py`, `bench.py`, `gold.py` all in place and tested | No clip has been counted by hand in full, so recall is unmeasured |
+| Crossing-level recall of the automatic counter | **Partly** (first measurement) | CN-159, 15 minutes, two cameras, 20 crossings counted by hand (18 Sep 2026), scored 19 Sep: YOLO26m de-rotated found 15 of 20 (75%) with 10 false, RF-DETR on the whole picture 11 of 20 (55%) with 5 false | 20 crossings is below the 30 the tool requires before quoting a rate, and it is one store: more clips, in more stores, before any number is published |
+| Why the tool misses crossings | **Done** (for the first clip) | Of 8 misses: 3 people seen but no crossing proposed, 2 tracks broken at the line, 3 rejected by the counting rule (two "returned on the same track", one "pending expired"). The mask rule tripped its own alarm: 33% of committed counts on CN-159-L1 against a 2% threshold | The mask and return rules look like the largest single cause; not yet investigated |
+| The counter's reaction time is not counted as the tool's error | **Done** | `evaluate.lag`: measured median 1.4 s over 30 hand-counted crossings (two stores, three cameras); clocks aligned before matching, window 3 s, both recorded with every score; `tests/test_evaluate.py::test_a_counters_reaction_time_is_measured_and_taken_out`; the hand-count page can move a mark onto the frame where the crossing happens | — |
 | Scenario metrics (crowds, groups, lighting) | **Blocked on data** | Tags and conditions recorded per clip (`gold.py`) | Needs clips in each condition |
 | How far two people agree | **Blocked on data** | `evaluate.agreement`, adjudication; `tests/test_annotation.py` | Needs a clip counted by a second person |
 
@@ -60,7 +62,7 @@ counted by hand, which costs annotation hours, not programming.
 |---|---|---|---|
 | What checking a clip costs, per camera-hour | **Done** | `bench.totals`: questions, review minutes (measured from answer times), share left to watch; `tests/test_detectors.py::test_the_benchmark_says_what_the_checking_costs` | Needs more clips before a rate can be quoted |
 | Things that never move counted separately | **Done** | `bench.static_objects`; `tests/test_detectors.py` | — |
-| Detector comparison | **Done, inconclusive** | README "What the first comparison found": RF-DETR de-rotated reports ~57 people a frame where 11–13 are in view and runs at 0.1× real time; RF-DETR naive is faster than YOLO de-rotated | No winner without hand-counted clips; RF-DETR's duplicate merging needs its own thresholds before it is comparable in the de-rotated pipeline |
+| Detector comparison | **Done, first evidence** | Scored against the same hand count (CN-159): YOLO26m de-rotated 75% recall / 60% precision, RF-DETR whole picture 55% / 69%. YOLO26m finds more real crossings and pays in false ones, which is the right way round for a count that is checked | One clip, one store, 20 crossings: a direction, not a verdict |
 | One way to count, one way to check, one way to score | **Done** | Legacy `count.py`, `review.py`, `export.py` and their pages deleted; `bench.py` and `gold.py` share `evaluate.match` | — |
 | A report a non-technical buyer can read | **Done** | PowerPoint and PDF from the same data (`report_pptx.py`, `report_pdf.py`); page 1 opens with the result in words, then the sample it rests on, the caveats (store totals, marked footage, lines drawn by eye), and the validation ID, sampling mode, specification, gold set and footage; a finalised report carries its ID; `tests/test_report_pdf.py`, `tests/test_runs.py::test_a_finalised_validation_is_kept_and_locked` | Not yet read by a buyer: the wording is untested on the people it is for |
 
@@ -68,7 +70,7 @@ counted by hand, which costs annotation hours, not programming.
 
 | Item | Status | Evidence | Remaining |
 |---|---|---|---|
-| Lint, types and tests on every change | **Done** | `.github/workflows/checks.yml`; 280 tests | — |
+| Lint, types and tests on every change | **Done** | `.github/workflows/checks.yml`; 291 tests | — |
 | Dependencies checked for known vulnerabilities | **Done** | `pip-audit` job; none found on 16 Sep 2026 across 307 packages | — |
 | One formatting standard, enforced | **Not started** | `ruff format --check` would rewrite 87 of 108 files | A one-off reformat commit, then add the check |
 | Signed installers | **Partly** | Signing wired into the Windows build; publisher metadata; SHA-256 in release notes; `docs/INSTALL_WINDOWS.md` | Needs a certificate (about US$10 a month for Azure Trusted Signing); until then both systems warn |
@@ -83,9 +85,10 @@ Ready: the method (what a crossing is, independence, sampling scope, what may be
 the record (finalised runs, audit log, manifests, detector provenance), and the paperwork
 (licensing, security, privacy).
 
-Not ready: **nothing has been counted by hand in full**, so the automatic counter's recall
-is unknown and no percentage has an uncertainty range behind it. That is the one thing no
-amount of code fixes, and everything in section 3 marked *blocked on data* waits on it.
+Not ready: **one clip has been counted by hand in full** (CN-159, 20 crossings, 19 September
+2026), which is the first real measurement of the automatic counter and still below the
+sample the tool itself requires before quoting a rate. Everything in section 3 marked
+*blocked on data* waits on more of them, in more stores.
 
 Also outstanding: schemas for gold clips and manifests (section 4), automatic deletion of
 old footage-derived data (section 6), and a code-signing certificate.

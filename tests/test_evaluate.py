@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-from crossing_count.evaluate import agreement, match, rates, score, summary, wilson
+from crossing_count import evaluate
+from crossing_count.evaluate import (
+    agreement,
+    lag,
+    match,
+    rates,
+    score,
+    summary,
+    wilson,
+)
 
 
 def test_matching_is_one_to_one_and_makes_the_most_pairs() -> None:
@@ -48,3 +57,32 @@ def test_two_reviewers_are_compared_the_same_way() -> None:
     assert (g["agreed"], g["direction_disagreements"], g["only_first"], g["only_second"]) == (1, 1, 1, 1)
     assert g["agreement_pct"] == 25.0 and g["at"]["only_first"] == [30.0]
     assert g["at"]["direction"] == [20.0] and g["at"]["only_second"] == [45.0]
+
+
+def test_a_counters_reaction_time_is_measured_and_taken_out() -> None:
+    """A person presses the key after seeing the crossing; the tool marks the moment itself."""
+    real = [(10.0 * k, "out") for k in range(1, 13)]  # a crossing every 10 seconds
+    late = [(t - 1.4, "out") for t, _ in real]  # the tool counted each 1.4 s before the press
+    assert lag(real, late) == 1.4  # add it to the tool's times to line the clocks up
+    assert lag(real, real) == 0.0
+    # too few pairs to tell a clock from a coincidence
+    assert lag(real[:4], late[:4]) == 0.0
+    # too far apart to be a reaction: not a clock to align, something to look at
+    spread = [(60.0 * k, "out") for k in range(1, 13)]  # a crossing a minute, so 9 s is nearest
+    assert lag(spread, [(t - 9.0, "out") for t, _ in spread]) == 0.0
+    # only crossings close enough to be the same person count towards it
+    with_stray = [*late, (500.0, "out")]
+    assert lag(real, with_stray) == 1.4
+    # and it is what makes the scoring agree: a steady 1.4 s lag is not eight misses
+    before = score(real, late, ["out"], tol=1.0)["by_direction"]["out"]
+    after = score(real, [(t + lag(real, late), d) for t, d in late], ["out"], tol=1.0)
+    assert before["found"] == 0 and before["missed"] == 12 and before["false"] == 12
+    assert after["by_direction"]["out"]["found"] == 12
+    assert after["by_direction"]["out"]["missed"] == 0 and after["by_direction"]["out"]["false"] == 0
+
+
+def test_the_window_fits_how_a_hand_count_is_made() -> None:
+    # 3 s: measured presses landed a median 1.4 s late, the middle half within about 3 s
+    assert evaluate.TOLERANCE_S == 3.0
+    assert "clocks aligned" in evaluate.MATCHING  # every score says which rule it used
+    assert match([10.0], [12.5]) == [(0, 0)] and match([10.0], [13.5]) == []

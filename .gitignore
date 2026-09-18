@@ -49,3 +49,6 @@ audit/
 
 # macOS folder metadata
 .DS_Store
+
+# Claude Code: machine-local settings
+.claude/settings.local.json

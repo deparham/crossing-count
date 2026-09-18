@@ -27,12 +27,22 @@ crossings: "insufficient sample" instead.
 from __future__ import annotations
 
 import math
+import statistics
 from collections.abc import Iterable, Sequence
 from typing import Any
 
 ENGINE = "crossing-evaluation/1.0"
-MATCHING = "one-to-one time sweep, same direction first/1.0"
-TOLERANCE_S = 2.0
+MATCHING = "one-to-one time sweep, same direction first, clocks aligned/1.1"
+# A person counting by hand presses the key after seeing the crossing: measured on the first
+# hand counts (30 crossings, two stores, three cameras, 18 Sep 2026) the press came a median
+# 1.4 s after the tool's moment, the middle half between 0.1 s and 3.1 s. A 2 s window caught
+# barely half of those pairs, so the same person's crossing was scored as a miss and a false
+# count at once. Crossings on one camera are a median 5.5 s apart, so a wider window costs
+# little: the ambiguity that remains is people crossing together, which no window settles.
+TOLERANCE_S = 3.0
+LAG_WINDOW_S = 8.0  # pairs this close count towards the offset between the two clocks
+LAG_MIN_PAIRS = 8  # fewer than this and the offset says more about chance than about the clocks
+LAG_MAX_S = 3.0  # a larger offset is not a clock to align but a disagreement to look at
 MIN_SAMPLE = 30
 DIRS = ("in", "out")
 KEYS = ("truth", "pred", "found", "wrong_way", "missed", "false", "duplicate", "as_other",
@@ -57,6 +67,28 @@ def match(truth: Sequence[float], pred: Sequence[float], tol: float = TOLERANCE_
             out.append((i, pi[k]))
             k += 1
     return out
+
+
+def lag(truth: Iterable[tuple[float, str]], pred: Iterable[tuple[float, str]],
+        dirs: Sequence[str] = DIRS, window: float = LAG_WINDOW_S,
+        min_pairs: int = LAG_MIN_PAIRS, max_shift: float = LAG_MAX_S) -> float:
+    """How far the tool's clock sits from the person's, in seconds, to add to the tool's times
+    before matching (positive: the tool counted earlier than the person pressed).
+
+    A count made by hand carries the counter's reaction time, which is theirs, not the tool's
+    error. The offset is the median of the gaps between each crossing and the tool's nearest,
+    counted only where they are close enough to be the same person. It is 0 on too few pairs,
+    or when the gap is too large to be a reaction: then there is something else to look at,
+    and the comparison should show it rather than hide it."""
+    real = sorted(t for t, d in truth if d in dirs)
+    tool = sorted(t for t, d in pred if d in dirs)
+    if not real or not tool:
+        return 0.0
+    gaps = [g for t in real if abs(g := min(tool, key=lambda x: abs(x - t)) - t) <= window]
+    if len(gaps) < min_pairs:
+        return 0.0
+    shift = -statistics.median(gaps)
+    return round(shift, 2) if abs(shift) <= max_shift else 0.0
 
 
 def score(truth: Iterable[tuple[float, str]], pred: Iterable[tuple[float, str]],

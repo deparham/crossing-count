@@ -1,7 +1,7 @@
-# Ground Truth Specification v1.3
+# Ground Truth Specification v1.4
 
-Status: v1.3 in force from 17 September 2026 (v1.2 from 16 September, v1.1 from 15
-September, v1.0 from 14 September 2026). Every count by hand records the version it
+Status: v1.4 in force from 19 September 2026 (v1.3 from 17 September, v1.2 from 16
+September, v1.1 from 15 September, v1.0 from 14 September 2026). Every count by hand records the version it
 followed (`specification` in the wizard's state and in each gold clip). Counts made
 under different versions are not scored together unless the change log below says the
 versions are compatible.
@@ -102,7 +102,7 @@ and add a note; if the setting says not to count them and it matters, mark uncer
 
 A gold clip can be counted a second time, independently, by someone who has not seen the
 first count. The two counts are matched crossing by crossing (same camera, same
-direction, at most 2 seconds apart). Crossings both counted are the ground truth. Each
+direction, at most 3 seconds apart). Crossings both counted are the ground truth. Each
 moment they disagree on (a crossing only one counted, one counted in opposite
 directions, or one marked uncertain) is listed on the Count by hand step, with a Show
 button. A third person, ideally, settles each one after watching it: **In**, **Out**,
@@ -237,4 +237,5 @@ another camera's numbers, which is a wrong report rather than a failed run.
 | 1.0 | 14 Sep 2026 | First version. |
 | 1.1 | 15 Sep 2026 | Section 9: sampling protocol (peak with control windows, stratified, random), recorded with every validation and stated on every report. What a crossing is did not change: counts made under 1.0 and 1.1 are scored together. |
 | 1.2 | 16 Sep 2026 | Section 10: independence enforced from the picture itself (not a flag), for automatic checks as well as counts by hand; line correspondence (api / calibrated / by eye) recorded per camera; camera matching confirmed by a person when it is not certain. What a crossing is did not change: counts made under 1.0, 1.1 and 1.2 are scored together, but a count on marked footage is no longer accepted as gold and is left out of comparisons. |
+| 1.4 | 19 Sep 2026 | Section 6 and the Metrics Specification section 1: a crossing counted by hand and one counted by the tool are the same event within 3 seconds, not 2, and the two clocks are aligned first by the measured reaction time of the person counting (a median 1.4 s on the first 30 hand-counted crossings). The definition of a crossing did not change, and neither did any count: what changed is how two records of the same crossing are recognised as one. Scores made under the old rule stay as they were and say so; every score records its window and the offset it used. |
 | 1.3 | 17 Sep 2026 | Sections 5 and 10.1: a full count on marked footage is kept as a **marked** gold clip instead of being refused: scored in the development set only, shown apart from clean clips, never in the test set or in anything said about the sensor's accuracy; windows counted on both clean and marked footage measure how far the marks sway a count. What a crossing is did not change: counts made under 1.0 to 1.3 are scored together. |

@@ -1249,11 +1249,11 @@ function renderHand() {
   $("hlist").innerHTML = mine.length ? mine.map((c) =>
     `<div><span class="pill ${c.direction}">${c.direction.toUpperCase()}</span>${c.uncertain ? '<span class="warn" title="Uncertain: listed, not counted">uncertain</span>' : ""}` +
     `<a data-t="${c.t}">${clock(c.t)}</a>${c.note ? `<span class="muted" title="${esc(c.note)}">· ${esc(c.note.slice(0, 40))}</span>` : ""}` +
-    `<span style="flex:1"></span><a data-hedit="${c.id}">edit</a><a data-hdel="${c.id}">remove</a></div>` +
+    `<span style="flex:1"></span><a data-hsnap="${c.id}" title="Move it to the frame you are on: a key press lands after you see the crossing">move here</a><a data-hedit="${c.id}">edit</a><a data-hdel="${c.id}">remove</a></div>` +
     (W.hedit === c.id ? hEditor(c) : "")).join("")
     : '<span class="muted">none yet</span>';
   $("speeds").innerHTML = HR.map((r) => `<button data-rate="${r}" class="${V.playbackRate === r ? "on" : ""}">${r}×</button>`).join("");
-  $("hkeys").innerHTML = `${keysText()} (with <kbd>⇧</kbd>: uncertain, not counted) · <kbd>U</kbd> mark the last uncertain · <kbd>E</kbd> edit the last · <kbd>Z</kbd> undo · <kbd>Space</kbd> play/pause · <kbd>,</kbd>/<kbd>.</kbd> one frame · <kbd>←</kbd>/<kbd>→</kbd> 2 s (<kbd>⇧</kbd> 0.1 s) · <kbd>↑</kbd>/<kbd>↓</kbd> speed` + (W.st.cameras.length > 1 ? ` · <kbd>1</kbd>–<kbd>${W.st.cameras.length}</kbd> camera` : "");
+  $("hkeys").innerHTML = `${keysText()} (with <kbd>⇧</kbd>: uncertain, not counted) · <kbd>U</kbd> mark the last uncertain · <kbd>S</kbd> move the last onto this frame · <kbd>E</kbd> edit the last · <kbd>Z</kbd> undo · <kbd>Space</kbd> play/pause · <kbd>,</kbd>/<kbd>.</kbd> one frame · <kbd>←</kbd>/<kbd>→</kbd> 2 s (<kbd>⇧</kbd> 0.1 s) · <kbd>↑</kbd>/<kbd>↓</kbd> speed` + (W.st.cameras.length > 1 ? ` · <kbd>1</kbd>–<kbd>${W.st.cameras.length}</kbd> camera` : "");
 }
 function setRate(r) { W.hrate = r; V.playbackRate = r; V.defaultPlaybackRate = r; document.querySelectorAll("#speeds [data-rate]").forEach((b) => b.classList.toggle("on", +b.dataset.rate === r)); }
 async function hcount(direction, uncertain = false) {
@@ -1266,6 +1266,17 @@ async function hcount(direction, uncertain = false) {
     if (uncertain) { hmsg(`Uncertain ${direction.toUpperCase()} at ${clock(t)} kept, not counted. <a data-hedit-last="1">Add a note</a>`, "warn"); return; }
     if (twin) hmsg(`That is a second ${direction.toUpperCase()} at the same moment. Two people together? Keep it. A double press? Press <kbd>Z</kbd>.`, "warn");
     else hmsg(`${direction.toUpperCase()} at ${clock(t)} saved.`, "ok");
+  } catch (e) { hmsg(esc(e.message), "err"); }
+}
+async function hsnap(id) {  // a key press lands after the crossing: put the mark on this frame
+  const c = W.h.sum.counts.find((x) => x.id === id);
+  if (!c) return;
+  const t = Math.round(V.currentTime * 100) / 100;
+  if (Math.abs(t - c.t) < 0.01) { hmsg("That is already where it is.", "muted"); return; }
+  try {
+    applyHand(await api("/api/hand/edit", { id, t, reason: "moved onto the frame where they cross" }));
+    hmsg(`Moved the ${c.direction.toUpperCase()} from ${clock(c.t)} to ${clock(t)} `
+      + `(${(t - c.t).toFixed(1)}s). The change is kept in the log.`, "ok");
   } catch (e) { hmsg(esc(e.message), "err"); }
 }
 async function hundo() {
@@ -1364,7 +1375,8 @@ async function showToolVsHand() {
   box.innerHTML = `<div class="big">The tool against your count</div>
     <div class="muted">It counted ${esc(got.video)}, the clean copy of this window. Your count is the truth here; this measures the tool.
     ${t ? `Of your ${t.truth} crossing(s) it found ${t.found}${t.missed ? `, missed ${t.missed}` : ""}${t.false ? `, and counted ${t.false} you did not` : ""}.` : ""}
-    ${got.alone ? ` ${got.alone} of those are ones RetailNext did not count either: counting on its marked footage can miss the same people it misses, so those are worth a second look.` : ""}</div>
+    ${got.alone ? ` ${got.alone} of those are ones RetailNext did not count either: counting on its marked footage can miss the same people it misses, so those are worth a second look.` : ""}
+    ${got.hand_lag_s ? ` Your presses came a median ${Math.abs(got.hand_lag_s).toFixed(1)}s ${got.hand_lag_s > 0 ? "after" : "before"} the tool's moment (reaction time), so the two clocks were lined up before matching; a crossing counts as the same one within ${got.tolerance_s}s.` : ""}</div>
     ${rows || '<div class="ok" style="margin-top:6px">Every crossing matched.</div>'}`;
 }
 $("handTool").addEventListener("change", async (e) => {
@@ -1506,6 +1518,7 @@ window.addEventListener("keydown", (e) => {
     else if (k === "o") go_(() => hcount("out", e.shiftKey));
     else if (k === "u") go_(hToggleUncertain);
     else if (k === "e") go_(() => { const c = hLast(); if (c) hOpenEditor(c.id); });
+    else if (k === "s") go_(() => { const c = hLast(); if (c) hsnap(c.id); });
     else if (k === "z" || k === "backspace") go_(hundo);
     else if (k === "arrowleft") go_(() => (V.currentTime = Math.max(0, V.currentTime - (e.shiftKey ? 0.1 : 2))));
     else if (k === "arrowright") go_(() => (V.currentTime = Math.min(W.st.duration_s, V.currentTime + (e.shiftKey ? 0.1 : 2))));
@@ -1529,13 +1542,14 @@ window.addEventListener("keydown", (e) => {
   }
 });
 document.addEventListener("click", (e) => {
-  const el = e.target.closest("[data-t],[data-hdel],[data-hedit],[data-hedit-last],[data-seek],#reveal");
+  const el = e.target.closest("[data-t],[data-hdel],[data-hedit],[data-hedit-last],[data-hsnap],[data-seek],#reveal");
   if (!el) return;
   e.preventDefault();
   if (el.id === "reveal") api("/api/reveal", {}).catch(() => {});
   else if (el.dataset.hdel) hdelete(+el.dataset.hdel);
   else if (el.dataset.hedit) hOpenEditor(+el.dataset.hedit);
   else if (el.dataset.heditLast) { const c = hLast(); if (c) hOpenEditor(c.id); }
+  else if (el.dataset.hsnap) hsnap(+el.dataset.hsnap);
   else if (el.dataset.seek) V.currentTime = +el.dataset.seek;
   else { V.currentTime = Math.max(0, +el.dataset.t - 3); V.play().catch(() => {}); }
 });

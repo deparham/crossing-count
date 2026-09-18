@@ -380,8 +380,11 @@ check. So:
   automatic count of the same cameras over the same period (the footage
   without RetailNext's marks, counted automatically); its recorded detections
   are replayed with today's settings and matched by clock time. A tool
-  crossing and a person's are one when on the same camera and at most 2 s
-  apart, one-to-one, the most pairs possible (close crossings included):
+  crossing and a person's are one when on the same camera and at most 3 s
+  apart, one-to-one, the most pairs possible (close crossings included). A count
+  by hand is a key pressed *after* the crossing is seen — measured at a median
+  1.4 s — so the two clocks are lined up first, by the median gap between them,
+  and every score says which offset it used:
 
   | | |
   |---|---|

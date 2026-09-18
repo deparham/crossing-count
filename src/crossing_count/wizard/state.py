@@ -1296,6 +1296,12 @@ class Wizard:
             return None
         dirs, offset = self.dirs(), self._twin_offset()
         counts = self.state["manual"]["counts"]
+        # a count by hand is pressed after the crossing is seen: align the clocks first
+        every_real = [(float(c["t"]), str(c["direction"])) for c in counts if not c.get("uncertain")]
+        every_tool = [(float(c["t_seconds"]) + offset, str(c["direction"]))
+                      for cam in self.state["cameras"]
+                      for c in (self._read(cam, "candidates").get("candidates") or [])]
+        hand_lag = evaluate.lag(every_real, every_tool, dirs)
         totals: dict[str, dict[str, int]] = {}
         rows: list[dict[str, Any]] = []
         # what each of them counted around a moment: its interval, or the whole footage when
@@ -1314,8 +1320,8 @@ class Wizard:
             truth = [(float(c["t"]), str(c["direction"])) for c in mine if not c.get("uncertain")]
             unsure = [float(c["t"]) for c in mine if c.get("uncertain")]
             found = self._read(cam, "candidates").get("candidates") or []
-            pred = [(float(c["t_seconds"]) + offset, str(c["direction"])) for c in found
-                    if str(c["direction"]) in dirs]
+            pred = [(float(c["t_seconds"]) + offset + hand_lag, str(c["direction"]))
+                    for c in found if str(c["direction"]) in dirs]
             s = evaluate.score(truth, pred, dirs, unsure)
             evaluate.add(totals, s["by_direction"])
             for kind, what in (("missed", "you counted it, the tool did not"),
@@ -1330,6 +1336,7 @@ class Wizard:
             row["diagnosis"] = (self.state.get("diagnosis") or {}).get(row["key"])
         rows.sort(key=lambda r: (r["t"], r["camera"]))
         return {"video": self.count_video().name, "offset_s": round(offset, 2),
+                "hand_lag_s": hand_lag, "tolerance_s": evaluate.TOLERANCE_S,
                 "totals": evaluate.summary(totals) if totals else None, "rows": rows,
                 "causes": CAUSES, "alone": sum(1 for r in rows if r["alone"])}
 

@@ -17,9 +17,21 @@ card is defined in section 3.
 ## 1. Crossing level (the automatic counter)
 
 **Matching** (`evaluate.match`, `evaluate.score`; matching version
-"one-to-one time sweep, same direction first/1.0"). A tool crossing and a person's
-crossing are the same event when they are on the same camera and at most `TOLERANCE_S`
-(2 s) apart. Each is matched at most once. Same-direction pairs are made first, taking
+"one-to-one time sweep, same direction first, clocks aligned/1.1"). A tool crossing and a
+person's crossing are the same event when they are on the same camera and at most
+`TOLERANCE_S` (3 s) apart, after the two clocks are aligned (below).
+
+**Aligning the clocks** (`evaluate.lag`). A count made by hand is a key pressed after the
+crossing is seen; the tool marks the moment the track crosses the line. Measured on the
+first hand counts (30 crossings, two stores, three cameras, 18 September 2026) the press
+came a median 1.4 s later, the middle half between 0.1 s and 3.1 s. That delay is the
+counter's reaction, not the tool's error, so before matching, the tool's crossings are
+moved by the median gap between each crossing and the tool's nearest within 8 s. The
+offset is not applied when fewer than 8 pairs support it, or when it exceeds 3 s: too
+large to be a reaction, and something to look at rather than hide. Every score records
+the offset it used, so any score can be recomputed without it. Crossings on one camera are
+a median 5.5 s apart, so a 3 s window adds little ambiguity; people crossing together
+remain ambiguous at any window and are settled by one-to-one matching. Each is matched at most once. Same-direction pairs are made first, taking
 each person's crossing in time order and giving it the earliest free tool crossing in its
 window (with equal windows this makes the most pairs possible, including people crossing
 close together); only what is left is paired across directions. The result is the same
