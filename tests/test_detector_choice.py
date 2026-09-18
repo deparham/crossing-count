@@ -18,7 +18,8 @@ from crossing_count.wizard import state as wizard_state
 def _commands(model: str) -> list[list[str]]:
     w = SimpleNamespace(state={"model": model, "cameras": [{"config": "c.json", "sensor": "CAM-A",
                                                            "picture": 0}]},
-                        video=Path("v.mp4"), run_dir=Path("run"))
+                        video=Path("v.mp4"), run_dir=Path("run"),
+                        count_video=lambda: Path("v.mp4"))
     return pipeline_commands(w)  # type: ignore[arg-type]
 
 

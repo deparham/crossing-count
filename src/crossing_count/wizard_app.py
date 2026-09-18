@@ -159,6 +159,7 @@ class DownloadIn(BaseModel):
     start: str  # HH:MM, the store's own time
     until: str
     marks: bool = False  # with RetailNext's own marks (for a count by hand)
+    both: bool = False  # the same window twice: clean to count on, marked to count by hand
 
 
 class DirectionIn(BaseModel):
@@ -264,6 +265,12 @@ class HandPositionIn(BaseModel):
 
 class DoneIn(BaseModel):
     done: bool = True
+
+
+class DiagnosisIn(BaseModel):
+    key: str  # camera@seconds, as the comparison names it
+    cause: str = ""  # one of wizard.CAUSES, or empty to remove it
+    note: str = ""
 
 
 class SettingsIn(BaseModel):
@@ -668,39 +675,57 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         target = next((f for f in (folders or default_folders()) if f.is_dir()),
                       paths.data_root() / "footage")
         target.mkdir(parents=True, exist_ok=True)
-        dest = rn.free_path(target, rn.footage_name(str(store.get("store_id") or b.code),
-                                                    start, end, b.marks))
+        # one export, or the same window twice: the clean one to count on and to count by hand,
+        # the marked one for RetailNext's own line and for watching its tracker (a pair)
+        wanted = [False, True] if b.both else [b.marks]
+        dests = [rn.free_path(target, rn.footage_name(str(store.get("store_id") or b.code),
+                                                      start, end, m)) for m in wanted]
+        dest = dests[-1 if b.marks else 0]
         job: dict[str, Any] = {"state": "exporting", "message": "RetailNext is preparing the video…",
-                               "done": 0, "total": None, "path": None, "cameras": sorted(channels)}
+                               "done": 0, "total": None, "path": None, "cameras": sorted(channels),
+                               "of": len(wanted), "which": 1}
         mine.rn_job = job
         plan = (mine.rn_plan if mine.rn_plan and mine.rn_plan["request"] == [_bare(b.code), b.date]
                 else None)
         chosen_by = sampling.record(plan, b.start, b.until) if plan else None
 
+        def one(marks: bool, where: Path, which: int) -> None:
+            """Export this window (with or without RetailNext's marks) and download it."""
+            say = "with RetailNext's marks" if marks else "clean"
+            job.update(which=which, state="exporting", done=0, total=None,
+                       message=f"RetailNext is preparing the video ({say})…")
+            export_id = rn.start_export(conn, list(channels.values()), start, end, marks)
+            waited = 0.0
+            while True:
+                state, info = rn.export_status(conn, export_id)
+                if state == "ready":
+                    break
+                if state == "failed":
+                    raise rn.RetailNextError(f"RetailNext could not export the video: {info}")
+                if state == "expired":
+                    raise rn.RetailNextError("RetailNext no longer has this export: try again.")
+                if waited >= EXPORT_WAIT_S:
+                    raise rn.RetailNextError("RetailNext has not finished the export after "
+                                             "30 minutes: try again later.")
+                time.sleep(EXPORT_POLL_S)
+                waited += EXPORT_POLL_S
+                job["message"] = f"RetailNext is preparing the video ({say})… ({int(waited)} s)"
+            job.update(state="downloading", message=f"Downloading ({say})…")
+            rn.download(info, where, lambda done, total: job.update(done=done, total=total))
+
         def work() -> None:
             try:
-                export_id = rn.start_export(conn, list(channels.values()), start, end, b.marks)
-                waited = 0.0
-                while True:
-                    state, info = rn.export_status(conn, export_id)
-                    if state == "ready":
-                        break
-                    if state == "failed":
-                        raise rn.RetailNextError(f"RetailNext could not export the video: {info}")
-                    if state == "expired":
-                        raise rn.RetailNextError("RetailNext no longer has this export: try again.")
-                    if waited >= EXPORT_WAIT_S:
-                        raise rn.RetailNextError("RetailNext has not finished the export after "
-                                                 "30 minutes: try again later.")
-                    time.sleep(EXPORT_POLL_S)
-                    waited += EXPORT_POLL_S
-                    job["message"] = f"RetailNext is preparing the video… ({int(waited)} s)"
-                job.update(state="downloading", message="Downloading…")
-                rn.download(info, dest, lambda done, total: job.update(done=done, total=total))
-                rn.remember_download(dest, {**rn.store_summary(conn.subscription, nodes, store),
-                                            "marks": b.marks, "start": start.isoformat(),
-                                            "end": end.isoformat(), "sampling": chosen_by})
-                job.update(state="done", message="Downloaded.", path=str(dest))
+                for k, (marks, where) in enumerate(zip(wanted, dests, strict=True), start=1):
+                    one(marks, where, k)
+                for marks, where in zip(wanted, dests, strict=True):
+                    twin = next((str(o.name) for m, o in zip(wanted, dests, strict=True)
+                                 if m is not marks), None)
+                    rn.remember_download(where, {**rn.store_summary(conn.subscription, nodes, store),
+                                                 "marks": marks, "start": start.isoformat(),
+                                                 "end": end.isoformat(), "sampling": chosen_by,
+                                                 "twin": twin})
+                job.update(state="done", message="Downloaded.", path=str(dest),
+                           paths=[str(p) for p in dests])
             except rn.RetailNextError as exc:
                 job.update(state="failed", message=str(exc))
             except OSError as exc:
@@ -862,6 +887,17 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                         del sessions[sid]
         paths.save_settings({"network": n.on})
         return network_status()
+
+    @app.get("/api/tool-vs-hand")
+    def tool_vs_hand() -> dict[str, Any]:
+        """After a hand count, with the tool counting the clean twin: the two side by side."""
+        return {"comparison": wiz().tool_vs_hand()}
+
+    @app.post("/api/diagnosis")
+    def diagnosis(d: DiagnosisIn) -> dict[str, Any]:
+        """Why the two differ here, watching RetailNext's own tracker: kept with the count."""
+        run(lambda: wiz().set_diagnosis(d.key, d.cause, d.note))
+        return {"comparison": wiz().tool_vs_hand()}
 
     @app.get("/api/settings")
     def get_settings() -> dict[str, Any]:

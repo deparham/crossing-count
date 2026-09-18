@@ -64,6 +64,19 @@ AUDIT_MIN = 5
 CLIP_BEFORE_S = 2.5
 CLIP_AFTER_S = 1.5
 MIN_WATCHED_PCT = 99.0  # a hand count that watched less of a camera's footage is incomplete
+# Why the sensor's count and the person's differ, seen on RetailNext's own marked footage:
+# what a customer can act on (the camera, its line, its settings).
+CAUSES = {
+    "no_track": "RetailNext never tracked the person",
+    "track_lost": "RetailNext's track was lost at the line",
+    "line_position": "RetailNext's line is somewhere else",
+    "counted_twice": "RetailNext counted the same person twice",
+    "wrong_way": "RetailNext counted the other direction",
+    "height_filter": "RetailNext left the person out (a child, or its height filter)",
+    "view": "The camera cannot see it: glare, an obstruction, or its angle",
+    "our_miss": "The tool's mistake, not RetailNext's",
+    "other": "Something else (say what)",
+}
 SHORTFALL_S = 30.0  # footage shorter than the sensor's intervals by more than this is said so
 GROUND_TRUTH_SPEC = "1.3"  # docs/GROUND_TRUTH_SPECIFICATION.md: what a crossing is
 RULE_CHOICES = ("count", "exclude")  # what counts as a person: children, staff (spec section 4)

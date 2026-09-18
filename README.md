@@ -197,6 +197,30 @@ the time and the checker's name (asked once, then remembered). Running a
 checked count again asks first: the check starts afresh, and the old one, with
 a copy of its report, is kept in `runs/<video>/wizard/history/`.
 
+### Counting by hand while the tool counts the clean copy
+
+On the RetailNext step, **Count: By hand on the marked footage, tool on the clean one**
+downloads the same window twice: once clean, once with RetailNext's marks. Then, on the
+Count by hand step:
+
+- **You count the marked one.** RetailNext's own line is in the picture, so nothing has to
+  be drawn by eye, and you can watch its tracker while you count.
+- **The tool counts the clean copy**, in the background, on the footage it meets in use.
+  Press *Let the tool count it now*; counts run one at a time on this computer.
+- **Nothing it finds is shown until you press "I've finished counting."** Seeing it first
+  would turn counting into checking its work.
+- **Then the two go side by side:** every crossing you counted that the tool did not, every
+  one it counted that you did not, and every one it counted the other way. Each has a
+  *why?* box — no track, track lost at the line, line somewhere else, counted twice, height
+  filter, the camera's view, our own mistake — kept with the validation, for the list of
+  things the store can change.
+- Differences where **RetailNext counted no more than you did** are marked: counting on its
+  marked footage can miss the same people it misses, so those are the ones to look at again.
+
+A count made on marked footage is not independent of RetailNext, so it is kept out of
+anything said about RetailNext's accuracy, and a gold clip from it goes in the marked tier
+(above). It measures **our** counter, which is what this mode is for.
+
 ### Sharing on this network
 
 **Share on this network** (in the header) lets colleagues on the same network use

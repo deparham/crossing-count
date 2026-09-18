@@ -180,7 +180,8 @@ def tool(name: str) -> list[str]:
 
 
 def pipeline_commands(w: Wizard) -> list[list[str]]:
-    """gate.py then detect.py for the chosen cameras, each pinned to its picture."""
+    """gate.py then detect.py for the chosen cameras, each pinned to its picture. The footage
+    is the validation's own, or its clean twin while a person counts the marked one by hand."""
     cams = w.state["cameras"]
     cfgs = [c["config"] for c in cams]
     tiles = [a for c in cams for a in ("--tile", f"{c['sensor']}={c['picture']}")]
@@ -190,7 +191,9 @@ def pipeline_commands(w: Wizard) -> list[list[str]]:
     # Its results go where the wizard reads them; candidates.json records which detector.
     which = (["--detector", "rfdetr", "--naive", "--main-folder"] if model == RFDETR
              else ["--model", model])
+    # the clean twin when a person is counting the marked footage by hand (Wizard.count_video)
+    video = str(w.count_video())
     return [
-        [*tool("gate"), str(w.video), *cfgs, *tiles, *out],
-        [*tool("detect"), str(w.video), *cfgs, *which, "--record", *out],
+        [*tool("gate"), video, *cfgs, *tiles, *out],
+        [*tool("detect"), video, *cfgs, *which, "--record", *out],
     ]

@@ -209,7 +209,7 @@
       <label>Length <select id="rnMinutes"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">1 hour</option></select></label>
       <label>Traffic <select id="rnDir"><option value="out">Out</option><option value="in">In</option><option value="both">In and out</option></select></label>
       <label>Windows <select id="rnSampling"><option value="peak">Peak trading, with a control window</option><option value="stratified">One from each traffic level</option><option value="random">At random in trading hours</option></select></label>
-      <label>Count <select id="rnMode"><option value="auto">Automatic</option><option value="manual">By hand</option><option value="marked">By hand on RetailNext's marked footage (a quick look only)</option></select></label>
+      <label>Count <select id="rnMode"><option value="auto">Automatic</option><option value="manual">By hand</option><option value="marked">By hand on RetailNext's marked footage (a quick look only)</option><option value="both">By hand on the marked footage, tool on the clean one (downloads both)</option></select></label>
     </div>
     <datalist id="rnStores"></datalist>
     <datalist id="rnSubs"></datalist>
@@ -360,9 +360,11 @@
       <div id="hwatched" class="muted"></div>
       <div id="hmsg" style="margin:8px 0;min-height:1.4em"></div>
       <div id="hdisputes"></div>
+      <div id="hTwin" class="card" style="padding:10px 12px;margin:8px 0" hidden></div>
       <div class="muted" style="margin-top:8px">Your counts on this camera (click a time to replay it)</div>
       <div id="hlist"></div>
       <button id="handDone" class="primary" style="margin-top:12px">I've finished counting →</button>
+      <div id="handTool" style="margin-top:12px"></div>
     </div>
   </div>
 </section>
@@ -788,7 +790,8 @@ $("rnWindows").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-win]");
   if (!b || !W.rnPick) return;
   const p = W.rnPick, w = p.windows[+b.dataset.win], mode = $("rnMode").value;
-  try { await api("/api/retailnext/download", { code: p.code, date: p.date, start: w.start, until: w.until, marks: mode === "marked" }); }
+  const marked = mode === "marked" || mode === "both";
+  try { await api("/api/retailnext/download", { code: p.code, date: p.date, start: w.start, until: w.until, marks: marked, both: mode === "both" }); }
   catch (err) { msg(err.message, "err"); return; }
   $("rnWindows").innerHTML = '<div id="rnJob" class="muted" style="margin-top:8px">RetailNext is preparing the video…</div>';
   const poll = async () => {
@@ -1213,7 +1216,15 @@ ENTER.hand = async () => {
   const pos = W.h.sum.positions[W.hcam] || 0;
   if (V.readyState >= 1) V.currentTime = pos; else V.addEventListener("loadedmetadata", () => (V.currentTime = pos), { once: true });
   setRate(W.hrate);
-  renderHand(); loadDisputes();
+  renderHand(); loadDisputes(); twinCard();
+  $("handDone").dataset.next = "";
+  $("handDone").textContent = "I've finished counting →";
+  await showToolVsHand();
+  if ($("handTool").innerHTML) {  // coming back to a finished count: its comparison is here
+    $("handDone").textContent = "Next →";
+    $("handDone").dataset.next = "1";
+  }
+  if (W.st.job && W.st.job.status === "running") pollTool();
   hmsg(`Press <kbd>Space</kbd> to play, and ${keysText()} as each person crosses the line.`);
 };
 function keysText() { return W.st.dirs.map((d) => `<kbd>${d === "in" ? "I" : "O"}</kbd> for ${d.toUpperCase()}`).join(" and "); }
@@ -1303,11 +1314,81 @@ window.addEventListener("pagehide", () => {
 $("hplay").addEventListener("click", () => (V.paused ? V.play().catch(() => {}) : V.pause()));
 $("speeds").addEventListener("click", (e) => { const b = e.target.closest("[data-rate]"); if (b) setRate(+b.dataset.rate); });
 TL.addEventListener("click", (e) => { const r = TL.getBoundingClientRect(); V.currentTime = (e.clientX - r.left) / r.width * W.st.duration_s; });
+// ---------- the tool counting the clean twin while a person counts the marked footage ----------
+function twinCard() {
+  const s = W.st, box = $("hTwin");
+  box.hidden = !(s && s.mode === "manual" && s.twin);
+  if (box.hidden) return;
+  const job = s.job || {}, running = job.status === "running";
+  box.innerHTML = `<div><b>The clean copy</b> <span class="muted">${esc(s.twin)}</span></div>` + (
+    running ? `<div class="muted" style="margin-top:4px">The tool is counting it now: ${Math.round((W.toolPct ?? 0))}%. What it finds is kept until your count is done.</div>`
+    : job.status === "done" ? '<div class="ok" style="margin-top:4px">The tool has counted it. What it found is kept until you finish counting.</div>'
+    : job.status === "failed" ? `<div class="err" style="margin-top:4px">${esc(job.error || "The tool's count stopped.")}</div>`
+    : `<div class="muted" style="margin-top:4px">The tool can count the clean copy while you count this one. Nothing it finds is shown until you are finished.</div>
+       <button id="twinRun" style="margin-top:6px">Let the tool count it now</button>`);
+}
+document.addEventListener("click", async (e) => {
+  if (!e.target.closest("#twinRun")) return;
+  try { setState(await api("/api/run", {})); twinCard(); pollTool(); } catch (err) { hmsg(esc(err.message), "err"); }
+});
+async function pollTool() {
+  for (;;) {
+    let j;
+    try { j = await api("/api/job"); } catch (e) { return; }
+    W.toolPct = j.pct;
+    if (W.st) W.st.job = { ...(W.st.job || {}), status: j.status, error: j.error };
+    twinCard();
+    if (j.status !== "running") return;
+    await pause(3000);
+  }
+}
+const CAUSE_NONE = '<option value="">why?</option>';
+async function showToolVsHand() {
+  const box = $("handTool");
+  if (!(W.st && W.st.mode === "manual" && W.st.twin && W.st.manual && W.st.manual.done)) { box.innerHTML = ""; return; }
+  let got;
+  try { got = (await api("/api/tool-vs-hand")).comparison; } catch (e) { box.innerHTML = ""; return; }
+  if (!got) { box.innerHTML = ""; return; }
+  const t = got.totals && got.totals.all;
+  const rows = got.rows.map((r) => {
+    const opts = CAUSE_NONE + Object.entries(got.causes).map(([k, label]) =>
+      `<option value="${esc(k)}"${r.diagnosis && r.diagnosis.cause === k ? " selected" : ""}>${esc(label)}</option>`).join("");
+    return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:3px 0">
+      <a data-seek="${r.t}">${esc(r.clock)}</a><span class="muted">${esc(r.camera)}</span>
+      <span class="${r.kind === "missed" ? "warn" : ""}">${esc(r.what)}</span>
+      ${r.alone ? '<span class="warn" title="RetailNext counted no more than you did in this interval: the tool may be right">neither you nor RetailNext counted it</span>' : ""}
+      <select data-cause="${esc(r.key)}">${opts}</select>
+      <input data-note="${esc(r.key)}" placeholder="note (optional)" value="${esc((r.diagnosis || {}).note || "")}" style="flex:1;min-width:120px">
+    </div>`;
+  }).join("");
+  box.innerHTML = `<div class="big">The tool against your count</div>
+    <div class="muted">It counted ${esc(got.video)}, the clean copy of this window. Your count is the truth here; this measures the tool.
+    ${t ? `Of your ${t.truth} crossing(s) it found ${t.found}${t.missed ? `, missed ${t.missed}` : ""}${t.false ? `, and counted ${t.false} you did not` : ""}.` : ""}
+    ${got.alone ? ` ${got.alone} of those are ones RetailNext did not count either: counting on its marked footage can miss the same people it misses, so those are worth a second look.` : ""}</div>
+    ${rows || '<div class="ok" style="margin-top:6px">Every crossing matched.</div>'}`;
+}
+$("handTool").addEventListener("change", async (e) => {
+  const sel = e.target.closest("[data-cause]"), note = e.target.closest("[data-note]");
+  const key = sel ? sel.dataset.cause : note && note.dataset.note;
+  if (!key) return;
+  const cause = $("handTool").querySelector(`[data-cause="${CSS.escape(key)}"]`).value;
+  const text = $("handTool").querySelector(`[data-note="${CSS.escape(key)}"]`).value;
+  try { await api("/api/diagnosis", { key, cause, note: text }); hmsg("Kept with the count.", "ok"); }
+  catch (err) { hmsg(esc(err.message), "err"); }
+});
 $("handDone").addEventListener("click", async () => {
+  if ($("handDone").dataset.next) return go(nextKey());  // the comparison has been seen
   hflush();
   const low = W.h.sum.cameras.filter((c) => c.watched_pct < 99);
   if (low.length && !confirm(`Not fully watched: ${low.map((c) => `${c.sensor} ${c.watched_pct}%`).join(", ")}.\nCrossings in the unwatched parts will be missing from the count. Finish anyway?`)) return;
-  try { applyHand(await api("/api/hand/done", { done: true })); go(nextKey()); } catch (e) { hmsg(esc(e.message), "err"); }
+  try {
+    applyHand(await api("/api/hand/done", { done: true }));
+    await showToolVsHand();  // with a clean twin counted, what the tool found is shown here first
+    if (!$("handTool").innerHTML) return go(nextKey());
+    $("handDone").textContent = "Next →";
+    $("handDone").dataset.next = "1";
+    $("handTool").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (e) { hmsg(esc(e.message), "err"); }
 });
 function drawHand() {
   const g = W.h && W.h.geometry[W.hcam]; if (!g) return;

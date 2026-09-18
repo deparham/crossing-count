@@ -27,6 +27,7 @@ from numpy.typing import NDArray
 from .. import (
     __copyright__,
     auditlog,
+    evaluate,
     independence,
     paths,
     provenance,
@@ -47,6 +48,7 @@ from ..util import default_run_dir, fmt_hms, same_store, write_json_atomic
 from ..version import app_version
 from . import schema
 from .items import (
+    CAUSES,
     CHOICES,
     DETECTOR_CHOICES,
     DIRECTIONS,
@@ -482,6 +484,40 @@ class Wizard:
             if self.state.get("marks_detected") != brief:
                 self.state["marks_detected"] = brief
                 self._save()
+
+    def _download(self) -> dict[str, Any]:
+        """What this footage is, as the download remembered it: from the state when the app
+        opened it, else from the downloads file beside it (retailnext.download_info)."""
+        from .. import retailnext as rn
+
+        known = dict(self.state.get("retailnext") or {})
+        if known.get("twin") or known.get("start"):
+            return known
+        return {**(rn.download_info(self.video) or {}), **known}
+
+    def twin(self) -> Path | None:
+        """The same window downloaded the other way (clean beside marked), when there is one:
+        the tool counts the clean footage while a person counts the marked one (or the other
+        way about), and the marked one shows where RetailNext's line is."""
+        name = str(self._download().get("twin") or "")
+        if not name:
+            return None
+        beside = self.video.parent / name
+        return beside if beside.is_file() else None
+
+    def count_video(self) -> Path:
+        """The footage the tool counts. Hand-counting footage with RetailNext's marks on it,
+        the tool counts the clean twin instead: its pictures are what it meets in use, and
+        nothing of the sensor's is in them."""
+        twin = self.twin()
+        if twin is not None and self.manual() and self.footage_marked():
+            return twin
+        return self.video
+
+    def sealed(self) -> bool:
+        """While a person is counting by hand, what the tool found is not shown: seeing it
+        would turn counting into checking the tool's work."""
+        return self.manual() and not self.state["manual"].get("done")
 
     def footage(self) -> dict[str, Any]:
         """Is the footage clean of RetailNext's marks, and how do we know (independence.py)?"""
@@ -1118,8 +1154,10 @@ class Wizard:
         """Run the automatic count. Running a checked count again needs confirm: the check
         starts afresh, and the old one is kept in the history folder first."""
         with self._lock:
-            if self.manual():
-                raise WizardError("This is a manual count: there is nothing to run.")
+            if self.manual() and self.count_video() == self.video:
+                raise WizardError("This is a manual count: there is nothing to run. Download the "
+                                  "same window clean as well, and the tool counts that while you "
+                                  "count this one.")
             if self._job is not None and self._job.running:
                 raise WizardError("The count is already running.")
             if not self.state["cameras"]:
@@ -1136,9 +1174,10 @@ class Wizard:
             commands = self._commands(self)
             archived = self._archive("rerun")
             self.state["job"] = {"status": "running", "started_at": _now(), "finished_at": None,
-                                 "error": None, "log": []}
-            self.state.update(answers={}, people={}, added=[], watched=[], watch=None, report=None,
-                              decisions=[])
+                                 "error": None, "log": [], "video": str(self.count_video())}
+            if not self.manual():  # a hand count keeps its own answers: the tool is beside it
+                self.state.update(answers={}, people={}, added=[], watched=[], watch=None,
+                                  report=None, decisions=[])
             self._decide("run", model=self.state["model"], app_version=app_version(),
                          kept=str(archived) if archived else None)
             self._save()
@@ -1224,8 +1263,103 @@ class Wizard:
                               if p.stage == "detect" and pct > 8 else None),
                        log=p.log[-15:])
         elif job["status"] == "done":
-            out.update(pct=100.0, message="Finished", results=self.results())
+            out.update(pct=100.0, message="Finished")
+            if self.sealed():  # counting by hand: what the tool found waits until it is done
+                out.update(message="Finished: kept until your count is done", sealed=True)
+            else:
+                out.update(results=self.results())
         return out
+
+    def _twin_offset(self) -> float:
+        """Seconds to add to the twin's times to land on this footage's clock: both exports
+        are of the same window, so usually none."""
+        from .. import retailnext as rn  # only when a twin is counted; no cycle at import time
+
+        twin = self.twin()
+        info = rn.download_info(twin) if twin is not None else None
+        try:
+            mine = datetime.fromisoformat(str(self._download()["start"]))
+            other = datetime.fromisoformat(str((info or {})["start"]))
+        except (KeyError, TypeError, ValueError):
+            return 0.0
+        return (other - mine).total_seconds()
+
+    def tool_vs_hand(self) -> dict[str, Any] | None:
+        """A hand count with the tool counting the twin: the two crossing by crossing
+        (evaluate.score, the same matching as everywhere else), and where to look first.
+
+        The count is the truth here; the tool is what is measured. A count made on footage
+        showing RetailNext's marks can inherit its blind spots, so a crossing the tool alone
+        found, in an interval where RetailNext counted no more than the person did, is
+        marked: neither of them saw it, and the tool may be right."""
+        if not self.manual() or self.state["job"]["status"] != "done" or self.sealed():
+            return None
+        dirs, offset = self.dirs(), self._twin_offset()
+        counts = self.state["manual"]["counts"]
+        totals: dict[str, dict[str, int]] = {}
+        rows: list[dict[str, Any]] = []
+        # what each of them counted around a moment: its interval, or the whole footage when
+        # the system's numbers are one total rather than one per interval
+        by_interval = {r["key"]: (sum(int(v) for v in r["verified"].values()),
+                                  sum(int(v) for v in r["sensor"].values()))
+                       for r in self.comparison()["intervals"] if r["sensor"]}
+        whole: tuple[int, int] | None = None
+        totals_said = [self.state["sensor"].get(d) for d in dirs]
+        if all(v is not None for v in totals_said):
+            c = self.counts()
+            whole = (sum(int(c["verified"][d]) for d in dirs), sum(int(v or 0) for v in totals_said))
+        for cam in self.state["cameras"]:
+            name = cam["sensor"]
+            mine = [c for c in counts if c["camera"] == name]
+            truth = [(float(c["t"]), str(c["direction"])) for c in mine if not c.get("uncertain")]
+            unsure = [float(c["t"]) for c in mine if c.get("uncertain")]
+            found = self._read(cam, "candidates").get("candidates") or []
+            pred = [(float(c["t_seconds"]) + offset, str(c["direction"])) for c in found
+                    if str(c["direction"]) in dirs]
+            s = evaluate.score(truth, pred, dirs, unsure)
+            evaluate.add(totals, s["by_direction"])
+            for kind, what in (("missed", "you counted it, the tool did not"),
+                               ("false", "the tool counted it, you did not"),
+                               ("wrong_way", "the tool counted it the other way")):
+                for at in s["at"][kind]:
+                    rows.append({"key": f"{name}@{at:.2f}", "camera": name, "t": round(at, 2),
+                                 "clock": self.clock(at), "kind": kind, "what": what})
+        for row in rows:
+            got = by_interval.get(self._interval_of(float(row["t"]))) or whole
+            row["alone"] = bool(row["kind"] == "false" and got is not None and got[1] <= got[0])
+            row["diagnosis"] = (self.state.get("diagnosis") or {}).get(row["key"])
+        rows.sort(key=lambda r: (r["t"], r["camera"]))
+        return {"video": self.count_video().name, "offset_s": round(offset, 2),
+                "totals": evaluate.summary(totals) if totals else None, "rows": rows,
+                "causes": CAUSES, "alone": sum(1 for r in rows if r["alone"])}
+
+    def _interval_of(self, t: float) -> str:
+        """Which of the sensor's intervals a moment of this footage falls in."""
+        ivs = self.intervals()
+        cs = self.state["clock_start"]
+        if not cs or not ivs:
+            return str(ivs[0]["key"]) if ivs else "all"
+        at = datetime.fromisoformat(cs) + timedelta(seconds=t)
+        for i in reversed(ivs):
+            if i["start"] and datetime.fromisoformat(i["start"]) <= at:
+                return str(i["key"])
+        return str(ivs[0]["key"])
+
+    @_open_only
+    def set_diagnosis(self, key: str, cause: str, note: str = "") -> None:
+        """Why the sensor and the count differ here, watching RetailNext's own tracker on the
+        marked footage: kept with the validation, for the customer's list of things to change."""
+        if cause and cause not in CAUSES:
+            raise WizardError(f"unknown cause {cause!r}")
+        with self._lock:
+            found = dict(self.state.get("diagnosis") or {})
+            if cause:
+                found[key] = {"cause": cause, "note": note.strip(), "at": _now()}
+            else:
+                found.pop(key, None)
+            self.state["diagnosis"] = found
+            self._decide("diagnosed", after={"where": key, "cause": cause or None})
+            self._save()
 
     def results(self) -> list[dict[str, Any]]:
         out = []
@@ -1509,7 +1643,10 @@ class Wizard:
 
     def public(self) -> dict[str, Any]:
         with self._lock:
+            twin = self.twin()
             return {**self.state, "dirs": self.dirs(), "counts": self.counts(), "fps": self.fps,
+                    "twin": twin.name if twin is not None else None,
+                    "counting_video": self.count_video().name, "sealed": self.sealed(),
                     "run_dir": str(self.run_dir), "history": self.history(),
                     "intervals": self.intervals(), "comparison": self.comparison(),
                     "detectors": [{"model": m, **DETECTOR_CHOICES[m], "unavailable": unavailable(m)}
