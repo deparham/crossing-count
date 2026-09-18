@@ -915,6 +915,12 @@ run checks:
   the comparison with the sensor, with the reason
   (docs/GROUND_TRUTH_SPECIFICATION.md, section 10). Earlier results can be
   audited for this on the *Validation runs* page.
+- A counting system reports whole 15-minute intervals, and exports rarely match
+  them to the second. Footage more than half a minute short of the intervals it
+  is compared with is said so, on the report's first page and in the validation
+  checks; the numbers are never scaled to fit. An interval the footage only
+  brushes (a second or two, when an export runs a moment past the quarter hour)
+  is left out of the comparison altogether.
 - On clean footage there is no burned-in line to draw over, so a line drawn by
   eye may not be where the sensor counts, and part of any difference would be
   the line rather than the sensor. Each drawing records how it was placed:

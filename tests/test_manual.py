@@ -24,6 +24,11 @@ def test_intervals_follow_the_sensors_quarter_hours() -> None:
     assert (a["key"], a["covered_s"], a["full"]) == ("11:30", 480.0, False)
     assert (b["key"], b["covered_s"], b["full"]) == ("11:45", 720.0, False)
     assert intervals_for(None, 60.0)[0]["key"] == "all"
+    # exports run a fraction of a second over: that is not an interval of its own, which the
+    # sensor would have to give a number for and nobody counted
+    assert [i["key"] for i in intervals_for(START, 900.1)] == ["11:30"]
+    assert [i["key"] for i in intervals_for(START, 1800.2)] == ["11:30", "11:45"]
+    assert [i["key"] for i in intervals_for(START, 3.0)] == ["11:30"]  # never no interval at all
 
 
 def test_one_comparison_against_the_sensor() -> None:

@@ -12,6 +12,19 @@ camera's 15-minute counts over the footage's period (or the store's total, when 
 entrances are not named like the cameras). The API key is in the credential store; see the
 README.
 
+**The footage and the intervals.** A counting system reports whole 15-minute intervals,
+and an export rarely matches them to the second, so:
+
+- An interval the footage only brushes (under 5 seconds of it, as when an export runs a
+  fraction of a second past the quarter hour) is not compared at all. It would otherwise
+  need a number for fifteen minutes nobody counted, and the fetch would fail for want of
+  it.
+- Footage shorter than the intervals it is compared with by more than 30 seconds is said
+  so: a validation check ("Footage covers the period RetailNext's numbers describe", with
+  the minutes and the share) and a line on the report's first page. The system's number
+  then covers minutes that were never counted, so the difference is not like for like.
+  The numbers are never scaled to fit: that would invent counts.
+
 ## Any other counter: a CSV file
 
 **Import a CSV** on the same step. One row per interval:

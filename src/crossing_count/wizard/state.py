@@ -58,6 +58,7 @@ from .items import (
     MODELS,
     PEOPLE,
     RULE_CHOICES,
+    SHORTFALL_S,
     SMALL_MODELS,
     TWIN_WINDOW_S,
     _found,
@@ -601,6 +602,32 @@ class Wizard:
         cs = self.state["clock_start"]
         return intervals_for(datetime.fromisoformat(cs) if cs else None,
                              float(self.state["duration_s"]))
+
+    def coverage(self) -> dict[str, Any] | None:
+        """How much of the period the system's numbers cover this footage actually covers.
+        RetailNext counts whole 15-minute intervals; an export short of its window compares
+        its full number against less footage than it describes. Short by up to SHORTFALL_S the
+        difference is beneath the counts' own noise. None when there is no clock."""
+        ivs = self.intervals()
+        if not self.state.get("clock_start") or not ivs:
+            return None
+        whole = len(ivs) * INTERVAL_MIN * 60
+        got = sum(float(i["covered_s"]) for i in ivs)
+        return {"footage_s": round(got, 1), "period_s": whole, "missing_s": round(whole - got, 1),
+                "pct": round(100.0 * got / whole, 1) if whole else None,
+                "full": whole - got <= SHORTFALL_S,
+                "intervals": [i["label"] for i in ivs]}
+
+    def coverage_words(self) -> str | None:
+        """The shortfall in words, for the report's first page and the checks."""
+        c = self.coverage()
+        if c is None or c["full"]:
+            return None
+        system = (self.state.get("sensor_source") or {}).get("system") or "RetailNext"
+        return (f"{system} counts whole 15-minute intervals: its number covers "
+                f"{c['period_s'] / 60:g} minutes, the footage {c['footage_s'] / 60:.1f} of them "
+                f"({c['pct']}%). The {c['missing_s'] / 60:.1f} minutes not in the footage are in "
+                f"its count but in no one's, so the difference is not like for like.")
 
     def comparison(self) -> dict[str, Any]:
         """Verified against RetailNext per 15-minute interval and per camera: the one place
@@ -1434,6 +1461,11 @@ class Wizard:
                      f"{c['watch_done']} of {ranges} stretches" if ranges else "there was none")]
         rows.append(("RetailNext's count entered",
                      all(self.state["sensor"].get(d) is not None for d in self.dirs()), ""))
+        cov = self.coverage()
+        if cov is not None and any(self.state["sensor"].get(d) is not None for d in self.dirs()):
+            rows.append(("Footage covers the period RetailNext's numbers describe", cov["full"],
+                         (f"{cov['footage_s'] / 60:.1f} of {cov['period_s'] / 60:g} minutes "
+                          f"({cov['pct']}%)")))
         return [{"name": n, "ok": ok, "detail": d} for n, ok, d in rows]
 
     def unsure_rows(self) -> list[dict[str, Any]]:
@@ -1740,6 +1772,8 @@ class Wizard:
                                        c["unsure"][d], "" if k else opening)
             for k, d in enumerate(d for d in self.dirs() if st["sensor"].get(d) is not None)]
         caveats = list(dict.fromkeys((st.get("sensor_source") or {}).get("warnings") or []))
+        if short := self.coverage_words():
+            caveats.append(short)
         if not foot["clean"]:
             caveats.append(f"Not independent of {system}: the footage shows its own tracks and "
                            f"counts ({'; '.join(foot['why_marked'])}).")

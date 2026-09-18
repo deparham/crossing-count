@@ -100,6 +100,35 @@ def test_another_counters_csv_fills_in_the_numbers(named: Wizard) -> None:
         named.use_sensor(gap)
 
 
+def test_a_video_a_moment_too_long_still_gets_the_sensors_numbers(named: Wizard) -> None:
+    named.state["clock_start"] = "2026-09-12T11:45:00"
+    named.state["duration_s"] = 900.1  # RetailNext's exports run a fraction of a second over
+    assert [i["key"] for i in named.intervals()] == ["11:45"]  # not 12:00, which nobody counted
+    named.use_sensor(sensors.read_csv(_csv(named, ["CN-9-PB1", "CN-9-R2"]), "x.csv"))
+    assert named.state["sensor"] == {"in": 4, "out": 2}
+    cov = named.coverage()
+    assert cov is not None and cov["full"] and cov["pct"] == 100.0
+    assert named.coverage_words() is None
+    ok = [k for k in named.counts()["checks"] if k["name"].startswith("Footage covers")]
+    assert [k["ok"] for k in ok] == [True]
+    named.state["duration_s"] = 891.3  # seconds short of the window: beneath the counts' noise
+    assert (named.coverage() or {})["full"] and named.coverage_words() is None
+
+
+def test_footage_short_of_the_sensors_interval_says_so(named: Wizard) -> None:
+    named.state["clock_start"] = "2026-09-12T11:45:00"
+    named.state["duration_s"] = 810.0  # 13.5 of the 15 minutes the sensor's number covers
+    named.use_sensor(sensors.read_csv(_csv(named, ["CN-9-PB1", "CN-9-R2"]), "x.csv"))
+    cov = named.coverage()
+    assert cov is not None and not cov["full"]
+    assert (cov["pct"], cov["missing_s"], cov["period_s"]) == (90.0, 90.0, 900)
+    said = named.coverage_words() or ""
+    assert "its number covers 15 minutes, the footage 13.5 of them (90.0%)" in said
+    assert "1.5 minutes not in the footage" in said
+    (check,) = [k for k in named.counts()["checks"] if k["name"].startswith("Footage covers")]
+    assert check["ok"] is False and check["detail"] == "13.5 of 15 minutes (90.0%)"
+
+
 def test_the_result_is_kept_as_data(named: Wizard) -> None:
     named.state["clock_start"] = "2026-09-12T11:45:00"  # one interval: a total for the footage
     named.use_sensor(sensors.read_csv(
@@ -117,3 +146,12 @@ def test_the_sensor_results_page_answers(tmp_path: Path, monkeypatch: pytest.Mon
     client = TestClient(create_wizard_app(tmp_path / "sites", tmp_path, folders=[tmp_path]))
     assert client.get("/sensors/").status_code == 200
     assert client.get("/api/sensors").json()["summary"] is None
+
+
+def test_the_report_says_the_periods_do_not_match(named: Wizard) -> None:
+    named.state["clock_start"] = "2026-09-12T11:45:00"
+    named.state["duration_s"] = 810.0
+    named.use_sensor(sensors.read_csv(_csv(named, ["CN-9-PB1", "CN-9-R2"]), "x.csv"))
+    named.set_store(name="Lismore", code="CN-9", operator="Alex")
+    data = named.report_data(named.counts(), named.verified_rows(), Path("frame.jpg"), "", [])
+    assert any("the footage 13.5 of them (90.0%)" in x for x in data["caveats"])  # on page 1

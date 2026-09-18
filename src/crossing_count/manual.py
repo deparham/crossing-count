@@ -18,6 +18,7 @@ from .export import INTERVAL_MIN, interval_start
 MERGE_GAP_S = 0.5  # watched stretches closer than this are one stretch
 MIN_GAP_S = 1.0  # unwatched stretches shorter than this are not reported
 FULL_TOLERANCE_S = 5.0  # a video covering an interval to within this covers all of it
+BRUSHED_S = 5.0  # an interval the footage covers less than this is not compared at all
 
 
 def merge_ranges(ranges: Iterable[Sequence[float]], gap: float = MERGE_GAP_S) -> list[list[float]]:
@@ -47,7 +48,11 @@ def unwatched_ranges(watched: Sequence[Sequence[float]], duration: float,
 
 
 def intervals_for(clock_start: datetime | None, duration: float) -> list[dict[str, Any]]:
-    """The sensor's 15-minute intervals this video overlaps, and how much of each it covers."""
+    """The sensor's 15-minute intervals this video overlaps, and how much of each it covers.
+
+    An interval the footage only brushes is not one of them: an export a fraction of a second
+    past the quarter hour (900.1 s of a 15-minute window) would otherwise need the sensor's
+    number for a whole interval nobody counted, and the fetch would fail for want of it."""
     if clock_start is None:
         return [{"key": "all", "label": "whole video", "start": None,
                  "covered_s": round(duration, 1), "full": None}]
@@ -62,4 +67,5 @@ def intervals_for(clock_start: datetime | None, duration: float) -> list[dict[st
                     "start": s.isoformat(), "covered_s": round(covered, 1),
                     "full": covered >= step.total_seconds() - FULL_TOLERANCE_S})
         s = e
-    return out
+    kept = [i for i in out if float(i["covered_s"]) >= BRUSHED_S]
+    return kept or [max(out, key=lambda i: float(i["covered_s"]))]  # never nothing at all
