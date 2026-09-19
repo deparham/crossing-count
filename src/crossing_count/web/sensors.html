@@ -83,6 +83,8 @@
 <footer>CrossingCount · © 2026 Parham Forozan. All rights reserved.</footer>
 <script>
 "use strict";
+const HOW = { manual: "by hand", total: "a total by hand", auto: "checked" };
+const howCounted = (m) => HOW[m] || HOW.auto;
 const $ = (id) => document.getElementById(id);
 function esc(x) { return String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 async function api(path) { const r = await fetch(path); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`); return j; }
@@ -125,7 +127,7 @@ function render(G) {
   $("vals").innerHTML = G.validations.length
     ? `<tr><th>Store</th><th>Footage from</th><th>Window</th><th>Cameras</th><th>How</th><th>Numbers</th><th>By</th><th>Kept</th></tr>` +
       G.validations.map((v) => `<tr><td>${esc(v.store)} ${esc(v.store_name || "")}</td><td>${esc(when(v.clock_start))}</td><td>${esc(ROLE[(v.sampling || {}).role] || "chosen by hand")}${v.traffic ? `<div class="muted">${esc(v.traffic.level)} traffic</div>` : ""}</td><td>${(v.cameras || []).map(esc).join("<br>")}</td>` +
-        `<td>${v.mode === "manual" ? "by hand" : "checked"}</td><td>${brief(v)}</td><td>${esc(v.by || "")}</td><td class="muted">${esc(v.where)}</td></tr>`).join("")
+        `<td>${howCounted(v.mode)}</td><td>${brief(v)}</td><td>${esc(v.by || "")}</td><td class="muted">${esc(v.where)}</td></tr>`).join("")
     : `<tr><td class="muted">None yet.</td></tr>`;
   $("left").innerHTML = G.excluded.length
     ? `<tr><th>Store</th><th>Footage from</th><th>Why not used</th></tr>` + G.excluded.map((v) =>

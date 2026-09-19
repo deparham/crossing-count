@@ -950,7 +950,7 @@ document.querySelectorAll("#s-traffic [data-dir]").forEach((b) => b.addEventList
 // ---------- RetailNext ----------
 ENTER.retail = () => {
   const s = W.st, c = s.counts, ivs = s.intervals || [], cams = s.cameras.map((x) => x.sensor).join(" + ");
-  const yours = s.mode === "manual" ? ` You counted ${s.dirs.map((d) => `${c.verified[d]} ${LABEL[d].toLowerCase()}`).join(" and ")}.` : "";
+  const yours = s.mode === "manual" || s.mode === "total" ? ` You counted ${s.dirs.map((d) => `${c.verified[d]} ${LABEL[d].toLowerCase()}`).join(" and ")}.` : "";
   const num = (attrs, v, hint = 'placeholder="e.g. 8"') => `<input type="number" min="0" step="1" ${attrs} value="${v ?? ""}" ${hint}>`;
   const head = (first) => `<tr><th>${first}</th>${s.dirs.map((d) => `<th>${LABEL[d]}</th>`).join("")}</tr>`;
   let html;

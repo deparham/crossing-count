@@ -255,3 +255,21 @@ def test_video_to_total_to_saved_count_to_report(totals: Wizard) -> None:
     assert "keeping the number only" in pages
     assert "no recall, precision or missed-crossing rate can be worked out" in pages
     assert "147" in pages and "139" in pages
+
+
+def test_nothing_of_the_tools_is_claimed_on_a_total(totals: Wizard) -> None:
+    """Everywhere that asks "was this counted by hand?" to decide what the tool did must
+    treat a total as a count by a person, not as a check of an automatic count."""
+    totals.total_set("CN-9-PB1", "in", 100)
+    totals.total_set("CN-9-R2", "in", 47)
+    totals.total_done(whole_clip=True)
+    totals.set_sensor({"in": 139})
+    totals.set_store(name="Lismore", code="CN-9", operator="Sam")
+
+    data = totals.report_data(totals.counts(), [], Path("frame.jpg"), "", [])
+    assert "AUTOMATED DETECTION OVERLAY" not in data["frames_title"]
+    assert totals.comparison()["overlap"] == 0  # no proposals, so no camera overlap to work out
+    assert totals.unsure_rows() == []
+    frame, caption = totals.render_busy_frame()  # the tool never ran: no overlay to draw
+    assert frame.is_file() and "CN-9-PB1" in caption
+    assert totals.tool_vs_hand() is None

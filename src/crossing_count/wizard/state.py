@@ -710,7 +710,7 @@ class Wizard:
                       "accuracy": against(s_iv.get(i["key"]), by_iv[i["key"]])} for i in ivs]
         cameras = [{"camera": c, "verified": v, "sensor": s_cam.get(c),
                     "accuracy": against(s_cam.get(c), v)} for c, v in by_cam.items()]
-        overlap = 0 if self.manual() else sum(
+        overlap = 0 if self.manual() or self.total_only() else sum(
             1 for it in self.check_items() if it.get("twin") and it["twin"]["camera"] != it["camera"])
         diffs = [(abs(a[d]["error"]), i["label"], d, a[d]) for i in intervals
                  if (a := i["accuracy"]) for d in dirs if a[d]["error"] is not None]
@@ -1760,6 +1760,8 @@ class Wizard:
 
     def unsure_rows(self) -> list[dict[str, Any]]:
         """Crossings the checker could not decide: listed in the report, never counted."""
+        if self.total_only():
+            return []
         if self.manual():
             return [{"t": c["t"], "camera": c["camera"],
                      "picture": self._camera(c["camera"])["picture"], "direction": c["direction"],
@@ -1896,7 +1898,7 @@ class Wizard:
         return path, " · ".join(x for x in (cam["sensor"], self.clock(t), note) if x)
 
     def render_busy_frame(self) -> tuple[Path, str]:
-        if self.manual():
+        if self.manual() or self.total_only():
             return self._render_manual_frame()
         cam, t, dets = self.busiest()
         img = self._frame(t)
@@ -2053,7 +2055,8 @@ class Wizard:
         foot = self.footage()
         if not foot["clean"]:
             method.insert(len(method) - 1,
-                          f"{'Counted' if self.manual() else 'Checked'} on footage showing "
+                          f"{'Counted' if self.manual() or self.total_only() else 'Checked'} "
+                          f"on footage showing "
                           f"RetailNext's own tracks and counts ({'; '.join(foot['why_marked'])}), "
                           f"which can sway a count towards the sensor's: this count is not "
                           f"independent of the sensor.")
@@ -2119,7 +2122,8 @@ class Wizard:
             "headline": headline, "identity": identity, "caveats": caveats,
             "count_label": "MANUAL COUNT" if self.manual() or self.total_only()
             else "VERIFIED COUNT",
-            "frames_title": ("VALIDATION FRAMES — BUSIEST MOMENT" if self.manual()
+            "frames_title": ("VALIDATION FRAMES — BUSIEST MOMENT"
+                             if self.manual() or self.total_only()
                              else "VALIDATION FRAMES — AUTOMATED DETECTION OVERLAY"),
             "store_name": store["name"], "store_code": store["code"],
             "location": store["location"] or "Entrance",

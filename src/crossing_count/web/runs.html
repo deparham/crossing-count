@@ -72,6 +72,8 @@
 <footer>CrossingCount · © 2026 Parham Forozan. All rights reserved.</footer>
 <script>
 "use strict";
+const HOW = { manual: "by hand", total: "a total by hand", auto: "checked" };
+const howCounted = (m) => HOW[m] || HOW.auto;
 const $ = (id) => document.getElementById(id);
 function esc(x) { return String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 async function api(path, body) {
@@ -91,7 +93,7 @@ function integrity(r) {
     ? `<tr><th></th><th>ID</th><th>Store</th><th>Footage from</th><th>Cameras</th><th>System</th><th>Verified / system</th><th>Status</th><th>By</th><th>Finalised</th><th>Files</th><th></th></tr>` +
       G.runs.map((r) => `<tr><td>${r.problem ? "" : `<input type="checkbox" data-pick="${esc(r.validation_id)}">`}</td><td><code>${esc(r.validation_id)}</code>${r.supersedes ? `<div class="muted" style="font-size:12px">replaces ${esc(r.supersedes)}</div>` : ""}</td>` +
         `<td>${esc(r.store ? `${r.store.code} ${r.store.name || ""}` : "")}</td><td>${esc(when(r.clock_start))}</td><td>${(r.cameras || []).map(esc).join("<br>")}</td>` +
-        `<td>${esc(r.system || "")}</td><td>${r.verified ?? "–"} / ${r.system_count ?? "–"}</td><td>${esc(r.status || "")}${r.mode ? ` <span class="muted">(${r.mode === "manual" ? "by hand" : "checked"})</span>` : ""}</td>` +
+        `<td>${esc(r.system || "")}</td><td>${r.verified ?? "–"} / ${r.system_count ?? "–"}</td><td>${esc(r.status || "")}${r.mode ? ` <span class="muted">(${howCounted(r.mode)})</span>` : ""}</td>` +
         `<td>${esc(r.operator || "")}</td><td>${esc(when(r.finalised_at))}</td><td>${integrity(r)}</td><td>${r.problem ? "" : `<button data-open="${esc(r.validation_id)}">Folder</button>`}</td></tr>`).join("")
     : `<tr><td class="muted">None yet: finalise a validation on its report page.</td></tr>`;
   const a = G.audit;
@@ -114,7 +116,7 @@ function integrity(r) {
       ? '<div class="ok" style="margin-top:10px">None: every result on this computer was counted on footage without RetailNext\'s marks.</div>'
       : `<div class="${done ? "ok" : "warn"}" style="margin-top:10px">${done ? "Reclassified" : "Found"} ${found.length} result(s) counted on footage showing RetailNext's marks:</div>` +
         `<div class="scroll"><table style="margin-top:6px"><tr><th>Footage</th><th>Store</th><th>How counted</th><th>Why it is not clean</th></tr>` +
-        found.map((f) => `<tr><td>${esc(f.filename)}</td><td>${esc(f.store || "")}</td><td>${f.mode === "manual" ? "by hand" : "checked"}${f.finalised ? ` <span class="muted">(${esc(f.finalised)})</span>` : ""}</td><td class="warn">${f.why.map(esc).join("; ")}</td></tr>`).join("") + "</table></div>";
+        found.map((f) => `<tr><td>${esc(f.filename)}</td><td>${esc(f.store || "")}</td><td>${howCounted(f.mode)}${f.finalised ? ` <span class="muted">(${esc(f.finalised)})</span>` : ""}</td><td class="warn">${f.why.map(esc).join("; ")}</td></tr>`).join("") + "</table></div>";
   };
   $("auditGo").addEventListener("click", async () => {
     $("auditMarks").innerHTML = '<div class="muted" style="margin-top:10px">Looking at the pictures…</div>';
