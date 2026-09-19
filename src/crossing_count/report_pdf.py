@@ -196,7 +196,8 @@ def _details(data: dict[str, Any]) -> list[Any]:
     out += [Spacer(1, 10), _p("Crossing details", _H2)]
     rows = data.get("crossings") or []
     if not rows:
-        return [*out, _p("No crossings were verified for this period.")]
+        return [*out, _p(data.get("crossings_note")
+                         or "No crossings were verified for this period.")]
     out.append(_grid([["#", "Time", "Camera", "Direction", "How it was found"]]
                      + [[str(r["n"]), r["time"], r["camera"], r["direction"], _p(r["found"], _SMALL)]
                         for r in rows],

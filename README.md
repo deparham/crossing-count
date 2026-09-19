@@ -410,6 +410,29 @@ report now says so, and lists its validation checks (each crossing checked,
 each possible miss checked, unexplained movement watched, footage watched)
 as met or not.
 
+### Counting the total only
+
+A third way to count, for when a number is all that is wanted: watch the footage,
+press a key for each person, save one total per camera and direction. It needs no
+detector, no tracker and no drawn line — only a name for each camera — and it is
+the quickest of the three.
+
+What it buys and what it costs is a single trade. Because no moment is recorded
+for any person, the total can be set against the system's number **only as one
+total against another**: the difference, the bias and WAPE, over the whole clip,
+as one row however many 15-minute intervals the footage spans. It cannot say
+which crossings the system found and which it missed, so no recall, precision or
+missed-crossing rate is worked out from it, and the report says so. An over-count
+and an under-count inside the same period cancel in a total and would look like
+agreement.
+
+That separation is kept by the code, not by convention: a total-only count has no
+verified crossings, is refused by the gold set, returns no truth to `bench.py`,
+records no Ground Truth Specification version, and has nothing to run. The presses
+are kept so a total that looks wrong later can be read back, but deliberately
+without the moment each was made — a time per press would look like a crossing and
+is not one.
+
 ## Measuring the automatic count (`bench.py`)
 
     uv run bench.py                # every clip with a finished count by a person

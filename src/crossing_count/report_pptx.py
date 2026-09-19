@@ -340,7 +340,8 @@ def _details(new_page: Any, data: dict[str, Any]) -> None:
     rows = data["crossings"]
     top = 2.3 + height + 0.3
     if not rows:
-        _write(_box(slide, 0.62, top, 7.0, 0.3), "No crossings were verified for this period.",
+        _write(_box(slide, 0.62, top, 7.0, 0.9),
+               data.get("crossings_note") or "No crossings were verified for this period.",
                12, color=GREY)
         return
     per_row = 0.26

@@ -20,6 +20,12 @@ from crossing_count.wizard import Wizard, WizardError
 from crossing_count.wizard_app import create_wizard_app
 
 
+def _report_text(path: Path) -> list[str]:
+    from pptx import Presentation
+    return ["\n".join(s.text_frame.text for s in slide.shapes if s.has_text_frame)
+            for slide in Presentation(str(path)).slides]
+
+
 @pytest.fixture
 def totals(two_tile_video: dict[str, Any], tmp_path: Path) -> Wizard:
     """Footage open, cameras named, traffic chosen: nothing else, and nothing has run."""
@@ -186,3 +192,66 @@ def test_a_count_by_hand_is_unaffected(two_tile_video: dict[str, Any], tmp_path:
 def test_choosing_a_mode_that_does_not_exist(totals: Wizard) -> None:
     with pytest.raises(WizardError, match="automatic counting, counting by hand, or the total"):
         totals.set_mode("guess")
+
+
+def test_the_counting_page_has_what_it_needs(two_tile_video: dict[str, Any],
+                                             tmp_path: Path) -> None:
+    """The page asks for the pictures' geometry and the total: both must answer in this mode."""
+    client = TestClient(create_wizard_app(two_tile_video["dir"], tmp_path,
+                                          folders=[two_tile_video["video"].parent]))
+    client.post("/api/open", json={"path": str(two_tile_video["video"])})
+    client.post("/api/mode", json={"mode": "total"})
+    client.post("/api/named-cameras", json={"cameras": [
+        {"picture": 0, "name": "CN-9-PB1", "include": True},
+        {"picture": 1, "name": "CN-9-R2", "include": True}]})
+    client.post("/api/direction", json={"direction": "in"})
+    hand = client.get("/api/hand")
+    assert hand.status_code == 200 and set(hand.json()["geometry"]) == {"CN-9-PB1", "CN-9-R2"}
+    page = client.get("/api/total").json()
+    assert page["mode"] == "total" and page["dirs"] == ["in"]
+    assert [c["sensor"] for c in page["total"]["cameras"]] == ["CN-9-PB1", "CN-9-R2"]
+    assert page["totals"]["done"] is False  # what the page reads to know where it is
+
+
+def test_the_report_says_what_a_total_can_and_cannot_show(totals: Wizard) -> None:
+    totals.total_set("CN-9-PB1", "in", 100)
+    totals.total_set("CN-9-R2", "in", 47)
+    totals.total_notes("Busy period, several overlapping people.")
+    totals.total_done(whole_clip=True)
+    totals.set_sensor({"in": 139})
+    totals.set_store(name="Lismore", code="CN-9", operator="Sam")
+
+    data = totals.report_data(totals.counts(), [], Path("frame.jpg"), "", [])
+    method = " ".join(data["method"])
+    assert "pressed a key for each person, keeping the number only" in method
+    assert "The moment each person crossed was not recorded" in method
+    assert "Busy period, several overlapping people." in method
+    assert "one total against another" in method
+    assert "an over-count and an under-count in the same period cancel out" in method
+    assert "no recall, precision or missed-crossing rate can be worked out" in method
+    # no version of what a crossing is, because no crossing was marked
+    assert "Ground Truth Specification" not in method
+    assert "Who was counted: children counted, staff counted." in method
+    assert "100 traffic in" in method and "47 traffic in" in method
+
+
+def test_video_to_total_to_saved_count_to_report(totals: Wizard) -> None:
+    """The whole way through, with no detector, no tracker and no recorded detections."""
+    for _ in range(100):
+        totals.total_step("CN-9-PB1", "in")
+    totals.total_set("CN-9-R2", "in", 47)
+    totals.total_notes("Busy period, several overlapping people.")
+    totals.total_done(whole_clip=True)
+    totals.set_sensor({"in": 139})
+    totals.set_store(name="Lismore", code="CN-9", operator="Sam")
+    assert totals.counts()["status"] == "complete"
+
+    pages = "\n".join(t for t in _report_text(totals.make_report()))
+    assert "MANUAL COUNT" in pages and "VERIFIED COUNT" not in pages
+    assert "Total only: no moment recorded for any crossing" in pages
+    # the page that lists the crossings says why there are none, rather than "none verified"
+    assert "Counted as a total only: 147 people coming in" in pages
+    assert "No crossings were verified for this period" not in pages
+    assert "keeping the number only" in pages
+    assert "no recall, precision or missed-crossing rate can be worked out" in pages
+    assert "147" in pages and "139" in pages

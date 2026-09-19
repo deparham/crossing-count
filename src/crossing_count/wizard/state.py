@@ -2006,6 +2006,26 @@ class Wizard:
                 f"Share of the footage watched: {shares}.",
                 method[-1],
             ]
+        elif self.total_only():
+            t = self.state["totals"]
+            each = ", ".join(f"{cam['sensor']} "
+                             + " and ".join(f"{cam['counts'][d]} {LABELS[d].lower()}"
+                                            for d in self.dirs())
+                             for cam in self.total_summary()["cameras"])
+            method = [
+                method[0],
+                ("Counted by hand as a total: a person watched the footage and pressed a key "
+                 "for each person, keeping the number only. The moment each person crossed was "
+                 "not recorded. No automatic detection was used."),
+                f"Counted: {each}.",
+                ("Because no moment was recorded, this count can be set against the system's "
+                 "number only as one total against another. It cannot show which crossings the "
+                 "system found and which it missed: an over-count and an under-count in the "
+                 "same period cancel out in a total and would look like agreement."),
+                method[-1],
+            ]
+            if t["notes"]:
+                method.insert(3, f"Note from the person counting: {t['notes']}")
         scope = sampling.scope(st.get("sampling"), f"{start:%H:%M}–{end:%H:%M} on "
                                f"{start:%d/%m/%Y}" if start and end else "")
         method.insert(1, scope)
@@ -2024,9 +2044,12 @@ class Wizard:
                 f"{q['words']}. {q['reason']}.")
         rules, said = self.state["rules"], {"count": "counted", "exclude": "not counted"}
         spec = self.state["manual"].get("specification") or GROUND_TRUTH_SPEC
-        method.insert(len(method) - 1, f"Crossings as defined by CrossingCount's Ground Truth "
-                      f"Specification v{spec}: children {said[rules['children']]}, staff "
-                      f"{said[rules['staff']]}.")
+        method.insert(len(method) - 1,
+                      (f"Who was counted: children {said[rules['children']]}, staff "
+                       f"{said[rules['staff']]}." if self.total_only() else
+                       f"Crossings as defined by CrossingCount's Ground Truth Specification "
+                       f"v{spec}: children {said[rules['children']]}, staff "
+                       f"{said[rules['staff']]}."))
         foot = self.footage()
         if not foot["clean"]:
             method.insert(len(method) - 1,
@@ -2059,6 +2082,10 @@ class Wizard:
         method.append("Sensor accuracy compares RetailNext's count with the count verified here: "
                       "it shows how close the sensor came, not how well the automatic counter "
                       "did.")
+        if self.total_only():
+            method.append("This is a comparison of totals. It is not a crossing-by-crossing "
+                          "result: no recall, precision or missed-crossing rate can be worked "
+                          "out from it, and none is given.")
         method.append(f"Report made with CrossingCount {app_version()}, {__copyright__}.")
         # page 1, for someone who reads nothing else: the result in people and which way,
         # what it rests on, and what could not be known. The method above stays as it is.
@@ -2080,7 +2107,8 @@ class Wizard:
         identity = {
             "validation_id": (st.get("final") or {}).get("id"),
             "sampling": sampling.label(st.get("sampling")),
-            "specification": f"Ground Truth Specification v{spec}",
+            "specification": ("Total only: no moment recorded for any crossing"
+                              if self.total_only() else f"Ground Truth Specification v{spec}"),
             "gold_set": self._gold_version(),
             "footage": ("clean: no RetailNext marks" + (", checked in the picture"
                                                        if foot["checked_in_picture"] else "")
@@ -2089,7 +2117,8 @@ class Wizard:
         }
         return {
             "headline": headline, "identity": identity, "caveats": caveats,
-            "count_label": "MANUAL COUNT" if self.manual() else "VERIFIED COUNT",
+            "count_label": "MANUAL COUNT" if self.manual() or self.total_only()
+            else "VERIFIED COUNT",
             "frames_title": ("VALIDATION FRAMES — BUSIEST MOMENT" if self.manual()
                              else "VALIDATION FRAMES — AUTOMATED DETECTION OVERLAY"),
             "store_name": store["name"], "store_code": store["code"],
@@ -2108,6 +2137,14 @@ class Wizard:
             "crossings": [{"n": n, "time": self.clock(r["t"]), "camera": r["camera"],
                            "direction": LABELS[r["direction"]], "found": r["found"]}
                           for n, r in [*zip(row_numbers(rows), rows), *(("?", u) for u in unsure)]],
+            # a total has no list of crossings to print, and saying none was verified would be
+            # wrong: they were counted, only never placed in time
+            "crossings_note": (
+                "Counted as a total only: "
+                + ", ".join(f"{c['verified'][d]} {PEOPLE[d]}" for d in self.dirs())
+                + ". No moment was recorded for any of them, so there is no list of crossings "
+                  "here and none can be matched against a system's own."
+                if self.total_only() else None),
             "thumbs": thumbs, "method": method, "scope": scope, "sample_notes": sample_notes,
             "levels": {"text": validation.level_sentence(levels, system),
                        "rows": [{"level": k, **m, **({} if m["truth"] >= validation.MIN_VERIFIED_FOR_PCT
@@ -2122,7 +2159,12 @@ class Wizard:
             if unsure := self.unconfirmed():  # whose crossings are these? before anything else
                 raise WizardError(" ".join(unsure))
             c = self.counts()
-            if self.manual():
+            if self.total_only():
+                if not c["checked"]:
+                    raise WizardError("Save the total first.")
+                if missing := self.total_missing():
+                    raise WizardError(missing[0])
+            elif self.manual():
                 if not c["checked"]:
                     raise WizardError("Finish counting first.")
             else:

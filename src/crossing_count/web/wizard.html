@@ -243,6 +243,7 @@
     <div class="choice">
       <button data-mode="auto"><b>Automatic</b><span>The tool counts while you do other work; then you check each crossing it found with Y or N.</span></button>
       <button data-mode="manual"><b>Manual</b><span>You count every person yourself, at up to 16× speed. Your clicks are saved to teach the automatic counter.</span></button>
+      <button data-mode="total"><b>Total only</b><span>You press a key for each person and save one number. Quickest, and it needs nothing else &mdash; but it cannot measure how many crossings the tool finds, only how far its total is out.</span></button>
     </div>
   </div>
 </section>
@@ -369,6 +370,27 @@
   </div>
 </section>
 
+<section id="s-total" hidden>
+  <div class="checkgrid">
+    <div>
+      <div id="totalCams" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"></div>
+      <div class="stage" id="tstage"><canvas id="tcanvas" class="player" width="960" height="720" aria-label="The camera being counted"></canvas></div>
+      <div class="controls"><button id="tplay">Play</button><span class="muted">Speed</span><span id="tspeeds"></span><span id="tclock" class="muted"></span></div>
+      <div class="muted" id="tkeys" style="margin-top:6px"></div>
+    </div>
+    <div class="card">
+      <div class="big">Count the total</div>
+      <div class="muted">How many people crossed &mdash; not when each one did. Nothing here is matched against the automatic counter: your total is set against the system&rsquo;s number as one number against another.</div>
+      <div id="tnums" style="margin:14px 0"></div>
+      <div id="tmsg" style="min-height:1.4em"></div>
+      <label class="muted" style="display:block;margin-top:10px">Notes: anything that made counting hard
+        <textarea id="tnotes" rows="3" placeholder="e.g. Busy period, several people overlapping."></textarea></label>
+      <label style="display:block;margin-top:10px"><input type="checkbox" id="twhole"> This total is for the <b>whole clip</b>, start to end</label>
+      <button id="totalDone" class="primary" style="margin-top:12px">Save the total &rarr;</button>
+    </div>
+  </div>
+</section>
+
 <section id="s-report" hidden>
   <div class="card">
     <div class="big">Report</div>
@@ -420,9 +442,11 @@ const FLOW = {
   // RetailNext's numbers only after the check, so they cannot sway it
   auto: ["footage", "mode", "draw", "traffic", "count", "check", "retail", "report"],
   manual: ["footage", "mode", "draw", "traffic", "hand", "retail", "report"],
+  total: ["footage", "mode", "draw", "traffic", "total", "retail", "report"],
 };
 const NAMES = { footage: "Footage", mode: "How", draw: "Cameras", traffic: "Traffic", retail: "Sensor",
-                count: "Count", check: "Check", hand: "Count by hand", report: "Report" };
+                count: "Count", check: "Check", hand: "Count by hand", total: "Count the total",
+                report: "Report" };
 const LABEL = { in: "Traffic In", out: "Traffic Out" };
 const RATES = [0.5, 1, 1.5, 2, 3, 4];
 const HR = [0.5, 1, 2, 4, 8, 16];
@@ -471,6 +495,7 @@ function nextKey() {
   if (!s.cameras.length) return "draw";
   if (!s.direction) return "traffic";
   const missing = s.dirs.some((d) => s.sensor[d] === undefined || s.sensor[d] === null);
+  if (s.mode === "total") return !s.totals.done ? "total" : missing ? "retail" : "report";
   if (s.mode === "manual") return !s.manual.done ? "hand" : missing ? "retail" : "report";
   if (s.job.status !== "done") return "count";
   if (!s.counts.checked) return "check";
@@ -493,7 +518,7 @@ const ENTER = {};
 function go(key) {
   clearInterval(W.timer); W.timer = null;
   if (W.key === "hand" && key !== "hand") hflush();
-  if (key !== "check" && key !== "hand") V.pause();
+  if (key !== "check" && key !== "hand" && key !== "total") V.pause();
   W.key = key;
   document.querySelectorAll("main > section").forEach((s) => (s.hidden = s.id !== `s-${key}`));
   renderSteps(); msg("");
@@ -823,10 +848,11 @@ document.querySelectorAll("#s-mode [data-mode]").forEach((b) => b.addEventListen
 // ---------- cameras: names, or drawing ----------
 const pic = (i) => `${W.st.draw_url}api/picture/${i}.jpg`;
 ENTER.draw = async () => {
-  const manual = W.st.mode === "manual";
+  const manual = W.st.mode === "manual", named = manual || W.st.mode === "total";
   W.drawn = await api("/api/drawn").catch(() => null);
-  $("marksCard").hidden = !manual;
-  if (!manual) return showDraw();
+  $("marksCard").hidden = !manual;  // only a count of crossings can be a gold clip, clean or marked
+  if (!named) return showDraw();
+  if (!manual) return showNames();  // a total needs no line drawn: only which camera is which
   $("marksPics").innerHTML = W.st.pictures.map((p, i) => `<figure><img src="${pic(i)}" alt="Picture ${i + 1}"><span class="muted">Picture ${i + 1}</span></figure>`).join("");
   $("marksHint").textContent = W.drawn && W.drawn.marks_guess
     ? "It looks like it does: RetailNext's blue lines were found on this video. Check the pictures and confirm."
@@ -1506,13 +1532,98 @@ function draw() {
 }
 
 // ---------- keys and clicks ----------
+// ---------- counting the total only ----------
+// The same video and the same keys as counting by hand, but only a number is kept: no
+// moment is recorded for any press, because a total is not a list of crossings.
+ENTER.total = async () => {
+  W.t = await api("/api/total");
+  setState(W.t);
+  W.tcam = W.st.cameras.some((c) => c.sensor === W.tcam) ? W.tcam : (W.st.cameras[0] || {}).sensor;
+  W.tgeom = W.tgeom || await api("/api/hand").then((h) => h.geometry).catch(() => null);
+  $("tspeeds").innerHTML = HR.map((r) => `<button data-trate="${r}">${r}\u00d7</button>`).join("");
+  $("tspeeds").querySelectorAll("[data-trate]").forEach((b) => b.addEventListener("click", () => tRate(+b.dataset.trate)));
+  $("tnotes").value = W.t.total.notes || "";
+  $("twhole").checked = !!W.t.total.whole_clip;
+  $("tkeys").innerHTML = `${keysText()} \u00b7 <kbd>\u21e7</kbd> with them takes one off \u00b7 <kbd>Space</kbd> play/pause \u00b7 <kbd>\u2190</kbd>/<kbd>\u2192</kbd> 2 s \u00b7 <kbd>\u2191</kbd>/<kbd>\u2193</kbd> speed`
+    + (W.st.cameras.length > 1 ? ` \u00b7 <kbd>1</kbd>\u2013<kbd>${W.st.cameras.length}</kbd> camera` : "");
+  tRate(W.trate || 1);
+  renderTotal();
+  if (!W.ttimer) W.ttimer = setInterval(() => { if (W.key === "total") drawTotal(); }, 100);
+};
+function tRate(r) { W.trate = r; V.playbackRate = r; V.defaultPlaybackRate = r; $("tspeeds").querySelectorAll("[data-trate]").forEach((b) => b.classList.toggle("on", +b.dataset.trate === r)); }
+function renderTotal() {
+  const cams = W.st.cameras;
+  $("totalCams").innerHTML = cams.length > 1 ? cams.map((c, i) => `<button data-tcam="${esc(c.sensor)}" class="${c.sensor === W.tcam ? "on" : ""}">${i + 1}. ${esc(c.sensor)}</button>`).join("") : "";
+  const here = W.t.total.cameras.find((c) => c.sensor === W.tcam) || { counts: {} };
+  $("tnums").innerHTML = W.st.dirs.map((d) => {
+    const n = here.counts[d];
+    return `<div class="card" style="padding:10px 12px;margin-bottom:8px">
+      <div class="muted">${LABEL[d]}${cams.length > 1 ? ` \u00b7 ${esc(W.tcam)}` : ""}</div>
+      <div style="display:flex;align-items:center;gap:14px;margin-top:4px">
+        <button data-tstep="-1" data-tdir="${d}" aria-label="One fewer ${LABEL[d]}">\u2212</button>
+        <div style="font-size:44px;font-weight:700;min-width:2.5em;text-align:center">${n == null ? "\u2013" : n}</div>
+        <button data-tstep="1" data-tdir="${d}" class="primary" aria-label="One more ${LABEL[d]}">+1</button>
+      </div></div>`;
+  }).join("") + (cams.length > 1 ? `<div class="muted">Every camera together: ${W.st.dirs.map((d) => `${W.t.total.by_direction[d]} ${LABEL[d].toLowerCase()}`).join(", ")}</div>` : "");
+  const miss = W.t.total.missing;
+  $("tmsg").innerHTML = W.t.total.done ? '<span class="ok">Saved.</span>'
+    : miss.length ? `<span class="muted">${esc(miss[0])}</span>` : "";
+}
+function drawTotal() {
+  const g = W.tgeom && W.tgeom[W.tcam]; if (!g) return;
+  const t = g.tile, w = t.x1 - t.x0, h = t.y1 - t.y0;
+  const sc = Math.max(0.5, Math.min(2.2, ($("tstage").parentElement.clientWidth - 4) / w, (window.innerHeight - 280) / h));
+  mount($("tstage"), $("tcanvas"), t, sc);
+  const c = $("tcanvas").getContext("2d");
+  c.clearRect(0, 0, $("tcanvas").width, $("tcanvas").height);
+  const f = W.tflash;
+  if (f && performance.now() < f.until) {
+    c.font = "bold 46px system-ui, sans-serif"; c.lineWidth = 6; c.strokeStyle = "rgba(0,0,0,.7)";
+    c.strokeText(f.text, 18, $("tcanvas").height - 22);
+    c.fillStyle = f.dir === "in" ? "#3ecf8e" : "#ff7a59"; c.fillText(f.text, 18, $("tcanvas").height - 22);
+  }
+  $("tclock").textContent = `${clock(V.currentTime)}${W.st.tz ? " " + W.st.tz : ""} (${fmtHms(V.currentTime)} of ${fmtHms(W.st.duration_s)})`;
+  $("tplay").textContent = V.paused ? "Play" : "Pause";
+}
+async function tStep(direction, step) {
+  if (!W.st.dirs.includes(direction)) return;
+  W.tflash = { text: `${direction.toUpperCase()} ${step > 0 ? "+1" : "\u22121"}`, dir: direction, until: performance.now() + 600 };
+  try { W.t = await api("/api/total/step", { camera: W.tcam, direction, step }); setState(W.t); renderTotal(); }
+  catch (e) { $("tmsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+$("tplay").addEventListener("click", () => (V.paused ? V.play().catch(() => {}) : V.pause()));
+$("tnotes").addEventListener("change", () => api("/api/total/notes", { notes: $("tnotes").value }).catch(() => {}));
+$("twhole").addEventListener("change", () => api("/api/total/done", { done: false, whole_clip: $("twhole").checked }).then((j) => { W.t = j; setState(j); }).catch(() => {}));
+$("totalDone").addEventListener("click", async () => {
+  try {
+    await api("/api/total/notes", { notes: $("tnotes").value });
+    W.t = await api("/api/total/done", { done: true, whole_clip: $("twhole").checked });
+    setState(W.t); renderTotal(); V.pause(); go(nextKey());
+  } catch (e) { $("tmsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+});
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-tcam],[data-tstep]");
+  if (!b) return;
+  if (b.dataset.tcam) { W.tcam = b.dataset.tcam; renderTotal(); }
+  else tStep(b.dataset.tdir, +b.dataset.tstep);
+});
+
 window.addEventListener("keydown", (e) => {
   const a = document.activeElement; if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT")) return;
-  if (W.key !== "check" && W.key !== "hand") return;
+  if (W.key !== "check" && W.key !== "hand" && W.key !== "total") return;
   if (e.repeat && !e.key.startsWith("Arrow")) { e.preventDefault(); return; }  // a held key acts once
   const k = e.key.toLowerCase(), go_ = (fn) => { e.preventDefault(); fn(); };
   if (k === " " || e.code === "Space") go_(() => (V.paused ? V.play().catch(() => {}) : V.pause()));
   else if (k === "," || k === ".") go_(() => { V.pause(); V.currentTime = Math.max(0, V.currentTime + (k === "." ? 1 : -1) / (W.st.fps || 10)); });
+  else if (W.key === "total") {
+    if (k === "i") go_(() => tStep("in", e.shiftKey ? -1 : 1));
+    else if (k === "o") go_(() => tStep("out", e.shiftKey ? -1 : 1));
+    else if (k === "arrowleft") go_(() => (V.currentTime = Math.max(0, V.currentTime - (e.shiftKey ? 0.1 : 2))));
+    else if (k === "arrowright") go_(() => (V.currentTime = Math.min(W.st.duration_s, V.currentTime + (e.shiftKey ? 0.1 : 2))));
+    else if (k === "arrowup") go_(() => tRate(HR[Math.min(HR.length - 1, HR.indexOf(V.playbackRate) + 1)] ?? 1));
+    else if (k === "arrowdown") go_(() => tRate(HR[Math.max(0, HR.indexOf(V.playbackRate) - 1)] ?? 1));
+    else if (/^[1-9]$/.test(k) && +k <= W.st.cameras.length) go_(() => { W.tcam = W.st.cameras[+k - 1].sensor; renderTotal(); });
+  }
   else if (W.key === "hand") {
     if (k === "i") go_(() => hcount("in", e.shiftKey));
     else if (k === "o") go_(() => hcount("out", e.shiftKey));
