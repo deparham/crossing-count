@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from crossing_count import bench, gold
+from crossing_count import bench, gold, runs
 from crossing_count.webapp import Setup
 from crossing_count.wizard import Wizard, WizardError
 from crossing_count.wizard_app import create_wizard_app
@@ -273,3 +273,26 @@ def test_nothing_of_the_tools_is_claimed_on_a_total(totals: Wizard) -> None:
     frame, caption = totals.render_busy_frame()  # the tool never ran: no overlay to draw
     assert frame.is_file() and "CN-9-PB1" in caption
     assert totals.tool_vs_hand() is None
+
+
+def test_what_has_been_validated_is_counted_by_how_it_was_counted() -> None:
+    """Runs of the three kinds are never added together: they answer different questions."""
+    got = runs.coverage([
+        {"mode": "manual", "status": "complete", "verified": 20, "cameras": ["A", "B"],
+         "store": {"code": "CN-159"}},
+        {"mode": "total", "status": "complete", "verified": 147, "cameras": ["A"],
+         "store": {"code": "CN-9"}},
+        {"mode": "total", "status": "incomplete", "verified": None, "cameras": ["A"],
+         "store": {"code": "CN-9"}},
+        {"mode": "auto", "status": "complete", "verified": 11, "cameras": ["A"],
+         "store": {"code": "CN-159"}},
+    ])
+    assert got["validations"] == 4
+    by = got["by_how"]
+    assert by["manual"]["validations"] == 1 and by["manual"]["verified"] == 20
+    assert by["total"]["validations"] == 2 and by["total"]["complete"] == 1
+    assert by["total"]["stores"] == 1 and by["total"]["verified"] == 147
+    assert by["auto"]["validations"] == 1 and by["auto"]["cameras"] == 1
+    # only crossings placed in time can be set against the tool's, one by one
+    assert [k for k, v in by.items() if not v["event_level"]] == ["total"]
+    assert runs.coverage([])["validations"] == 0

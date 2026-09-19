@@ -47,6 +47,11 @@
 <header><b>Crossing<span>Count</span></b><span class="sep"></span><h1>Validation runs</h1></header>
 <main>
   <div class="card">
+    <div class="big">What has been validated</div>
+    <div class="muted">Counted crossing by crossing, counted as a total, or the tool&rsquo;s crossings checked by a person &mdash; each answers a different question, so each is counted on its own.</div>
+    <div class="scroll" style="margin-top:10px" id="coverage"></div>
+  </div>
+  <div class="card">
     <div class="big">Finalised validations</div>
     <div class="muted">Each finalised validation has an ID and a folder that never changes: its manifest (software, rules, footage checksum, lines, the system's numbers and their source, detector and weights, the computer), the result, CSV files and the report. Every file is checked against the checksum in the manifest each time this page opens.</div>
     <div class="scroll" style="margin-top:10px"><table id="runs"></table></div>
@@ -96,6 +101,14 @@ function integrity(r) {
         `<td>${esc(r.system || "")}</td><td>${r.verified ?? "–"} / ${r.system_count ?? "–"}</td><td>${esc(r.status || "")}${r.mode ? ` <span class="muted">(${howCounted(r.mode)})</span>` : ""}</td>` +
         `<td>${esc(r.operator || "")}</td><td>${esc(when(r.finalised_at))}</td><td>${integrity(r)}</td><td>${r.problem ? "" : `<button data-open="${esc(r.validation_id)}">Folder</button>`}</td></tr>`).join("")
     : `<tr><td class="muted">None yet: finalise a validation on its report page.</td></tr>`;
+  const cov = G.coverage;
+  $("coverage").innerHTML = cov.validations
+    ? `<table><tr><th>How the count was arrived at</th><th>Validations</th><th>Complete</th><th>Stores</th><th>Cameras</th><th>Verified</th><th>Can be matched crossing by crossing</th></tr>` +
+      Object.values(cov.by_how).filter((k) => k.validations).map((k) =>
+        `<tr><td>${esc(k.words)}</td><td>${k.validations}</td><td>${k.complete}</td><td>${k.stores}</td><td>${k.cameras}</td><td>${k.verified}</td>` +
+        `<td>${k.event_level ? "yes" : '<span class="muted">no: a total has no moments</span>'}</td></tr>`).join("") +
+      `</table><div class="muted" style="margin-top:6px">Kept apart because they answer different questions: added together they would say more than either can.</div>`
+    : '<span class="muted">None yet.</span>';
   const a = G.audit;
   $("audit").innerHTML = a.intact
     ? `<span class="ok">${a.entries} entries, the chain intact</span> (each entry carries the checksum of the one before, so a changed, removed or inserted entry shows).`

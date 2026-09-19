@@ -1239,8 +1239,9 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     def runs_list() -> dict[str, Any]:
         """Every finalised validation, checked against its manifest; and the audit log."""
         root = data()
-        return {"runs": runs.listing(root), "audit": auditlog.verify(root),
-                "recent": auditlog.recent(40, root)}
+        found = runs.listing(root)
+        return {"runs": found, "coverage": runs.coverage(found),
+                "audit": auditlog.verify(root), "recent": auditlog.recent(40, root)}
 
     @app.post("/api/runs/reveal")
     def runs_reveal(r: RunRef) -> dict[str, bool]:

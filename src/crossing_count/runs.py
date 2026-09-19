@@ -228,6 +228,29 @@ def verify(folder: Path, root: Path | None = None) -> dict[str, Any]:
             "audit_log_ok": in_log}
 
 
+def coverage(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    """How much has been validated, kept apart by how the truth was arrived at.
+
+    A count of crossings and a total are both counts by a person, but they answer different
+    questions, and a run of each is not two of the same thing. Added together they would say
+    more than either can.
+    """
+    kinds = {"manual": "counted by hand, crossing by crossing", "total": "counted as a total",
+             "auto": "the tool's crossings checked by a person"}
+    out: dict[str, Any] = {"validations": len(runs), "by_how": {}}
+    for key, words in kinds.items():
+        mine = [r for r in runs if (r.get("mode") or "auto") == key]
+        out["by_how"][key] = {
+            "words": words, "validations": len(mine),
+            "stores": len({(r.get("store") or {}).get("code") for r in mine if r.get("store")}),
+            "cameras": sum(len(r.get("cameras") or []) for r in mine),
+            "verified": sum(int(r["verified"]) for r in mine if r.get("verified") is not None),
+            "complete": sum(1 for r in mine if r.get("status") == "complete"),
+            # only crossings placed in time can be matched against the tool's
+            "event_level": key != "total"}
+    return out
+
+
 def listing(root: Path) -> list[dict[str, Any]]:
     """Every finalised run on this computer, newest first."""
     out: list[dict[str, Any]] = []
