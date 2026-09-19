@@ -97,12 +97,14 @@ class DetectOptions:
     track_low: float = 0.08  # ByteTrack: weaker detections may still extend a track
     track_new: float = 0.2  # ByteTrack: a new track needs at least this confidence
     assoc_box: str = "full"  # "full" person boxes, or "compact" lower-body boxes
+    tracker: str = "byte"  # which tracker follows people between frames (tracker.TRACKERS)
+    assoc: str = "iou"  # what the first association is measured on (tracker.ASSOC)
     record: bool = False  # keep every frame's detections, so tracking can be re-run fast
     backbone: str = "yolo"  # which detector finds the people: yolo, or rfdetr (detector.py)
 
     def tracker_kw(self) -> dict[str, Any]:
         return {"high": self.track_high, "low": self.track_low, "new": self.track_new,
-                "box": self.assoc_box}
+                "box": self.assoc_box, "kind": self.tracker, "assoc": self.assoc}
 
 
 DetectorFactory = Callable[[SiteConfig, BoundGeometry, Tile, NDArray[np.uint8]], Detector]

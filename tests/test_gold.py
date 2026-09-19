@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from crossing_count import gold
+from crossing_count import bench, gold
 from crossing_count.examples import export_examples
 from crossing_count.util import slugify
 from crossing_count.webapp import Setup
@@ -137,6 +137,22 @@ def test_an_automatic_count_covering_the_clip_is_found(tmp_path: Path) -> None:
     assert (run_dir.name, offset, have) == ("clean-1125", 300.0, {"CN-9-PB1"})
 
 
+def test_a_score_says_when_it_was_not_the_tracking_the_tool_counts_with(
+        counted: Wizard, tmp_path: Path) -> None:
+    """Swapping the tracker is an experiment, not a result, and the record has to say so."""
+    _count(counted, [(0.2, "in")])
+    gold.save(counted.state, counted.run_dir, [], "", tmp_path)  # a test-set store
+    gold.freeze(tmp_path, "first clip")
+    usual = gold.evaluate("test", tmp_path)
+    assert usual["settings"]["tracking"] == {"tracker": "byte", "assoc": "iou"}
+    assert not [x for x in usual["limits"] if x.startswith("Tracking was replayed")]
+    swapped = gold.evaluate("test", tmp_path, tracking=bench.Tracking("ocsort", "iou"))
+    assert swapped["settings"]["tracking"] == {"tracker": "ocsort", "assoc": "iou"}
+    (said,) = [x for x in swapped["limits"] if x.startswith("Tracking was replayed")]
+    assert "ocsort" in said and "not a result for the product" in said
+    assert swapped["id"] != usual["id"]  # never written over the scoring it is compared with
+
+
 def test_versions_are_frozen_and_a_test_score_names_one(counted: Wizard, tmp_path: Path) -> None:
     with pytest.raises(gold.GoldError, match="No gold clip"):
         gold.evaluate("development", tmp_path)
@@ -225,7 +241,8 @@ def test_marked_clips_are_scored_apart_and_never_in_the_test_set(
             _clip("T2", "test", "clean")]
     monkeypatch.setattr(gold, "clips", lambda root=None, shared=None: recs)
 
-    def scored(rec: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
+    def scored(rec: dict[str, Any], root: Path | None = None,
+               tracking: Any = None) -> dict[str, Any]:
         counts = {"truth": 40, "pred": 38, "found": 36, "missed": 4, "false": 2}
         return {"id": rec["id"], "split": rec["split"], "tags": [], "groups": [], "store": "S1",
                 "tier": gold.tier(rec), "window": gold.window_id(rec["id"]), "scored": True,

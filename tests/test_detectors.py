@@ -95,7 +95,8 @@ def test_a_score_may_not_mix_two_detectors(tmp_path: Path,
               "conditions": {}} for k in (1, 2)]
     monkeypatch.setattr(gold, "clips", lambda root=None, shared=None: clips)
 
-    def scored(rec: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
+    def scored(rec: dict[str, Any], root: Path | None = None,
+               tracking: Any = None) -> dict[str, Any]:
         which = "yolo11s.pt" if rec["id"] == "c1" else "yolo11m.pt"
         return {"id": rec["id"], "split": "train", "tags": [], "groups": [], "store": "S1",
                 "tier": "clean", "window": rec["id"], "scored": True, "uncertain": 0, "agreement": None, "camera_hours": 0.25,

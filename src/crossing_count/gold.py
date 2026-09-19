@@ -719,7 +719,8 @@ def score_camera(real: list[tuple[float, str]], unsure: list[float], items: list
             "watch_s": round(watch_s, 1)}
 
 
-def score_clip(rec: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
+def score_clip(rec: dict[str, Any], root: Path | None = None,
+               tracking: bench.Tracking | None = None) -> dict[str, Any]:
     cond = rec.get("conditions") or {}
     keys = [*rec["tags"], *(f"{k}:{cond[k]}" for k in ("traffic", "lighting", "occlusion")
                             if cond.get(k))]
@@ -737,7 +738,8 @@ def score_clip(rec: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
     run_dir, offset, have = hit
     try:
         video = _video_of(run_dir)
-        results, notes = bench.replay(video, run_dir, list(bench._configs(run_dir, have)))
+        results, notes = bench.replay(video, run_dir, list(bench._configs(run_dir, have)),
+                                      tracking=tracking)
     except (GoldError, bench.BenchError, ConfigError, OSError, ValueError) as e:
         return {**base, "run": run_dir.name, "reason": f"{run_dir.name}: {e}"}
     dur, dirs = float(rec["duration_s"]), list(rec["dirs"])
@@ -820,7 +822,8 @@ def experiments_dir(root: Path | None = None) -> Path:
 
 def evaluate(which: str, root: Path | None = None, note: str = "",
              shared: Path | None = None, include_provisional: bool = False,
-             clean_only: bool = False) -> dict[str, Any]:
+             clean_only: bool = False,
+             tracking: bench.Tracking | None = None) -> dict[str, Any]:
     """Score the automatic count on the development clips (train and validation) or, when
     asked, on the held-out test clips, which needs a frozen version of the set. The result
     is kept as an experiment record naming the dataset version it used.
@@ -853,7 +856,8 @@ def evaluate(which: str, root: Path | None = None, note: str = "",
         raise GoldError(f"No gold clip in the {which} set yet"
                         + (f" ({len(left_out)} clip(s) left out: see the gold page)."
                            if left_out else "."))
-    results = [score_clip(r, root) for r in recs]
+    tracking = tracking or bench.Tracking()
+    results = [score_clip(r, root, tracking) for r in recs]
     scored = [c for c in results if c["scored"]]
     clean_windows = {c["window"] for c in scored if c["tier"] == "clean"}
     total: dict[str, dict[str, int]] = {}
@@ -899,6 +903,10 @@ def evaluate(which: str, root: Path | None = None, note: str = "",
     if twice:
         notes.append(f"{twice} window(s) counted on both clean and marked footage: the totals "
                      f"count each once, from its clean count.")
+    if not tracking.usual:
+        notes.append(f"Tracking was replayed with {tracking.tracker} and the {tracking.assoc} "
+                     f"association matrix, not the settings the tool counts with: an experiment "
+                     f"in following people between frames, not a result for the product.")
     exp_id, k = f"{made:%Y%m%d-%H%M%S}-{which}", 2
     while (experiments_dir(root) / f"{exp_id}.json").exists():  # never over an earlier scoring
         exp_id, k = f"{made:%Y%m%d-%H%M%S}-{which}-{k}", k + 1
@@ -908,7 +916,8 @@ def evaluate(which: str, root: Path | None = None, note: str = "",
                        "clips": [{k: c.get(k) for k in ("id", "split", "tier", "sha256")}
                                  for c in current["clips"] if c["id"] in ids]},
            "app_version": app_version(),
-           "settings": {**bench.settings(), "engine": CROSSING_ENGINE, "matching": MATCHING,
+           "settings": {**bench.settings(), "tracking": tracking.as_dict(),
+                        "engine": CROSSING_ENGINE, "matching": MATCHING,
                         "tolerance_s": TOLERANCE_S, "min_sample": MIN_SAMPLE,
                         "ground_truth_specification": GROUND_TRUTH_SPEC},
            "detectors": sorted({d["model"]: d for c in scored for d in c["detectors"]}.values(),

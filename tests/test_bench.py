@@ -10,7 +10,15 @@ from typing import Any
 import pytest
 from synth import Oracle
 
-from crossing_count.bench import CHECKED, HAND, bench_clip, find_truth, score_camera, totals
+from crossing_count.bench import (
+    CHECKED,
+    HAND,
+    Tracking,
+    bench_clip,
+    find_truth,
+    score_camera,
+    totals,
+)
 from crossing_count.candidates import DetectOptions, RecordingDetector, run_detect, write_detection
 from crossing_count.gating import camera_dir
 
@@ -111,3 +119,25 @@ def test_a_check_of_the_tools_own_crossings_is_not_independent(
     assert truth is not None and truth.kind == CHECKED and not truth.independent
     assert sorted(truth.crossings["CAM-A"]) == sorted([(first["t"], first["direction"]),
                                                        (5.0, "in")])
+
+
+def test_the_same_clip_can_be_scored_under_another_tracker(
+        two_tile_video: dict[str, Any], recorded: Path) -> None:
+    """Which tracker followed people is part of the score, so two of them cannot be read as
+    one result. Nothing is detected again: the recorded detections are replayed."""
+    hand_count(recorded, two_tile_video["video"], counted_by_tool(recorded), watched_a=60.0)
+    usual, other = Tracking(), Tracking("ocsort")
+    assert usual.usual and not other.usual
+    assert usual.label("derotated") == "derotated"
+    assert other.label("derotated") == "derotated [ocsort/iou]"
+
+    as_run = bench_clip(recorded)
+    assert as_run["tracking"] == {"tracker": "byte", "assoc": "iou"}
+    assert as_run["scored_as"] == "derotated"
+    swapped = bench_clip(recorded, tracking=other)
+    assert swapped["tracking"] == {"tracker": "ocsort", "assoc": "iou"}
+    assert swapped["scored_as"] == "derotated [ocsort/iou]"
+    assert swapped["detector"] == as_run["detector"]  # the same detections either way
+    for clip in (as_run, swapped):
+        assert sum(x["verified"] for x in
+                   totals([clip], independent_only=True)["by_direction"].values())

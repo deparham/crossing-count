@@ -157,7 +157,10 @@ different weights: the number would describe neither. Tests: `tests/test_detecto
 Crossing-level scorings (gold page, `bench/experiments/`): engine and matching versions,
 tolerance, minimum sample, Ground Truth Specification version, dataset version and content
 hash with each clip's checksum, app version, detector and its weights' SHA-256, tracking
-and rule settings. Count-level summaries: engine version, the minimum truth for
+and rule settings. Which tracker and which association matrix were replayed is part of
+that record, and a scoring made with anything other than the settings the tool counts
+with says so in its limits: it is an experiment in following people between frames, not a
+result for the product. Count-level summaries: engine version, the minimum truth for
 percentages, minimum clusters, bootstrap size and seed, traffic thresholds; each
 validation's result records its app version, engine version, status, what counted as a
 person, the specification version, the system and where its numbers came from.

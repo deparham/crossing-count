@@ -64,6 +64,28 @@ class BenchError(Exception):
     """A clip that cannot be scored."""
 
 
+@dataclass(frozen=True)
+class Tracking:
+    """How the recorded detections are followed: the default is what the tool counts with."""
+
+    tracker: str = "byte"
+    assoc: str = "iou"
+
+    def options(self) -> DetectOptions:
+        return DetectOptions(tracker=self.tracker, assoc=self.assoc)
+
+    @property
+    def usual(self) -> bool:
+        return (self.tracker, self.assoc) == (Tracking().tracker, Tracking().assoc)
+
+    def label(self, variant: str) -> str:
+        """What to call this way of scoring a clip, in tables and in saved results."""
+        return variant if self.usual else f"{variant} [{self.tracker}/{self.assoc}]"
+
+    def as_dict(self) -> dict[str, str]:
+        return {"tracker": self.tracker, "assoc": self.assoc}
+
+
 @dataclass
 class Truth:
     """The crossings a person verified on one clip, and how they were found."""
@@ -238,14 +260,18 @@ def _configs(run_dir: Path, sensors: set[str], variant: str = "derotated") -> li
 
 
 def replay(video: Path, run_dir: Path, configs: list[str | Path], allow_config_change: bool = False,
-           variant: str = "derotated") -> tuple[list[CameraDetection], list[str]]:
+           variant: str = "derotated",
+           tracking: Tracking | None = None) -> tuple[list[CameraDetection], list[str]]:
     """Today's tracking and rule on the recorded detections. The run folder is only read.
 
     A drawing changed since the count ran stops the replay, unless allow_config_change:
     then it runs on a copy, assuming the change does not move where people were looked for.
+    Another tracker or association matrix replays the same detections under that setting
+    instead, which is how the two are compared on a clip counted by hand.
     """
+    opts = (tracking or Tracking()).options()
     if not allow_config_change:
-        return run_detect(video, configs, run_dir, opts=DetectOptions(),
+        return run_detect(video, configs, run_dir, opts=opts,
                           factory=replay_factory(run_dir, variant)), []
     notes: list[str] = []
     tmp = Path(tempfile.mkdtemp(prefix="bench-"))
@@ -263,7 +289,7 @@ def replay(video: Path, run_dir: Path, configs: list[str | Path], allow_config_c
             kept.mkdir(parents=True, exist_ok=True)
             shutil.copy2(output_dir(run_dir, cfg.sensor, variant) / "detections.pkl",
                          kept / "detections.pkl")
-        return run_detect(video, configs, tmp, opts=DetectOptions(),
+        return run_detect(video, configs, tmp, opts=opts,
                           factory=replay_factory(tmp, variant)), notes
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -368,7 +394,7 @@ def review_minutes(run_dir: Path, items: int) -> tuple[float, str]:
 
 
 def bench_clip(run_dir: Path, video: Path | None = None, allow_config_change: bool = False,
-               variant: str = "derotated") -> dict[str, Any]:
+               variant: str = "derotated", tracking: Tracking | None = None) -> dict[str, Any]:
     truth = find_truth(run_dir)
     if truth is None:
         raise BenchError("no finished count by a person in this run")
@@ -378,7 +404,8 @@ def bench_clip(run_dir: Path, video: Path | None = None, allow_config_change: bo
         raise BenchError(f"no recorded detections for {', '.join(truth.crossings)}"
                          f"{'' if variant == 'derotated' else f' [{variant}]'}: run the "
                          f"automatic count on this video first")
-    results, notes = replay(video, run_dir, configs, allow_config_change, variant)
+    tracking = tracking or Tracking()
+    results, notes = replay(video, run_dir, configs, allow_config_change, variant, tracking)
     cams: dict[str, dict[str, Any]] = {}
     footage_s = 0.0
     for r in results:
@@ -397,6 +424,7 @@ def bench_clip(run_dir: Path, video: Path | None = None, allow_config_change: bo
     notes += [f"{c}: no recorded detections, not scored" for c in truth.crossings if c not in cams]
     minutes, how = review_minutes(run_dir, sum(c["check_items"] for c in cams.values()))
     return {"clip": run_dir.name, "video": str(video), "variant": variant,
+            "tracking": tracking.as_dict(), "scored_as": tracking.label(variant),
             "detector": detector_of(run_dir, variant),
             "truth": {"kind": truth.kind, "source": truth.source, "independent": truth.independent,
                       "partial": truth.kind != HAND and truth.kind.startswith(HAND),

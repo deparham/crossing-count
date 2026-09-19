@@ -428,6 +428,18 @@ every crossing the person verified where the checker would meet it:
 
 It also counts wrong counts (the same person twice, the wrong direction,
 nobody) and the work: Y/N questions and minutes of movement to watch.
+
+`--tracker` and `--assoc` replay the same recorded detections under a different
+tracker or a different association matrix and score the results side by side
+(see **Following people between frames** below). Nothing is detected again, and
+the run folder is still only read. `--gold development` scores the gold clips
+that way instead, at crossing level, keeping each scoring as its own experiment
+record:
+
+    uv run bench.py --gold development --tracker byte --tracker ocsort
+
+A scoring made with anything other than the tracking the tool counts with says
+so in its own limits, so it can never be read as a result for the product.
 Results are saved in `bench/` in the data folder, to compare later changes.
 
 Only a clip counted fully by hand (the wizard's Manual mode, with all the
@@ -865,6 +877,41 @@ is treated as static and ignored when later detections match it closely.
 
 Tracks have no long-term identity. A track that dies and is followed within
 `stitch_gap_max_s` by one nearby, moving the same way, is joined to it.
+
+### Following people between frames
+
+The tool counts with ByteTrack, associating on box overlap (IoU). Two other
+trackers and one other matrix are wired in so they can be measured on the same
+recorded detections rather than argued about:
+
+| `--tracker` | what it adds |
+|---|---|
+| `byte` (default) | ByteTrack: overlap, then a second pass over the weak detections |
+| `botsort` | BoT-SORT without re-identification (re-ID needs the pictures, which a replay does not have) |
+| `ocsort` | OC-SORT: repairs a track's history after it comes back from being lost |
+
+| `--assoc` | what it measures the first association on |
+|---|---|
+| `iou` (default) | plain overlap, which is the same 0 for every box that misses |
+| `giou` | generalised overlap, which still ranks boxes that do not overlap at all (`--tracker byte` only: the others put their own terms in the matrix) |
+
+**What the first comparison found** (19 Sep 2026; CN-159 11:15, one clip, two
+cameras, 20 crossings counted by hand), as `found / false`:
+
+| Tracking | YOLO26m de-rotated | RF-DETR whole picture |
+|---|---|---|
+| `byte` / `iou` (what the tool counts with) | 15 / 10 | 11 / 5 |
+| `byte` / `giou` | 16 / 17 | 14 / 8 |
+| `botsort` / `iou` | 15 / 10 | 13 / 3 |
+| `ocsort` / `iou` | 16 / 10 | 13 / 7 |
+
+**No winner is declared, and the default has not changed.** Twenty crossings
+from one store is one clip's worth of luck: "one more found" is one person.
+Generalised overlap does what its authors claim — tracks fall from 1863 to 1561
+and joined breaks from 691 to 465, so people are being followed further — but
+it offers more crossings that turn out to be nobody. Adopting any of these
+needs the held-out clip scored as well, which needs its clean twin counted
+automatically first.
 
 Weights live in `models/` and are never downloaded at run time. One-time setup:
 

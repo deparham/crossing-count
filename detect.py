@@ -30,6 +30,7 @@ from crossing_count.candidates import (
 from crossing_count.config import ConfigError
 from crossing_count.detect_debug import write_detect_debug
 from crossing_count.detector import Backbone, RfDetrBackbone, YoloBackbone
+from crossing_count.tracker import ASSOC, TRACKERS
 from crossing_count.util import default_run_dir
 
 
@@ -69,6 +70,13 @@ def main(argv: list[str] | None = None) -> int:
                     help="RF-DETR Large weights file in models/")
     ap.add_argument("--device", help="torch device (default: mps if available, else cpu)")
     ap.add_argument("--det-fps", type=float, default=10.0, help="frames per second analysed")
+    ap.add_argument("--tracker", choices=TRACKERS, default="byte",
+                    help="which tracker follows people between frames (default: byte).\n"
+                         "To compare trackers on a count that already ran, replay it with "
+                         "bench.py --tracker instead of counting again")
+    ap.add_argument("--assoc", choices=ASSOC, default="iou",
+                    help="what the first association is measured on: iou (default) or giou,\n"
+                         "which still ranks boxes that do not overlap at all (--tracker byte only)")
     ap.add_argument("--seed", type=int, default=0,
                     help="accepted for a uniform interface; detection itself is not random")
     ap.add_argument("--debug", action="store_true",
@@ -80,6 +88,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.video.is_file():
         ap.error(f"video not found: {args.video}")
+    if args.assoc == "giou" and args.tracker != "byte":
+        ap.error(f"--assoc giou goes with --tracker byte: {args.tracker} adds its own terms to "
+                 f"the matrix, which this would drop")
     run_dir = args.out_dir or default_run_dir(args.video, args.sample)
     modes = ["derotated", "naive"] if args.compare else ["naive"] if args.naive else ["derotated"]
 
@@ -92,7 +103,8 @@ def main(argv: list[str] | None = None) -> int:
     by_mode = {}
     for m in modes:
         opts = DetectOptions(mode=m, model=args.model, device=args.device, det_fps=args.det_fps,
-                             record=args.record, backbone=args.detector)
+                             record=args.record, backbone=args.detector, tracker=args.tracker,
+                             assoc=args.assoc)
         where = results_folder(args.detector, args.model, ap.get_default("model"), m,
                                args.main_folder)
         print(f"\n[{args.detector} {m}]", file=sys.stderr)

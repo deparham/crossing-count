@@ -4,15 +4,18 @@ tracks broken at the line, compact tracking boxes and faint detections."""
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
+from ultralytics.trackers.utils.matching import iou_distance
 
 from crossing_count import rule as R
 from crossing_count.candidates import FLAG_BIG_JUMP, MISS_KIND, build_outputs
 from crossing_count.config import bind, parse_config
 from crossing_count.crossing import IN, find_crossings
 from crossing_count.detector import Detection, compact_box
-from crossing_count.tracker import ByteTrackAdapter
+from crossing_count.tracker import TRACKERS, ByteTrackAdapter, giou_distance
 from crossing_count.tracks import LOST, Track, TrackSample, split_at_jumps, stitch
 
 LINE = np.array([[0.0, 100.0], [200.0, 100.0]])  # inside is below
@@ -165,3 +168,34 @@ def test_tracker_can_associate_on_either_box() -> None:
         assert any(bt.update([d]) for _ in range(3))
     with pytest.raises(ValueError):
         ByteTrackAdapter(analysed_fps=10, box="huge")
+
+
+def test_a_choice_of_tracker_and_of_what_association_is_measured_on() -> None:
+    d = Detection((100, 100, 136, 190), (118, 190), 0.6)
+    for kind in TRACKERS:
+        bt = ByteTrackAdapter(analysed_fps=10, kind=kind, high=0.2, new=0.2)
+        assert any(bt.update([d]) for _ in range(3)), kind
+    assert any(ByteTrackAdapter(analysed_fps=10, assoc="giou").update([d]) for _ in range(3))
+    with pytest.raises(ValueError, match="tracker must be one of"):
+        ByteTrackAdapter(analysed_fps=10, kind="deepsort")
+    with pytest.raises(ValueError, match="assoc must be one of"):
+        ByteTrackAdapter(analysed_fps=10, assoc="cosine")
+    # the other trackers put their own terms in the matrix, so ours would drop them
+    with pytest.raises(ValueError, match="goes with tracker='byte'"):
+        ByteTrackAdapter(analysed_fps=10, kind="ocsort", assoc="giou")
+
+
+def test_generalised_overlap_still_tells_boxes_apart_when_none_of_them_overlap() -> None:
+    """Why it is worth having: plain overlap gives every missing box the same cost, so a
+    small box that jumped between frames cannot be put back on the right track."""
+    track = [SimpleNamespace(xyxy=np.array([100.0, 100.0, 120.0, 140.0]), angle=None)]
+    near = SimpleNamespace(xyxy=np.array([124.0, 100.0, 144.0, 140.0]), angle=None)  # a step away
+    far = SimpleNamespace(xyxy=np.array([400.0, 100.0, 420.0, 140.0]), angle=None)  # another aisle
+    overlap = iou_distance(track, [near, far])
+    assert overlap[0][0] == overlap[0][1] == pytest.approx(1.0)  # the same: nothing to choose
+    generalised = giou_distance(track, [near, far])
+    assert generalised[0][0] < generalised[0][1]  # the one a person could have walked to
+    assert 0.0 < generalised[0][0] < 1.0 and generalised[0][1] < 1.0  # on the same scale
+    same = giou_distance(track, [SimpleNamespace(xyxy=track[0].xyxy, angle=None)])
+    assert same[0][0] == pytest.approx(0.0)  # the same box costs nothing, as overlap does
+    assert giou_distance([], [near]).shape == (0, 1)

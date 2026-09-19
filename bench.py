@@ -5,6 +5,10 @@
     uv run bench.py VIDEO [VIDEO ...] just these clips
     uv run bench.py --allow-config-change
                                       score even if a drawing changed since the count ran
+    uv run bench.py --tracker byte --tracker ocsort
+                                      the same clips under two trackers, side by side
+    uv run bench.py --gold development --tracker byte --tracker ocsort
+                                      the same, on the gold clips, at crossing level
 
 Each clip's recorded detections are replayed through today's tracking and counting rule
 (seconds per clip; the run folder is only read), and every crossing the person verified is
@@ -24,9 +28,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from crossing_count import paths
+from crossing_count import gold, paths
 from crossing_count.bench import (
     BenchError,
+    Tracking,
     bench_clip,
     benchmark_runs,
     settings,
@@ -35,6 +40,7 @@ from crossing_count.bench import (
 )
 from crossing_count.config import ConfigError
 from crossing_count.evaluate import MIN_SAMPLE
+from crossing_count.tracker import ASSOC, TRACKERS
 from crossing_count.util import default_run_dir, write_json_atomic
 
 
@@ -119,7 +125,26 @@ def main(argv: list[str] | None = None) -> int:
                          "clips")
     ap.add_argument("--all-detectors", action="store_true",
                     help="score every recorded detection set found, and compare them")
+    ap.add_argument("--tracker", action="append", choices=TRACKERS, dest="trackers",
+                    help="which tracker follows people between frames: byte (the default),\n"
+                         "botsort, ocsort. Repeat to compare trackers on the same clips.\n"
+                         "Detection is not re-run: only the tracking changes")
+    ap.add_argument("--gold", choices=("development", "test"), metavar="SET",
+                    help="score the gold clips (development or test) instead of the run\n"
+                         "folders, once per way of tracking. Each scoring is kept as its own\n"
+                         "experiment record, which names the tracking it used")
+    ap.add_argument("--assoc", action="append", choices=ASSOC, dest="assocs",
+                    help="what the first association is measured on: iou (the default) or\n"
+                         "giou, which still ranks boxes that do not overlap at all\n"
+                         "(with --tracker byte only)")
     args = ap.parse_args(argv)
+    ways = [Tracking(t, a) for t in (args.trackers or ["byte"]) for a in (args.assocs or ["iou"])]
+    for w in ways:
+        if w.assoc == "giou" and w.tracker != "byte":
+            ap.error(f"--assoc giou goes with --tracker byte: {w.tracker} adds its own terms "
+                     f"to the matrix, which this would drop")
+    if args.gold:
+        return score_gold(args.gold, ways)
     root = paths.data_root()
     jobs: list[tuple[Path, Path | None]]
     if args.videos:
@@ -136,25 +161,28 @@ def main(argv: list[str] | None = None) -> int:
     by_set: dict[str, dict[str, Any]] = {}
     clips, skipped = [], []
     for variant in wanted or ["derotated"]:
-        got: list[dict[str, Any]] = []
-        for run_dir, video in jobs:
-            try:
-                got.append(bench_clip(run_dir, video, args.allow_config_change, variant))
-            except (BenchError, ConfigError) as e:
-                hint = " (or pass --allow-config-change)" if isinstance(e, ConfigError) else ""
-                skipped.append(f"{run_dir.name} [{variant}]: {e}{hint}")
-        clips += got
-        for c in got:
-            show_clip(c)
-        hand, every = totals(got, independent_only=True), totals(got, independent_only=False)
-        if hand["clips"]:
-            show_totals(f"Crossing recall on hand counts [{variant}]", hand)
-        else:
-            print(f"\nNo full hand count among these clips [{variant}], so crossing recall cannot "
-                  f"be measured: count one clip by hand in the wizard (Manual) to get it.")
-        show_totals(f"All clips [{variant}]", every)
-        by_set[variant] = {"hand_counts": hand, "all": every,
-                           "detector": next((c["detector"] for c in got if c.get("detector")), {})}
+        for way in ways:
+            name = way.label(variant)
+            got: list[dict[str, Any]] = []
+            for run_dir, video in jobs:
+                try:
+                    got.append(bench_clip(run_dir, video, args.allow_config_change, variant, way))
+                except (BenchError, ConfigError, ValueError) as e:
+                    hint = " (or pass --allow-config-change)" if isinstance(e, ConfigError) else ""
+                    skipped.append(f"{run_dir.name} [{name}]: {e}{hint}")
+            clips += got
+            for c in got:
+                show_clip(c)
+            hand, every = totals(got, independent_only=True), totals(got, independent_only=False)
+            if hand["clips"]:
+                show_totals(f"Crossing recall on hand counts [{name}]", hand)
+            else:
+                print(f"\nNo full hand count among these clips [{name}], so crossing recall "
+                      f"cannot be measured: count one clip by hand in the wizard (Manual) to "
+                      f"get it.")
+            show_totals(f"All clips [{name}]", every)
+            by_set[name] = {"hand_counts": hand, "all": every, "tracking": way.as_dict(),
+                            "detector": next((c["detector"] for c in got if c.get("detector")), {})}
     if len(by_set) > 1:
         compare(by_set)
     for s in skipped:
@@ -164,17 +192,51 @@ def main(argv: list[str] | None = None) -> int:
     write_json_atomic(out, {"made_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                             "settings": settings(), "clips": clips, "skipped": skipped,
                             "detectors": {k: v["detector"] for k, v in by_set.items()},
+                            "tracking": {k: v["tracking"] for k, v in by_set.items()},
                             "totals": {k: {"hand_counts": v["hand_counts"], "all": v["all"]}
                                        for k, v in by_set.items()}})
     print(f"\nSaved {out}")
     return 0 if clips else 1
 
 
+def score_gold(which: str, ways: list[Tracking]) -> int:
+    """The gold clips under each way of following people between frames. Each scoring is kept
+    as its own experiment record, and one made with anything but the settings the tool counts
+    with says so in its own limits."""
+    print(f"\nGold clips [{which}] (crossing level)")
+    print(f"  {'tracking':<20}{'clips':>6}{'verified':>9}{'found':>7}{'false':>7}{'recall':>8}"
+          f"{'precision':>11}")
+    kept: list[tuple[str, dict[str, Any]]] = []
+    limits: list[str] = []
+    for way in ways:
+        name = f"{way.tracker}/{way.assoc}" + ("" if not way.usual else " (as counted)")
+        try:
+            exp = gold.evaluate(which, note=f"tracking: {way.tracker}/{way.assoc}", tracking=way)
+        except gold.GoldError as e:
+            print(f"  {name:<20}{e}")
+            continue
+        tot = (exp.get("totals") or {}).get("all") or {}
+        if not tot:
+            print(f"  {name:<20}no clip could be scored")
+            continue
+        kept.append((name, exp))
+        # each row says its own tracking already; the rest of the limits are the set's, and
+        # the same whichever tracker ran
+        limits = limits or [x for x in exp["limits"] if not x.startswith("Tracking was replayed")]
+        print(f"  {name:<20}{sum(exp['tiers'].values()):>6}{tot['truth']:>9}{tot['found']:>7}"
+              f"{tot['false']:>7}{_pct(tot['recall']):>8}{_pct(tot['precision']):>11}")
+    for line in limits:
+        print(f"  limit (every row): {line}")
+    for name, exp in kept:
+        print(f"  {name}: kept as {exp['id']}")
+    return 0 if kept else 1
+
+
 def compare(by_set: dict[str, dict[str, Any]]) -> None:
-    """Detectors side by side on the same clips, at crossing level. No winner is declared
-    here: with few crossings the difference means nothing, and it says so."""
-    print("\nDetectors on the same clips (crossing level, hand counts only)")
-    print(f"  {'detection set':<22}{'verified':>9}{'counted':>9}{'recall':>8}{'precision':>11}"
+    """Detectors and trackers side by side on the same clips, at crossing level. No winner is
+    declared here: with few crossings the difference means nothing, and it says so."""
+    print("\nOn the same clips (crossing level, hand counts only)")
+    print(f"  {'scored as':<28}{'verified':>9}{'counted':>9}{'recall':>8}{'precision':>11}"
           f"{'questions/h':>13}{'static/h':>10}")
     enough = True
     for name, v in by_set.items():
@@ -184,13 +246,13 @@ def compare(by_set: dict[str, dict[str, Any]]) -> None:
         recall = _pct(round(100.0 * counted / n, 1)) if n else "–"
         prec = sum(x["counted"] for x in tot["by_direction"].values())
         enough = enough and n >= MIN_SAMPLE
-        print(f"  {name:<22}{n:>9}{counted:>9}{recall:>8}"
+        print(f"  {name:<28}{n:>9}{counted:>9}{recall:>8}"
               f"{_pct(round(100.0 * counted / prec, 1)) if prec else '–':>11}"
               f"{tot.get('items_per_camera_hour') or '–'!s:>13}"
               f"{tot.get('static_items_per_camera_hour') or '–'!s:>10}")
     if not enough:
         print(f"  Too few verified crossings to tell these apart (at least {MIN_SAMPLE} per "
-              f"detection set, on clips counted fully by hand). These are counts, not a result.")
+              f"row, on clips counted fully by hand). These are counts, not a result.")
     for name, v in by_set.items():
         print(f"  {name}: {said_detector(v['detector'])}")
 
