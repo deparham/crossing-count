@@ -79,6 +79,7 @@ CAUSES = {
 }
 SHORTFALL_S = 30.0  # footage shorter than the sensor's intervals by more than this is said so
 GROUND_TRUTH_SPEC = "1.4"  # docs/GROUND_TRUTH_SPECIFICATION.md: what a crossing is
+TOTAL_ACTIONS_KEPT = 5000  # presses kept on a total-only count, so a wrong total can be read back
 RULE_CHOICES = ("count", "exclude")  # what counts as a person: children, staff (spec section 4)
 MAX_GROUP = 9  # people one answer can count, when a group crosses together
 FOUND = {  # how each verified crossing came to be counted, for the report

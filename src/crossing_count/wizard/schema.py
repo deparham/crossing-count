@@ -53,6 +53,9 @@ DEFAULTS: dict[str, Any] = {
     "sampling": None,
     "rules": {"children": "count", "staff": "count"},
     "manual": {"counts": [], "watched": {}, "positions": {}, "done": False, "next_id": 1},
+    # a count of the total only: a number per camera and direction, no moments. Deliberately
+    # without a time per press, so it can never be mistaken for a count of crossings.
+    "totals": {"by_camera": {}, "notes": "", "done": False, "whole_clip": False, "actions": []},
 }
 
 
@@ -84,12 +87,13 @@ def migrate(state: dict[str, Any]) -> list[str]:
             if key not in store:
                 store[key] = value
                 filled.append(f"store.{key}")
-    manual = state.get("manual")
-    if isinstance(manual, dict):
-        for key, value in DEFAULTS["manual"].items():
-            if key not in manual:
-                manual[key] = copy.deepcopy(value)
-                filled.append(f"manual.{key}")
+    for block in ("manual", "totals"):
+        inner = state.get(block)
+        if isinstance(inner, dict):
+            for key, value in DEFAULTS[block].items():
+                if key not in inner:
+                    inner[key] = copy.deepcopy(value)
+                    filled.append(f"{block}.{key}")
     state["schema"] = SCHEMA
     return filled
 

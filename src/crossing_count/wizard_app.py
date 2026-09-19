@@ -218,6 +218,27 @@ class MarksIn(BaseModel):
     marks: bool
 
 
+class TotalStepIn(BaseModel):
+    camera: str
+    direction: str
+    step: int = 1
+
+
+class TotalSetIn(BaseModel):
+    camera: str
+    direction: str
+    value: int | None = None
+
+
+class TotalNotesIn(BaseModel):
+    notes: str = ""
+
+
+class TotalDoneIn(BaseModel):
+    done: bool = True
+    whole_clip: bool | None = None
+
+
 class NamedCamerasIn(BaseModel):
     cameras: list[dict[str, Any]]
 
@@ -857,6 +878,37 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
     @app.post("/api/hand/done")
     def hand_done(d: DoneIn) -> dict[str, Any]:
         return hand_run(lambda: wiz().manual_done(d.done))
+
+    # ---- counting the total only ---------------------------------------------------------
+    # Its own routes, on purpose: a total is not a crossing, and nothing here reaches the
+    # crossings, the gold set or the scoring.
+
+    def total() -> dict[str, Any]:
+        return {**public(), "total": wiz().total_summary()}
+
+    def total_run(change: Callable[[], object]) -> dict[str, Any]:
+        run(change)
+        return total()
+
+    @app.get("/api/total")
+    def total_state() -> dict[str, Any]:
+        return total()
+
+    @app.post("/api/total/step")
+    def total_step(t: TotalStepIn) -> dict[str, Any]:
+        return total_run(lambda: wiz().total_step(t.camera, t.direction, t.step))
+
+    @app.post("/api/total/set")
+    def total_set(t: TotalSetIn) -> dict[str, Any]:
+        return total_run(lambda: wiz().total_set(t.camera, t.direction, t.value))
+
+    @app.post("/api/total/notes")
+    def total_notes(t: TotalNotesIn) -> dict[str, Any]:
+        return total_run(lambda: wiz().total_notes(t.notes))
+
+    @app.post("/api/total/done")
+    def total_done(t: TotalDoneIn) -> dict[str, Any]:
+        return total_run(lambda: wiz().total_done(t.done, t.whole_clip))
 
     @app.get("/api/network")
     def network_status() -> dict[str, Any]:

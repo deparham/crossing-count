@@ -188,6 +188,8 @@ def _review_check(run_dir: Path) -> Truth | None:
 def find_truth(run_dir: Path) -> Truth | None:
     """The best count by a person saved in this run folder: a hand count first."""
     st = _json(run_dir / "wizard" / "state.json")
+    if st and st.get("mode") == "total":
+        return None  # a total, with no moment for any of it: nothing to put beside a crossing
     if st and st.get("mode") == "manual" and st.get("manual", {}).get("done"):
         return _wizard_hand(st)
     hand = _json(run_dir / "manual" / "counts.json")

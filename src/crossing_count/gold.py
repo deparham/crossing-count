@@ -146,6 +146,10 @@ def split_of(code: str) -> str:
 
 def problems(state: dict[str, Any]) -> list[str]:
     """Why this count cannot be a gold clip (nothing when it can)."""
+    if state.get("mode") == "total":
+        return [("This count records the total only, not when each person crossed, so there is "
+                 "nothing for the tool's crossings to be matched against. A gold clip needs a "
+                 "count by hand that marks every crossing.")]
     if state.get("mode") != "manual":
         return [("Only a count by hand can be a gold clip: a check of the tool's crossings "
                  "looks only where the tool pointed.")]

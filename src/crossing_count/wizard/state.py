@@ -62,6 +62,7 @@ from .items import (
     RULE_CHOICES,
     SHORTFALL_S,
     SMALL_MODELS,
+    TOTAL_ACTIONS_KEPT,
     TWIN_WINDOW_S,
     _found,
     accuracy_range,
@@ -691,6 +692,14 @@ class Wizard:
             by_iv[key_of(float(r["t"]))][r["direction"]] += n
             if r["camera"] in by_cam:
                 by_cam[r["camera"]][r["direction"]] += n
+        if self.total_only():
+            # a total says how many crossed, never when, so it belongs to no one interval:
+            # the whole footage is the only period it can be set against
+            per = self.state["totals"]["by_camera"]
+            by_cam = {cam: {d: int(per.get(cam, {}).get(d) or 0) for d in dirs} for cam in by_cam}
+            ivs, by_iv = [], {}
+        whole = (self.total_by_direction() if self.total_only()
+                 else {d: sum(v[d] for v in by_iv.values()) for d in dirs})
 
         def against(sensor: dict[str, int] | None, verified: dict[str, int]
                     ) -> dict[str, Any] | None:
@@ -710,14 +719,19 @@ class Wizard:
             size, label, d, acc = max(diffs, key=lambda x: x[0])
             if size > 0:
                 largest = {"interval": label, "direction": d, **acc}
-        out = {"intervals": intervals, "cameras": cameras, "overlap": overlap, "largest": largest}
-        rows = self._rows(intervals)
+        out = {"intervals": intervals, "cameras": cameras, "overlap": overlap, "largest": largest,
+               "verified": whole, "total_only": self.total_only()}
+        rows = self._rows(intervals, whole)
         return {**out, "rows": rows, "metrics": validation.by_direction(rows) if rows else None}
 
-    def _rows(self, intervals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _rows(self, intervals: list[dict[str, Any]],
+              whole: dict[str, int]) -> list[dict[str, Any]]:
         """Verified against the system as the validation engine reads it: each whole 15-minute
         interval with the system's number (one only partly in the footage does not compare
-        like for like), or the whole footage when there is one number for it."""
+        like for like), or the whole footage when there is one number for it.
+
+        A total-only count is always the second of these, and it is one row however many
+        intervals the footage spans: one number counted, one number to set it against."""
         dirs, cams = self.dirs(), len(self.state["cameras"])
         if self.state["sensor_intervals"] and len(intervals) > 1:
             return [{"interval": i["label"], "start": i["start"], "covered_s": i["covered_s"],
@@ -728,8 +742,9 @@ class Wizard:
         sensor = self.state["sensor"]
         return [{"interval": "whole footage", "start": self.state["clock_start"],
                  "covered_s": float(self.state["duration_s"]), "cameras": cams, "direction": d,
-                 "truth": sum(int(i["verified"][d]) for i in intervals),
-                 "system": int(sensor[d])} for d in dirs if sensor.get(d) is not None]
+                 "truth": int(whole[d]), "system": int(sensor[d]),
+                 **({"reference": "total only"} if self.total_only() else {})}
+                for d in dirs if sensor.get(d) is not None]
 
     def result(self) -> dict[str, Any]:
         """This validation's outcome as data, saved with its report: what was compared with
@@ -742,9 +757,13 @@ class Wizard:
                 "app_version": app_version(), "status": c["status"],
                 "incomplete": c["incomplete"], "checks": c["checks"],
                 "mode": st.get("mode") or "auto", "marked": self.footage_marked(),
+                "total_only": self.total_only(),
                 "footage": self.footage(), "lines": self.correspondence(),
-                "rules": st.get("rules"), "specification": st["manual"].get("specification")
-                if self.manual() else GROUND_TRUTH_SPEC,
+                "rules": st.get("rules"),
+                # a total-only count marks no crossings, so no version of what a crossing is
+                # was applied to it
+                "specification": None if self.total_only() else (
+                    st["manual"].get("specification") if self.manual() else GROUND_TRUTH_SPEC),
                 "system": src.get("system") or "RetailNext",
                 "source": src.get("source") or "typed in", "subscription": src.get("subscription"),
                 "store": {k: st["store"].get(k) for k in ("code", "name", "location")},
@@ -848,10 +867,19 @@ class Wizard:
     def manual(self) -> bool:
         return self.state.get("mode") == "manual"
 
+    def total_only(self) -> bool:
+        """A count of the total only: how many crossed, without saying when each one did.
+
+        It is a count, not a count of crossings. Nothing about it can be matched against the
+        tool's crossings, so it can never be a gold clip nor give a recall or a precision;
+        it compares with the system's number as one total against another.
+        """
+        return self.state.get("mode") == "total"
+
     @_open_only
     def set_mode(self, mode: str) -> None:
-        if mode not in ("auto", "manual"):
-            raise WizardError("Choose automatic or manual counting.")
+        if mode not in ("auto", "manual", "total"):
+            raise WizardError("Choose automatic counting, counting by hand, or the total only.")
         with self._lock:
             if self.state.get("mode") != mode:
                 self._decide("mode", before=self.state.get("mode"), after=mode)
@@ -1022,6 +1050,104 @@ class Wizard:
                          after={"counts": len(self.state["manual"]["counts"])})
             self._save()
 
+    # ---- counting the total only -------------------------------------------------------
+
+    def _total_camera(self, sensor: str, direction: str) -> dict[str, int]:
+        self._camera(sensor)
+        if direction not in self.dirs():
+            raise WizardError(f"This count is for {' and '.join(LABELS[d] for d in self.dirs())}.")
+        per: dict[str, int] = self.state["totals"]["by_camera"].setdefault(sensor, {})
+        return per
+
+    @_open_only
+    def total_step(self, sensor: str, direction: str, step: int = 1) -> int:
+        """One press of + or -. Never below zero, and what was pressed is kept, so a count
+        that looks wrong afterwards can be read back. The moment of the press is not kept:
+        a total is not a list of crossings, and a time per press would look like one."""
+        if step not in (1, -1):
+            raise WizardError("A press counts one person up or down.")
+        with self._lock:
+            per = self._total_camera(sensor, direction)
+            was = int(per.get(direction, 0))
+            per[direction] = max(0, was + step)
+            t = self.state["totals"]
+            if per[direction] != was:
+                t["actions"].append({"camera": sensor, "direction": direction, "step": step,
+                                     "at": _now()})
+                del t["actions"][:-TOTAL_ACTIONS_KEPT]
+            t["done"] = False
+            self._save()
+            return int(per[direction])
+
+    @_open_only
+    def total_set(self, sensor: str, direction: str, value: int | None) -> None:
+        """A number typed in rather than pressed up, or taken back out."""
+        if value is not None and value < 0:
+            raise WizardError("A count cannot be negative.")
+        with self._lock:
+            per = self._total_camera(sensor, direction)
+            if value is None:
+                per.pop(direction, None)
+            else:
+                per[direction] = int(value)
+            t = self.state["totals"]
+            t["actions"].append({"camera": sensor, "direction": direction, "typed": value,
+                                 "at": _now()})
+            del t["actions"][:-TOTAL_ACTIONS_KEPT]
+            t["done"] = False
+            self._decide("total_typed", camera=sensor, direction=direction, after=value)
+            self._save()
+
+    @_open_only
+    def total_notes(self, notes: str) -> None:
+        with self._lock:
+            self.state["totals"]["notes"] = str(notes).strip()[:2000]
+            self._save()
+
+    @_open_only
+    def total_done(self, done: bool = True, whole_clip: bool | None = None) -> None:
+        """Finished. A total can only be set against the system's number when it covers the
+        same footage the system's number describes, so that has to be said, not assumed."""
+        with self._lock:
+            t = self.state["totals"]
+            if whole_clip is not None:
+                t["whole_clip"] = bool(whole_clip)
+            if done:
+                if missing := self.total_missing():
+                    raise WizardError(missing[0])
+                if not t["whole_clip"]:
+                    raise WizardError("Say whether this total is for the whole clip: a total "
+                                      "of part of it cannot be set against the system's "
+                                      "number for the whole period.")
+            t["done"] = bool(done)
+            self._decide("total_finished" if done else "total_reopened",
+                         after=self.total_by_direction())
+            self._save()
+
+    def total_missing(self) -> list[str]:
+        """What is still needed before a total-only count is finished."""
+        per = self.state["totals"]["by_camera"]
+        return [f"Enter {LABELS[d]} for {cam['sensor']}."
+                for cam in self.state["cameras"] for d in self.dirs()
+                if per.get(cam["sensor"], {}).get(d) is None]
+
+    def total_by_direction(self) -> dict[str, int]:
+        """The whole footage's total per direction: every camera's number added up."""
+        per = self.state["totals"]["by_camera"]
+        return {d: sum(int(per.get(cam["sensor"], {}).get(d) or 0)
+                       for cam in self.state["cameras"]) for d in self.dirs()}
+
+    def total_summary(self) -> dict[str, Any]:
+        """The total-only count as the page and the report read it."""
+        t = self.state["totals"]
+        per = t["by_camera"]
+        return {"cameras": [{"sensor": cam["sensor"],
+                             "counts": {d: per.get(cam["sensor"], {}).get(d) for d in self.dirs()}}
+                            for cam in self.state["cameras"]],
+                "by_direction": self.total_by_direction(), "notes": t["notes"],
+                "done": bool(t["done"]), "whole_clip": bool(t["whole_clip"]),
+                "missing": self.total_missing(), "presses": len(t["actions"])}
+
     @_open_only
     def recount(self) -> None:
         """Start a second, independent count by hand of the same footage, by someone else:
@@ -1154,6 +1280,10 @@ class Wizard:
         """Run the automatic count. Running a checked count again needs confirm: the check
         starts afresh, and the old one is kept in the history folder first."""
         with self._lock:
+            if self.total_only():
+                raise WizardError("This count records the total only: there is nothing to run. "
+                                  "To have the tool count this footage, choose automatic "
+                                  "counting instead.")
             if self.manual() and self.count_video() == self.video:
                 raise WizardError("This is a manual count: there is nothing to run. Download the "
                                   "same window clean as well, and the tool counts that while you "
@@ -1495,6 +1625,20 @@ class Wizard:
         """
         dirs = self.dirs()
         c: dict[str, Any]
+        if self.total_only():
+            t = self.state["totals"]
+            verified = self.total_by_direction()
+            c = {"total_only": True, "manual": False, "detected": dict.fromkeys(dirs, 0),
+                 "verified": verified, "unsure": dict.fromkeys(dirs, 0), "confirmed": 0,
+                 "rejected": 0, "found": 0, "not_found": 0, "added": 0, "unanswered": 0,
+                 "items": 0, "watch_ranges": 0, "watch_s": 0.0, "watch_done": 0, "groups": 0,
+                 "group_people": 0, "watched_pct": {}, "unwatched_s": 0.0,
+                 "checked": bool(t["done"])}
+            problems = [] if t["done"] else ["Counting is not finished."]
+            problems += self.total_missing()
+            if t["done"] and not t["whole_clip"]:
+                problems.append("This total is not for the whole clip.")
+            return self._completeness(c, problems)
         if self.manual():
             m = self.state["manual"]
             cams = self.manual_summary()["cameras"]
@@ -1585,7 +1729,12 @@ class Wizard:
         applying (None). All the tool's proposals being checked is not the same as every
         crossing being looked for: only watching the footage covers the rest."""
         rows: list[tuple[str, bool | None, str]]
-        if self.manual():
+        if self.total_only():
+            t = self.state["totals"]
+            rows = [("Counting finished", bool(t["done"]), ""),
+                    ("A number for every camera and direction", not self.total_missing(), ""),
+                    ("The total covers the whole clip", bool(t["whole_clip"]), "")]
+        elif self.manual():
             rows = [("Counting finished", bool(self.state["manual"]["done"]), "")]
             rows += [(f"Footage of {cam} watched", pct >= MIN_WATCHED_PCT, f"{pct:.0f}%")
                      for cam, pct in c["watched_pct"].items()]
@@ -1625,6 +1774,10 @@ class Wizard:
                 for it in self.check_items() if answers.get(it["id"]) == "unsure"]
 
     def verified_rows(self) -> list[dict[str, Any]]:
+        """Every verified crossing, with its moment. A total-only count has none: it says how
+        many crossed, never when, so there is nothing here to match anything against."""
+        if self.total_only():
+            return []
         if self.manual():
             rows = [{"t": c["t"], "camera": c["camera"],
                      "picture": self._camera(c["camera"])["picture"], "direction": c["direction"],
