@@ -118,7 +118,9 @@ def test_hand_count_and_report(manual: Wizard, tmp_path: Path) -> None:
     assert "MANUAL COUNT" in pages[0] and "Validation ID: draft" in pages[0]
     assert "RetailNext counted the same number of people coming in as were verified (2)" in pages[0]
     assert "BUSIEST MOMENT" in pages[-2]  # page 1 is full: the picture has a page of its own
-    assert "Counted by hand" in "\n".join(pages)
+    assert "Counted by hand" not in "\n".join(pages)  # the method is for the record
+    kept = json.loads(Path(manual.state["report"]["data"]).read_text())["data"]
+    assert any("Counted by hand" in line for line in kept["method"])
 
     examples = tmp_path / "shared"
     manual.save_examples(examples, wait=True)

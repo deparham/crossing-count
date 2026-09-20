@@ -3,7 +3,11 @@
 The wizard gathers what a report says once (Wizard.report_data); report_pptx.py and this
 module only lay it out. Page 1 is written for someone who will not read the method: what
 the system did, in people, where and how sure, with what could not be determined. The
-method, the crossings and the snapshots follow, as in the PowerPoint.
+crossings and the snapshots follow, as in the PowerPoint.
+
+How the count was made is not printed. It is the evidence for an argument with a vendor,
+not something a customer needs in order to judge the number, and it is kept in full with
+the validation's record (Wizard.result, the manifest and the saved report data).
 """
 
 from __future__ import annotations
@@ -191,9 +195,7 @@ def _breakdown(data: dict[str, Any]) -> list[Any]:
 
 
 def _details(data: dict[str, Any]) -> list[Any]:
-    out: list[Any] = [PageBreak(), _p("How this was counted", _H2)]
-    out += [_p(line) for line in data.get("method") or []]
-    out += [Spacer(1, 10), _p("Crossing details", _H2)]
+    out: list[Any] = [PageBreak(), _p("Crossing details", _H2)]
     rows = data.get("crossings") or []
     if not rows:
         return [*out, _p(data.get("crossings_note")

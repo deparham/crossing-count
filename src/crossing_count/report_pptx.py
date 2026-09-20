@@ -6,8 +6,9 @@ system count, accuracy) and a detection-overlay frame. Before the cards it says
 the result in words (which way, by how many people); after them what the sample
 describes, what could not be known, and the record (validation ID, sampling,
 specification, gold set, footage). The frame moves to a page of its own when page
-1 has no room for it. The pages after it hold the details: how the count was made,
-every verified crossing with its time, and a close-up of each one. A4 portrait,
+1 has no room for it. The pages after it hold the details: every verified crossing
+with its time, and a close-up of each one. How the count was made is not printed:
+it is kept with the validation's record instead. A4 portrait,
 like the PDF (report_pdf.py), which lays out the same data.
 """
 
@@ -322,23 +323,8 @@ def _details(new_page: Any, data: dict[str, Any]) -> None:
     _write(_box(slide, 0.62, 1.85, 7.1, 0.3),
            f"{data['store_name']} {data['store_code']}  ·  Captured {data['captured_date']} "
            f"{data['time_range']}", 12, color=GREY)
-    method = data["method"]
-    height = 0.3 + 0.42 * len(method)
-    panel = _panel(slide, 0.53, 2.3, 7.2, height, CARD_BG)
-    tf = panel.text_frame
-    tf.word_wrap = True
-    tf.vertical_anchor = MSO_ANCHOR.TOP
-    for k, line in enumerate(method):
-        p = tf.paragraphs[0] if k == 0 else tf.add_paragraph()
-        p.alignment = PP_ALIGN.LEFT  # shapes centre text by default
-        p.space_after = Pt(4)
-        run = p.add_run()
-        run.text = line
-        run.font.size = Pt(10)
-        run.font.name = SANS
-        run.font.color.rgb = NAVY
     rows = data["crossings"]
-    top = 2.3 + height + 0.3
+    top = 2.3
     if not rows:
         _write(_box(slide, 0.62, top, 7.0, 0.9),
                data.get("crossings_note") or "No crossings were verified for this period.",

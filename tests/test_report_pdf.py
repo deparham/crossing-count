@@ -114,7 +114,7 @@ def test_the_pdf_says_the_same(tmp_path: Path) -> None:
     pages = len(re.findall(rb"/Type /Page\b(?!s)", raw))
     assert pages >= 4  # the result, the method and crossings, the snapshots
     for words in (b"RetailNext counted 7 fewer", b"Validation ID", b"Ground Truth Specification",
-                  b"Lismore's total", b"How this was counted", b"Crossing snapshots",
+                  b"Lismore's total", b"Crossing snapshots",
                   b"Page 1 of %d" % pages):
         assert words in raw.replace(b"\\'", b"'"), words
     data.update(complete=False, incomplete=["2 of 5 stretches were not watched."], headline=[])

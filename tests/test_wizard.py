@@ -136,7 +136,10 @@ def test_count_check_and_report(two_tile_video: dict[str, Any], review_run_dir: 
     assert "Detected, confirmed" in pages[1]
     stats = w.state["job"]["stats"]
     assert stats["app_version"] and stats["video_s"] == pytest.approx(60.0, abs=1)
-    assert "Crossings proposed by the" in pages[1] and "Report made with CrossingCount" in pages[1]
+    # how the count was made is not printed for the customer; it is kept with the report
+    assert "Crossings proposed by the" not in "\n".join(pages)
+    kept = " ".join(json.loads(Path(w.state["report"]["data"]).read_text())["data"]["method"])
+    assert "Crossings proposed by the" in kept and "Report made with CrossingCount" in kept
     again = Wizard(two_tile_video["video"], two_tile_video["dir"], tmp_path)  # resumes
     assert again.counts()["verified"]["in"] == 1 and again.state["report"]
 
@@ -172,7 +175,9 @@ def test_unwatched_movement_and_unsure_answers(two_tile_video: dict[str, Any],
     pages = texts(w.make_report())
     assert "INCOMPLETE" in pages[0] and "Validation incomplete: 1 of 1" in pages[0]
     assert "0–1" in pages[0]  # the verified count, both ways the unsure crossing could go
-    assert "VALIDATION INCOMPLETE" in pages[1] and "Unclear to the checker" in pages[1]
+    assert "Unclear to the checker" in pages[1]  # listed with the crossings, not counted
+    kept = " ".join(json.loads(Path(w.state["report"]["data"]).read_text())["data"]["method"])
+    assert "VALIDATION INCOMPLETE" in kept  # page 1 says so too, in the reader's own words
     w.mark_watched("u9")
     assert w.counts()["status"] == "complete" and w.counts()["incomplete"] == []
 
@@ -205,7 +210,8 @@ def test_a_group_is_counted_as_its_people(two_tile_video: dict[str, Any], review
     w.set_store(name="Lismore", code="SYN-1")
     pages = texts(w.make_report())
     assert "1–3" in pages[1] and "group of 3" in pages[1]
-    assert "groups crossing together: 3 people" in pages[1]
+    kept = " ".join(json.loads(Path(w.state["report"]["data"]).read_text())["data"]["method"])
+    assert "groups crossing together: 3 people" in kept  # with the record, not on the page
 
 
 def test_a_check_is_logged_and_kept_when_the_count_runs_again(
@@ -234,7 +240,9 @@ def test_a_check_is_logged_and_kept_when_the_count_runs_again(
     assert log[-6]["people"] == 2 and log[-6]["item"]["t"] == first["t"]
     assert all(d["by"] == "Pat" and d["at"] for d in log)
     report = w.make_report()
-    assert "Pat checked every crossing" in texts(report)[1]
+    assert "Pat checked every crossing" not in "\n".join(texts(report))
+    kept = " ".join(json.loads(Path(w.state["report"]["data"]).read_text())["data"]["method"])
+    assert "Pat checked every crossing" in kept  # who checked it is in the record
 
     with pytest.raises(WizardError, match="Running it again starts a new check"):
         w.start()
@@ -356,10 +364,11 @@ def test_report_layout(tmp_path: Path) -> None:
     prs = Presentation(str(out))
     assert (prs.slide_width, prs.slide_height) == (A4_W, A4_H)  # A4 portrait
     pages = texts(out)
-    assert len(pages) == 6  # cover, 3 of details (59 rows), 2 of snapshots (13)
+    assert len(pages) == 5  # cover, 2 of details (59 rows), 2 of snapshots (13)
     assert "ACCURACY IN" in pages[0] and "90.9%" in pages[0] and "100%" in pages[0]
-    assert "Crossing details (continued)" in pages[2] and "Crossing snapshots" in pages[4]
-    assert "Page 6 of 6" in pages[5]
+    assert "Crossing details (continued)" in pages[2] and "Crossing snapshots" in pages[3]
+    assert "Page 5 of 5" in pages[4]
+    assert "How this was counted" not in "\n".join(pages)  # that is for the record, not here
 
     data["directions"][0].update(unsure=2, accuracy_range=[81.8, 90.9])
     data.update(complete=False, incomplete=["2 of 5 stretches were not watched (1 min 0 s)."])
@@ -381,7 +390,7 @@ def test_report_layout(tmp_path: Path) -> None:
     out = build_report(data, tmp_path / "r4.pptx", None)
     page = texts(out)[1]
     assert "Traffic by 15 minutes" in page and "+1 (+25%)" in page and "(part)" in page
-    assert "PB1" in page and "Largest difference" in page and len(texts(out)) == 7
+    assert "PB1" in page and "Largest difference" in page and len(texts(out)) == 6
     assert any(sh.has_chart for sh in Presentation(str(out)).slides[1].shapes)
 
 

@@ -8,6 +8,7 @@ can be scored against.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -253,9 +254,12 @@ def test_video_to_total_to_saved_count_to_report(totals: Wizard) -> None:
     # the page that lists the crossings says why there are none, rather than "none verified"
     assert "Counted as a total only: 147 people coming in" in pages
     assert "No crossings were verified for this period" not in pages
-    assert "keeping the number only" in pages
-    assert "no recall, precision or missed-crossing rate can be worked out" in pages
-    assert "147" in pages and "139" in pages
+    # how it was counted is kept with the report, not printed for the customer
+    kept = json.loads(Path(totals.state["report"]["data"]).read_text())["data"]
+    method = " ".join(kept["method"])
+    assert "keeping the number only" in method and "keeping the number only" not in pages
+    assert "no recall, precision or missed-crossing rate can be worked out" in method
+    assert "147" in pages and "139" in pages  # the numbers themselves are still the report
 
 
 def test_nothing_of_the_tools_is_claimed_on_a_total(totals: Wizard) -> None:
