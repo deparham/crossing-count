@@ -26,6 +26,7 @@ from numpy.typing import NDArray
 
 from .. import (
     __copyright__,
+    __version__,
     auditlog,
     evaluate,
     independence,
@@ -89,6 +90,14 @@ def _now() -> str:
 
 def _pts(a: Any) -> list[list[float]]:
     return [[round(float(x), 1), round(float(y), 1)] for x, y in a]
+
+
+def _on_date(iso: str) -> str:
+    """" on 21/09/2026" from an ISO timestamp, or nothing when there is none to read."""
+    try:
+        return f" on {datetime.fromisoformat(iso).strftime('%d/%m/%Y')}"
+    except ValueError:
+        return ""
 
 
 def _dur(seconds: float) -> str:
@@ -619,20 +628,20 @@ class Wizard:
         return self._period()
 
     def _system_line(self) -> str:
+        """Where the system's number came from. The subscription it was fetched under, the file
+        it came out of and any warning about it are in the record and on the first page already:
+        repeating them here only makes the method longer than it needs to be."""
         src = self.state.get("sensor_source")
         system = (src or {}).get("system") or "RetailNext"
-        sub = f", subscription {src['subscription']}" if src and src.get("subscription") else ""
+        when = _on_date(str((src or {}).get("fetched_at") or ""))
         if src and src.get("source") == "RetailNext API":
-            how = (f"fetched from RetailNext's API ({src['store']}{sub}: "
-                   f"{' + '.join(src['cameras'])}) on {str(src['fetched_at'])[:10]}")
+            how = f"fetched from {system}'s API{when}"
         elif src:
-            how = (f"imported from {src.get('file') or 'a file'} ({' + '.join(src['cameras'])}) "
-                   f"on {str(src['fetched_at'])[:10]}")
+            how = f"imported from a file{when}"
         else:
             how = f"typed in from {system}"
-        text = (f"System count: {system}, same cameras and period, {how}. Sensor accuracy = "
+        return (f"System count: {system}, same cameras and period, {how}. Sensor accuracy = "
                 f"100% minus the system's error as a share of the verified count.")
-        return text + "".join(f" {w}" for w in (src or {}).get("warnings", []))
 
     def intervals(self) -> list[dict[str, Any]]:
         """RetailNext's 15-minute intervals this footage overlaps, and how much of each."""
@@ -1987,7 +1996,7 @@ class Wizard:
         else:
             watched = "There was no movement near the line that the tool left unexplained."
         method = [
-            f"Footage: {st['filename']} ({_dur(float(st['duration_s']))}), cameras {cams}.",
+            f"Footage: {_dur(float(st['duration_s']))}, cameras {cams}.",
             ("People were detected and tracked automatically, and crossings of each camera's "
              "counting line found with the camera's rule (line and mask zone)."),
             (f"{store['operator'] or 'A person'} checked every crossing the tool found: "
@@ -2000,12 +2009,14 @@ class Wizard:
         method.insert(2, self._made_with())
         if self.manual():
             summary = self.manual_summary()["cameras"]
-            shares = ", ".join(f"{c['sensor']} {c['watched_pct']:.0f}%" for c in summary)
+            part = [c for c in summary if c["watched_pct"] < MIN_WATCHED_PCT]
+            shares = ("every moment of the footage" if not part else
+                      "part of the footage only ("
+                      + ", ".join(f"{c['sensor']} {c['watched_pct']:.0f}%" for c in part) + ")")
             method = [
                 method[0],
-                ("Counted by hand: a person watched each camera and pressed a key at every "
-                 "crossing of the counting line. No automatic detection was used."),
-                f"Share of the footage watched: {shares}.",
+                (f"Counted by hand: a person watched {shares} and pressed a key at every "
+                 f"crossing of the counting line. No automatic detection was used."),
                 method[-1],
             ]
         elif self.total_only():
@@ -2046,22 +2057,17 @@ class Wizard:
                 f"{q['words']}. {q['reason']}.")
         rules, said = self.state["rules"], {"count": "counted", "exclude": "not counted"}
         spec = self.state["manual"].get("specification") or GROUND_TRUTH_SPEC
-        method.insert(len(method) - 1,
-                      (f"Who was counted: children {said[rules['children']]}, staff "
-                       f"{said[rules['staff']]}." if self.total_only() else
-                       f"Crossings as defined by CrossingCount's Ground Truth Specification "
-                       f"v{spec}: children {said[rules['children']]}, staff "
-                       f"{said[rules['staff']]}."))
+        method.insert(len(method) - 1, f"Who was counted, to match how the sensor is set up: "
+                      f"children {said[rules['children']]}, staff {said[rules['staff']]}.")
         foot = self.footage()
         if not foot["clean"]:
             method.insert(len(method) - 1,
                           f"{'Counted' if self.manual() or self.total_only() else 'Checked'} "
-                          f"on footage showing "
-                          f"RetailNext's own tracks and counts ({'; '.join(foot['why_marked'])}), "
-                          f"which can sway a count towards the sensor's: this count is not "
-                          f"independent of the sensor.")
+                          f"on footage showing {system}'s own tracks and counts, which can sway "
+                          f"a count towards the sensor's: this count is not independent of the "
+                          f"sensor.")
         if lines := self.correspondence():
-            how_lines = "; ".join(f"{cam} {x['words']}" for cam, x in lines.items())
+            how_lines = "; ".join(f"{cam}: {x['words']}" for cam, x in lines.items())
             weakest = min(x["strength"] for x in lines.values())
             method.insert(len(method) - 1, f"Counting lines: {how_lines}." + (
                 " A line drawn by eye is the weakest evidence that it is where the sensor counts: "
@@ -2078,18 +2084,18 @@ class Wizard:
         if c["incomplete"]:
             method.insert(0, "VALIDATION INCOMPLETE. " + " ".join(c["incomplete"]) + " No accuracy "
                           "is given: people in footage nobody watched may be missing from the count.")
-        word = {True: "pass", False: "NOT MET", None: "does not apply"}
-        method.append("Validation checks: " + "; ".join(
-            k["name"] + (f" ({k['detail']})" if k["detail"] else "") + f": {word[k['ok']]}"
-            for k in c["checks"]) + ".")
-        method.append("Sensor accuracy compares RetailNext's count with the count verified here: "
-                      "it shows how close the sensor came, not how well the automatic counter "
-                      "did.")
+        if failed := [k for k in c["checks"] if k["ok"] is False]:
+            method.append("Not met: " + "; ".join(
+                k["name"] + (f" ({k['detail']})" if k["detail"] else "") for k in failed) + ".")
+        if not self.manual() and not self.total_only():
+            method.append(f"Sensor accuracy compares {system}'s count with the count verified "
+                          f"here: it shows how close the sensor came, not how well the automatic "
+                          f"counter did.")
         if self.total_only():
             method.append("This is a comparison of totals. It is not a crossing-by-crossing "
                           "result: no recall, precision or missed-crossing rate can be worked "
                           "out from it, and none is given.")
-        method.append(f"Report made with CrossingCount {app_version()}, {__copyright__}.")
+        method.append(f"Report made with CrossingCount {__version__}, {__copyright__}.")
         # page 1, for someone who reads nothing else: the result in people and which way,
         # what it rests on, and what could not be known. The method above stays as it is.
         opening = sampling.when(st.get("sampling"), f"{start:%H:%M} to {end:%H:%M} on "
@@ -2103,7 +2109,7 @@ class Wizard:
             caveats.append(short)
         if not foot["clean"]:
             caveats.append(f"Not independent of {system}: the footage shows its own tracks and "
-                           f"counts ({'; '.join(foot['why_marked'])}).")
+                           f"counts, which can sway a count towards the sensor's.")
         if lines and min(x["strength"] for x in lines.values()) < 2:
             caveats.append(f"A counting line was drawn by eye: part of any difference from "
                            f"{system} may be where the line is, not the sensor.")
@@ -2114,9 +2120,8 @@ class Wizard:
                               if self.total_only() else f"Ground Truth Specification v{spec}"),
             "gold_set": self._gold_version(),
             "footage": ("clean: no RetailNext marks" + (", checked in the picture"
-                                                       if foot["checked_in_picture"] else "")
-                        + f"; {foot['obtained_words']}") if foot["clean"]
-            else f"marked: {'; '.join(foot['why_marked'])}",
+                                                       if foot["checked_in_picture"] else ""))
+            if foot["clean"] else "marked: shows RetailNext's own tracks and counts",
         }
         return {
             "headline": headline, "identity": identity, "caveats": caveats,

@@ -231,7 +231,8 @@ def test_the_report_says_what_a_total_can_and_cannot_show(totals: Wizard) -> Non
     assert "no recall, precision or missed-crossing rate can be worked out" in method
     # no version of what a crossing is, because no crossing was marked
     assert "Ground Truth Specification" not in method
-    assert "Who was counted: children counted, staff counted." in method
+    assert "Who was counted, to match how the sensor is set up: children counted, staff counted." \
+        in method
     assert "100 traffic in" in method and "47 traffic in" in method
 
 

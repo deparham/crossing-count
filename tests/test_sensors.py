@@ -87,8 +87,12 @@ def test_another_counters_csv_fills_in_the_numbers(named: Wizard) -> None:
     assert named.use_sensor(data) == []
     assert named.state["sensor_intervals"] == {k: {"in": 4, "out": 2} for k in keys}
     assert named.state["sensor_cameras"]["CN-9-R2"] == {"in": 4, "out": 2}
-    assert named.state["sensor_source"]["system"] == "xovis"
-    assert "imported from xovis.csv" in named._system_line()
+    src = named.state["sensor_source"]
+    assert src["system"] == "xovis" and src["file"] == "xovis.csv"
+    assert src["cameras"] == ["CN-9-PB1", "CN-9-R2"]  # which file and which cameras: kept
+    # the report says where the numbers came from, not which file on whose computer
+    line = named._system_line()
+    assert "imported from a file" in line and "xovis.csv" not in line
     finer = sensors.read_csv(_csv(named, ["CN-9-PB1", "CN-9-R2"], halves=True), "fine.csv")
     named.use_sensor(finer)  # 7- and 8-minute rows add up to each interval
     assert named.state["sensor_intervals"] == {k: {"in": 4, "out": 4} for k in keys}
@@ -155,3 +159,15 @@ def test_the_report_says_the_periods_do_not_match(named: Wizard) -> None:
     named.set_store(name="Lismore", code="CN-9", operator="Alex")
     data = named.report_data(named.counts(), named.verified_rows(), Path("frame.jpg"), "", [])
     assert any("the footage 13.5 of them (90.0%)" in x for x in data["caveats"])  # on page 1
+
+
+def test_a_warning_about_the_system_numbers_reaches_the_first_page(named: Wizard) -> None:
+    """Whatever is wrong with the system's numbers is said once, where it will be read."""
+    named.use_sensor(sensors.read_csv(_csv(named, ["CN-9-PB1", "CN-9-R2"]), "x.csv"))
+    named.state["sensor_source"]["warnings"] = ["its entrances are not named like the cameras"]
+    named.set_store(name="Lismore", code="CN-9", operator="Alex")
+    data = named.report_data(named.counts(), named.verified_rows(), Path("frame.jpg"), "", [])
+    assert "its entrances are not named like the cameras" in data["caveats"]
+    method = " ".join(data["method"])
+    assert "its entrances are not named like the cameras" not in method  # said once, not twice
+    assert "x.csv" not in method  # which file it came out of is in the record, not the report

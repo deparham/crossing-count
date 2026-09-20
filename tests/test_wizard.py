@@ -306,7 +306,13 @@ def test_retailnexts_numbers_from_its_api(two_tile_video: dict[str, Any], review
                                            "12:00": {"in": 33, "out": 44}}
     assert w.state["sensor"] == {"in": 44, "out": 66}
     assert w.state["sensor_cameras"]["CAM-B"] == {"in": 40, "out": 60}
-    assert "fetched from RetailNext's API (Test store: CAM-A + CAM-B)" in w._system_line()
+    src = w.state["sensor_source"]
+    assert src["store"] == "Test store" and src["cameras"] == ["CAM-A", "CAM-B"]
+    # the store and the subscription the numbers were fetched under stay in the record; the
+    # report says only that they came from the API, and when
+    line = w._system_line()
+    assert "fetched from RetailNext's API on" in line
+    assert "Test store" not in line and "CAM-A" not in line
     w.set_sensor(intervals={"11:45": {"in": 11, "out": 22}, "12:00": {"in": 33, "out": 44}},
                  cameras=w.state["sensor_cameras"])
     assert w.state["sensor_source"] is not None  # the same numbers sent back: still RetailNext's
@@ -316,7 +322,12 @@ def test_retailnexts_numbers_from_its_api(two_tile_video: dict[str, Any], review
     warnings = w.use_retailnext({"store": "Armadale", "cameras": {}, "note": "the store's total",
                                  "total": rows(2, 3, 4, 5)})
     assert w.state["sensor"] == {"in": 6, "out": 8} and w.state["sensor_cameras"] == {}
-    assert warnings == ["the store's total"] and "Armadale: the store's total" in w._system_line()
+    assert warnings == ["the store's total"]
+    # the warning is the customer's to read, so it belongs on the first page, not buried in
+    # the method's sentence about where the numbers came from
+    src = w.state["sensor_source"]
+    assert src is not None and src["warnings"] == ["the store's total"]
+    assert "the store's total" not in w._system_line()
 
 
 def test_report_layout(tmp_path: Path) -> None:
