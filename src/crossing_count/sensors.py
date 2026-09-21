@@ -47,6 +47,9 @@ class SensorData:
     counts: list[IntervalCount]
     detail: dict[str, Any] = field(default_factory=dict)  # store, subscription, file, cameras
     notes: list[str] = field(default_factory=list)
+    # one number for the footage's whole period, rather than one per 15-minute interval:
+    # what the counts cover is the period, and they are read as its total
+    whole_period: bool = False
 
 
 class SensorAdapter(Protocol):
@@ -82,7 +85,8 @@ def from_retailnext(got: dict[str, Any], day: date | None = None) -> SensorData:
     return SensorData("RetailNext", "RetailNext API", counts,
                       {"subscription": got.get("subscription"), "store": got.get("store"),
                        "cameras": list(got.get("cameras") or {}) or ["the store's total"]},
-                      [str(got["note"])] if got.get("note") else [])
+                      [str(got["note"])] if got.get("note") else [],
+                      whole_period=bool(got.get("whole_period")))
 
 
 class RetailNextAdapter:

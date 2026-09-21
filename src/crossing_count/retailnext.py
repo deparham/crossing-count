@@ -651,9 +651,14 @@ def entrances(nodes: list[dict[str, Any]], store_uuid: str) -> dict[str, dict[st
 
 
 def camera_counts(conn: Connection, nodes: list[dict[str, Any]], code: str, cameras: list[str],
-                  start: datetime, end: datetime, minutes: int = 15) -> dict[str, Any]:
+                  start: datetime, end: datetime, minutes: int | None = None) -> dict[str, Any]:
     """RetailNext's own rows (retailnext.traffic_table) for each camera over the footage's
     period, from the store's entrance of the same name, in the store's time zone.
+
+    `minutes` is what the numbers are grouped by. None, the default, asks for the footage's
+    whole period as one number: an hour of footage is one hour's count to compare with, not
+    four quarter-hours. The window asked for is always aligned to whole quarter-hours, which
+    is what RetailNext counts in, whatever the grouping.
 
     Some stores' entrances are not named like their cameras (Armadale: entrance "Entrance",
     camera "Armadale_Entrance"). When the cameras counted are all the store's cameras, the
@@ -662,26 +667,36 @@ def camera_counts(conn: Connection, nodes: list[dict[str, Any]], code: str, came
     store = find_store(nodes, code)
     ents = entrances(nodes, str(store["uuid"]))
     lower = {name.lower(): node for name, node in ents.items()}
-    day, frm, until = period_of(start, end, minutes)
+    day, frm, until = period_of(start, end)
+    whole = minutes is None
+    group = span_of(day, frm, until) if minutes is None else minutes
     tz = store.get("time_zone")
     out: dict[str, Any] = {"store": store.get("name"), "store_uuid": store["uuid"],
                            "time_zone": tz, "day": day.isoformat(), "from": frm,
-                           "until": until, "cameras": {}}
+                           "until": until, "whole_period": whole, "cameras": {}}
     missing = [c for c in cameras if c.lower() not in lower]
     if not missing:
         out["cameras"] = {c: traffic_table(traffic(conn, [str(lower[c.lower()]["uuid"])], day,
-                                                   frm, until, minutes, tz)) for c in cameras}
+                                                   frm, until, group, tz)) for c in cameras}
         return out
     channels = {n.lower() for n in video_channels(nodes, str(store["uuid"]))}
     if channels and {c.lower() for c in cameras} == channels:
         out["total"] = traffic_table(traffic(conn, [str(store["uuid"])], day, frm, until,
-                                             minutes, tz))
+                                             group, tz))
         out["note"] = (f"RetailNext's numbers are {store.get('name')}'s total: its entrances "
                        f"are not named like the cameras, and these are all its cameras.")
         return out
     raise RetailNextError(f"RetailNext's {store.get('name')} has no entrance called "
                           f"{', '.join(missing)} (it has {', '.join(sorted(ents)) or 'none'}): "
                           f"name the cameras as RetailNext does.")
+
+
+def span_of(day: date, frm: str, until: str) -> int:
+    """Minutes between two "HH:MM" on a day ("24:00" is the next midnight)."""
+    def at(hhmm: str) -> datetime:
+        h, m = (int(x) for x in hhmm.split(":"))
+        return datetime.combine(day, datetime.min.time()) + timedelta(hours=h, minutes=m)
+    return int((at(until) - at(frm)).total_seconds() // 60)
 
 
 def period_of(start: datetime, end: datetime, minutes: int = 15) -> tuple[date, str, str]:

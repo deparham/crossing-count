@@ -428,3 +428,29 @@ def test_the_key_lives_in_the_credential_store(monkeypatch: pytest.MonkeyPatch,
     assert "acme" in settings and "SK" not in settings and "AK" not in settings
     rn.forget_connection()
     assert rn.load_connection() is None and not store
+
+
+def test_an_hour_of_footage_asks_for_an_hour_not_four_quarters(server: list[Any]) -> None:
+    """One number to compare with, over the period the footage covers, whatever its length."""
+    at = datetime.fromisoformat
+    assert rn.span_of(date(2026, 9, 12), "11:00", "12:00") == 60
+    assert rn.span_of(date(2026, 9, 12), "23:45", "24:00") == 15
+
+    seen = server.pop(0)
+    group = {"type": "time", "start": "11:00", "finish": "12:00"}
+    server.append({"ok": True, "metrics": [
+        {"name": "traffic_in", "ok": True,
+         "data": [{"value": 41, "validity": "complete", "group": group}]},
+        {"name": "traffic_out", "ok": True,
+         "data": [{"value": 38, "validity": "complete", "group": group}]}]})
+    got = rn.camera_counts(CONN, ARMADALE, "392", ["Armadale_Entrance"],
+                           at("2026-09-12T11:00:00"), at("2026-09-12T11:59:50"))
+    asked = json.loads(seen[-1].data)
+    assert asked["group_bys"] == [{"group": "time", "unit": "minutes", "value": 60}]
+    assert asked["time_ranges"] == [{"from": "11:00", "until": "12:00"}]
+    assert got["whole_period"] is True and got["total"][0]["in"] == 41
+
+    server.append({"ok": True, "metrics": []})  # quarter-hours, when something asks for them
+    rn.camera_counts(CONN, ARMADALE, "392", ["Armadale_Entrance"],
+                     at("2026-09-12T11:00:00"), at("2026-09-12T11:59:50"), minutes=15)
+    assert json.loads(seen[-1].data)["group_bys"][0]["value"] == 15

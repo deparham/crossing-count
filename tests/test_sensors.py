@@ -171,3 +171,32 @@ def test_a_warning_about_the_system_numbers_reaches_the_first_page(named: Wizard
     method = " ".join(data["method"])
     assert "its entrances are not named like the cameras" not in method  # said once, not twice
     assert "x.csv" not in method  # which file it came out of is in the record, not the report
+
+
+def test_an_hours_numbers_are_one_comparison_not_four(named: Wizard) -> None:
+    """An hour of footage is compared with an hour's count. Four quarter-hour rows against a
+    number that covers all four would say four times what it should."""
+    named.state["clock_start"] = "2026-09-12T11:00:00"
+    named.state["duration_s"] = 3590.0
+    assert [i["key"] for i in named.intervals()] == ["11:00", "11:15", "11:30", "11:45"]
+    hour = [sensors.IntervalCount(datetime.fromisoformat("2026-09-12T11:00"),
+                          datetime.fromisoformat("2026-09-12T12:00"), d, n, cam)
+            for cam, (i, o) in (("CN-9-PB1", (30, 20)), ("CN-9-R2", (11, 9)))
+            for d, n in (("in", i), ("out", o))]
+    assert named.use_sensor(sensors.SensorData("RetailNext", "RetailNext API", hour,
+                                       whole_period=True)) == []
+    assert named.state["sensor"] == {"in": 41, "out": 29}  # counted once, not once per quarter
+    assert named.state["sensor_intervals"] == {}  # it belongs to no one quarter-hour
+    assert named.state["sensor_cameras"]["CN-9-R2"] == {"in": 11, "out": 9}
+
+    comp = named.comparison()
+    assert len(comp["rows"]) == len(named.dirs())
+    assert comp["rows"][0]["interval"] == "whole footage"
+    assert named._breakdown()["intervals"] == []  # nothing to set each quarter-hour against
+
+    # both cameras there, but each covering only half the hour: a gap cannot pass as a total
+    half = [sensors.IntervalCount(c.start, datetime.fromisoformat("2026-09-12T11:30"),
+                                  c.direction, c.count, c.camera) for c in hour]
+    with pytest.raises(WizardError, match="gave no number for CN-9-PB1"):
+        named.use_sensor(sensors.SensorData("RetailNext", "RetailNext API", half,
+                                            whole_period=True))

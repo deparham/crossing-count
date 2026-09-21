@@ -65,6 +65,7 @@ from .items import (
     SMALL_MODELS,
     TOTAL_ACTIONS_KEPT,
     TWIN_WINDOW_S,
+    WHOLE_PERIOD,
     _found,
     accuracy_range,
     distinct_people,
@@ -350,28 +351,34 @@ class Wizard:
             gone = [n for n in names.values() if n not in own]
             raise WizardError(f"{data.system} has no numbers for {', '.join(gone)}.")
         sources = own if own and len(own) == len(names) else {"": by_cam.get("", [])}
-        per_iv = {k: dict.fromkeys(dirs, 0) for k in keys}
+        step = timedelta(minutes=INTERVAL_MIN)
+        # what each number has to cover: one 15-minute interval each, or, when the source
+        # gave one number for the footage's whole period, that period once
+        starts = [datetime.fromisoformat(i["start"]).replace(tzinfo=None) for i in ivs]
+        whole = bool(data.whole_period)
+        spans: list[tuple[str, datetime, datetime]] = (
+            [(WHOLE_PERIOD, starts[0], starts[-1] + step)] if whole
+            else [(i["key"], s, s + step) for i, s in zip(ivs, starts)])
+        per_iv = {key: dict.fromkeys(dirs, 0) for key, _, _ in spans}
         per_cam: dict[str, dict[str, int]] = {}
         warnings = list(data.notes)
-        step = timedelta(minutes=INTERVAL_MIN)
         for cam, counts in sources.items():
             label = cam or str(data.detail.get("store") or "the cameras together")
             if cam:
                 per_cam[cam] = dict.fromkeys(dirs, 0)
-            for i in ivs:  # wall-clock times: the footage's clock may carry a time zone
-                s = datetime.fromisoformat(i["start"]).replace(tzinfo=None)
-                inside = [c for c in counts if c.start >= s and c.end <= s + step]
+            for key, s, e in spans:  # wall-clock: the footage's clock may carry a time zone
+                inside = [c for c in counts if c.start >= s and c.end <= e]
+                want = (e - s).total_seconds()
                 for d in dirs:
                     mine = [c for c in inside if c.direction == d]
                     covered = sum((c.end - c.start).total_seconds() for c in mine)
-                    if covered < step.total_seconds() - 1:
-                        raise WizardError(f"{data.system} gave no number for {label} at "
-                                          f"{i['key']}.")
-                    if covered > step.total_seconds() + 1:
-                        raise WizardError(f"{data.system} gave {label} at {i['key']} more than "
+                    if covered < want - 1:
+                        raise WizardError(f"{data.system} gave no number for {label} at {key}.")
+                    if covered > want + 1:
+                        raise WizardError(f"{data.system} gave {label} at {key} more than "
                                           f"one number for {LABELS[d]}.")
                     n = sum(c.count for c in mine)
-                    per_iv[i["key"]][d] += n
+                    per_iv[key][d] += n
                     if cam:
                         per_cam[cam][d] += n
                 for c in inside:
@@ -380,11 +387,11 @@ class Wizard:
                                         f"{c.end:%H:%M} as {c.validity}: its number there is "
                                         f"not a full count.")
         warnings = list(dict.fromkeys(warnings))  # once per interval, not per direction
-        if len(keys) > 1:
-            self.set_sensor(intervals={k: dict(v) for k, v in per_iv.items()},
+        if whole or len(spans) == 1:
+            self.set_sensor(values=dict(per_iv[spans[0][0]]),
                             cameras={c: dict(v) for c, v in per_cam.items()})
         else:
-            self.set_sensor(values=dict(per_iv[keys[0]]),
+            self.set_sensor(intervals={k: dict(v) for k, v in per_iv.items()},
                             cameras={c: dict(v) for c, v in per_cam.items()})
         with self._lock:
             self.state["sensor_source"] = {
@@ -796,9 +803,15 @@ class Wizard:
                 "directions": self.dirs()}
 
     def _breakdown(self) -> dict[str, Any]:
-        """The report's page of 15-minute intervals and cameras, from comparison()."""
+        """The report's page of 15-minute intervals and cameras, from comparison().
+
+        The quarter-hours are shown only when the system gave a number for each of them. With
+        one number for the footage's whole period there is nothing to set each quarter against,
+        and a column of verified counts beside a column of dashes says nothing.
+        """
         comp = self.comparison()
-        ivs = comp["intervals"] if len(comp["intervals"]) > 1 else []
+        ivs = (comp["intervals"] if self.state["sensor_intervals"] and len(comp["intervals"]) > 1
+               else [])
         # cameras only with something to set them against: their own RetailNext numbers,
         # or the page of intervals they share
         cams = (comp["cameras"] if len(comp["cameras"]) > 1
