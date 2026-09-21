@@ -29,6 +29,38 @@ def test_single_picture_without_header() -> None:
     assert (tiles[0].width, tiles[0].height, tiles[0].header_px) == (640, 480, 0)
 
 
+def test_a_hard_edge_inside_one_picture_is_not_a_join_between_two() -> None:
+    """The bug this guards: a fisheye entrance (Martin Place, 640x480, one camera) has a
+    pillar down the middle of the lower third. Averaged down the column that edge scored
+    22.5 against a threshold of 22.1, so the picture was split and counted as two cameras -
+    one of them the half with no camera name in its header."""
+    frame = texture(480, 640, seed=7, mean=120)
+    frame[300:480, 310:316] = 250  # a bright pillar, over the lower 38% of the picture only
+    tiles = lay.detect_tiles_in(frame)
+    assert len(tiles) == 1, [(t.x0, t.x1) for t in tiles]
+    assert (tiles[0].width, tiles[0].height) == (640, 480)
+
+
+def test_the_whole_header_bar_is_found_not_just_its_darkest_rows() -> None:
+    """Two bugs this guards, both leaving a clock that changes every frame inside the tracked
+    picture. Martin Place's bar measures 70.5 where the cut-off was 70, and being too bright
+    stopped the search rather than ruling out that one answer. 392's bar runs 40 at its top
+    to 74 through its body, and that rise inside the bar read as the picture starting, so 4
+    of its 16 rows were called the header. Every real export's bar is 16 rows."""
+    barely = texture(480, 640, seed=8, mean=210)
+    barely[:16] = 70  # only just darker than the cut-off allowed
+    assert lay.detect_tiles_in(barely)[0].header_px == 16
+
+    graded = texture(480, 640, seed=8, mean=210)
+    graded[:4] = 42  # a bar with its own top rows darker than the rest of it
+    graded[4:14] = 74
+    graded[14:16] = 62
+    assert lay.detect_tiles_in(graded)[0].header_px == 16
+
+    plain = texture(480, 640, seed=9, mean=120)  # no bar: the picture starts at the top row
+    assert lay.detect_tiles_in(plain)[0].header_px == 0
+
+
 def test_two_by_two_grid() -> None:
     frame = np.zeros((960, 1280, 3), dtype=np.uint8)
     for i, (x0, y0) in enumerate(((0, 0), (640, 0), (0, 480), (640, 480))):

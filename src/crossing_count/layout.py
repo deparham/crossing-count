@@ -4,6 +4,12 @@ RetailNext multi-channel exports place 2-4 camera pictures in one video, each
 with a translucent header bar (camera name and clock) over its top rows, inside
 black letterboxing. A single-camera export is one tile. Detection runs on a
 temporal median frame, so people and moving overlays do not disturb it.
+
+Splitting one camera's picture in two is the costly mistake here, not missing a
+join: half a picture gets its own line, its own counting rule and its own row in
+the report, and the half without the camera's name in the header looks like a
+camera nobody can name. So a seam has to hold along the whole of its line (see
+_seams), not merely on average.
 """
 
 from __future__ import annotations
@@ -18,6 +24,11 @@ from numpy.typing import NDArray
 Image = NDArray[np.uint8]
 
 BLACK_LEVEL = 8.0  # mean grey level at or below which a row/column is letterbox
+# A header bar is a translucent dark strip over the picture. Across the exports on hand the
+# bars measure 24-70; above this they are not a bar, and the picture starts at the top row.
+HEADER_MAX = 100.0
+HEADER_LOOK = 12  # rows below a candidate boundary that must all be picture, not more bar
+HEADER_RISE = 1.5  # how much brighter than the bar every one of them has to be
 
 
 @dataclass(frozen=True)
@@ -68,7 +79,16 @@ def median_image(frames: Sequence[Image]) -> Image:
 
 
 def _seams(profile: NDArray[np.float64], length: int) -> list[int]:
-    """Boundaries (index of the first pixel after the seam) of strong straight seams."""
+    """Boundaries (index of the first pixel after the seam) of strong straight seams.
+
+    The profile is a median along the line, never a mean: a join between two pictures differs
+    at nearly every row of it, while a pillar or a window frame down part of one picture
+    differs at a few rows very strongly and at the rest hardly at all. Measured over the
+    exports on hand, a real join's median difference is 47-82 and the strongest thing inside
+    a single picture is 3-4, so the floor below is not a close call. The mean did make it
+    one: a fisheye entrance with a pillar down the middle scored 22.5 against a threshold of
+    22.1 and was split into two cameras.
+    """
     if len(profile) < 10:
         return []
     min_part = int(0.15 * length)
@@ -86,19 +106,29 @@ def _seams(profile: NDArray[np.float64], length: int) -> list[int]:
 
 
 def _header_rows(cell: NDArray[np.float64]) -> int:
-    """Height of a dark translucent header bar at the top of a tile, or 0."""
+    """Height of a dark translucent header bar at the top of a tile, or 0.
+
+    Being too dark to be picture is a condition on the answer, not a reason to stop looking.
+    It used to stop the search, so a bar whose rows grew brighter towards its bottom edge was
+    lost the moment the running median passed the cut-off, before the search ever reached the
+    bar's real height: a 16-row header measuring 70.5 against a cut-off of 70.0 was read as
+    no header at all, leaving a clock that changes every frame inside the tracked picture.
+    """
     n = min(48, cell.shape[0] // 4)
     if n < 10:
         return 0
     row_med = np.median(cell[:n], axis=1)  # per-row median: header text is a minority
     for r in range(4, n - 4):
         head = float(np.median(row_med[:r]))
-        if head >= 70.0:
-            return 0
-        first = (float(row_med[r]) + 1.0) / (head + 1.0)
-        after = (float(np.median(row_med[r : r + 4])) + 1.0) / (head + 1.0)
-        if first >= 1.6 and after >= 1.6:
-            return r  # first row where the picture brightens and stays bright
+        if head >= HEADER_MAX:
+            continue
+        # every row below the boundary has to stay brighter than the bar, not just the next
+        # few. A bar is not flat: its own top rows can be darker than its body, so "it got
+        # brighter here" alone puts the boundary inside the bar and leaves the rest of it,
+        # clock and all, in the tracked picture. A picture never dims back to bar level.
+        below = row_med[r : r + HEADER_LOOK]
+        if float(below.min()) >= HEADER_RISE * (head + 1.0):
+            return r
     return 0
 
 
@@ -111,8 +141,10 @@ def detect_tiles_in(median: Image) -> list[Tile]:
     y0, y1 = int(rows[0]), int(rows[-1]) + 1
     x0, x1 = int(cols[0]), int(cols[-1]) + 1
     region = g[y0:y1, x0:x1]
-    xs = [x0] + [x0 + s for s in _seams(np.abs(np.diff(region, axis=1)).mean(0), x1 - x0)] + [x1]
-    ys = [y0] + [y0 + s for s in _seams(np.abs(np.diff(region, axis=0)).mean(1), y1 - y0)] + [y1]
+    down = np.median(np.abs(np.diff(region, axis=1)), axis=0)  # each column, along its rows
+    across = np.median(np.abs(np.diff(region, axis=0)), axis=1)
+    xs = [x0] + [x0 + s for s in _seams(down, x1 - x0)] + [x1]
+    ys = [y0] + [y0 + s for s in _seams(across, y1 - y0)] + [y1]
     tiles: list[Tile] = []
     for r in range(len(ys) - 1):
         for c in range(len(xs) - 1):
