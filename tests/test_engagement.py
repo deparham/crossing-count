@@ -64,7 +64,10 @@ def test_the_report_gives_the_difference_where_the_percentage_would_be(
     assert c["accuracy"]["in"]["accuracy_pct"] == 81.8 and not c["quote"]["in"]["rate"]
     cover = _texts(w.make_report(None))[0]
     assert "81.8" not in cover and "DIFFERENCE" in cover and "−2" in cover
-    assert "verified 11, RetailNext counted 9: an undercount of 2" in cover
+    # why no percentage is quoted is kept with the record; page 1 carries the numbers only
+    kept = json.loads(Path(w.state["report"]["data"]).read_text())["data"]
+    assert "verified 11, RetailNext counted 9: an undercount of 2" in " ".join(
+        kept["sample_notes"])
 
 
 def test_per_camera_rows_give_no_percentage_on_few_crossings(

@@ -32,7 +32,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from .report_pptx import FOOTER, card_value, identity_rows
+from .report_pptx import FOOTER, card_value
 
 NAVY = colors.HexColor("#101D3B")
 TEAL = colors.HexColor("#1F9BB3")
@@ -116,15 +116,13 @@ def _frame(data: dict[str, Any]) -> list[Any]:
 
 
 def _summary(data: dict[str, Any]) -> list[Any]:
-    """Page 1: the result in plain words, then how sure, then what it rests on."""
+    """Page 1: the numbers, the accuracy, and a picture of a busy moment.
+
+    What the numbers rest on and what could not be known are worked out and kept with the
+    validation's record; they are not printed for the customer.
+    """
     out: list[Any] = [_p(f"{data['store_name']} {data['store_code']} Traffic System", _TITLE),
                       _p("CAMERA VALIDATION", _TAG)]
-    out += [_p(t, _HEAD) for t in data.get("headline") or []]
-    ident = identity_rows(data)
-    if ident:
-        out.append(_grid([[_p(k, _SMALL), _p(v, _SMALL)] for k, v in ident],
-                         [1.2 * inch, WIDTH - 1.2 * inch], header=False))
-        out.append(Spacer(1, 8))
     out.append(_p(f"Captured {data['captured_date']} · {data['location']} · "
                   f"{data['time_range']}", _SMALL))
     out.append(Spacer(1, 8))
@@ -138,12 +136,6 @@ def _summary(data: dict[str, Any]) -> list[Any]:
     table = _grid(rows, [1.4 * inch, 1.3 * inch, 1.3 * inch, WIDTH - 4.0 * inch])
     table.setStyle(TableStyle([("FONT", (1, 1), (-1, -1), "Helvetica-Bold", 11)]))
     out += [table, Spacer(1, 8)]
-    for t in [data.get("scope"), *(data.get("sample_notes") or []),
-              (data.get("levels") or {}).get("text")]:
-        if t:
-            out.append(_p(t))
-    for t in data.get("caveats") or []:
-        out.append(_p(t, _WARN))
     if not data.get("complete", True):
         out.append(_p("Validation incomplete: " + " ".join(data.get("incomplete") or [])
                       + " No accuracy is given.", _WARN))
@@ -253,7 +245,9 @@ def build_pdf(data: dict[str, Any], out: Path, logo: Path | None = None,
             self.setFillColor(GREY)
             self.setFont("Helvetica", 9)
             self.drawRightString(w - 0.6 * inch, h - 0.75 * inch, str(data.get("report_date", "")))
-            self.drawString(0.6 * inch, 0.45 * inch, FOOTER)
+            vid = (data.get("identity") or {}).get("validation_id") or ""
+            self.drawString(0.6 * inch, 0.45 * inch,
+                            f"{FOOTER}  ·  {vid}" if vid else FOOTER)
             self.drawRightString(w - 0.6 * inch, 0.45 * inch,
                                  f"Page {self._pageNumber} of {total}")
 

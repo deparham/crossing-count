@@ -184,8 +184,10 @@ def _header(slide: Any, data: dict[str, Any], logo: Path | None) -> None:
            align=PP_ALIGN.RIGHT)
 
 
-def _footer(slide: Any) -> Any:
-    _write(_box(slide, 0.63, 11.05, 4.0, 0.25), FOOTER, 10, color=GREY)
+def _footer(slide: Any, data: dict[str, Any]) -> Any:
+    vid = (data.get("identity") or {}).get("validation_id") or ""
+    _write(_box(slide, 0.63, 11.05, 4.6, 0.25),
+           f"{FOOTER}  ·  {vid}" if vid else FOOTER, 10, color=GREY)
     return _box(slide, 4.6, 11.05, 3.04, 0.25)  # "Page k of N", written once all pages exist
 
 
@@ -203,15 +205,9 @@ def _cover(slide: Any, data: dict[str, Any]) -> bool:
     captured = f"Captured {data['captured_date']} Cameras {data['location']} {data['time_range']}"
     if len(rows) == 1:
         captured += f"  ·  {rows[0]['label']}"
+    _write(_box(slide, 0.62, 2.52, 7.0, 0.5), data["store_code"], 24, bold=True)
+    _write(_box(slide, 0.62, 3.08, 7.0, 0.35), captured, 14, color=GREY)
     top = 3.70
-    if headline := data.get("headline") or []:  # the result in words leads, where the code was
-        height = 0.06 + 0.24 * sum(1 + len(t) // 80 for t in headline)
-        _lines(_box(slide, 0.53, 2.42, 7.2, height), headline, 13, bold_all=True)
-        _write(_box(slide, 0.62, 2.48 + height, 7.0, 0.3), captured, 12, color=GREY)
-        top = 2.48 + height + 0.45
-    else:
-        _write(_box(slide, 0.62, 2.52, 7.0, 0.5), data["store_code"], 24, bold=True)
-        _write(_box(slide, 0.62, 3.08, 7.0, 0.35), captured, 14, color=GREY)
 
     one = len(rows) == 1
     card_h = 1.49 if one else 1.08
@@ -243,24 +239,6 @@ def _cover(slide: Any, data: dict[str, Any]) -> bool:
         _write(note, "Validation incomplete: " + " ".join(data.get("incomplete", []))
                + " No accuracy is given.", 10, bold=True, color=WARN_TEXT)
         top += 0.5
-    # what the number describes (how the footage was sampled), and the error at each traffic
-    # level: next to the headline number, never behind it
-    said = [t for t in (data.get("scope"), *(data.get("sample_notes") or []),
-                        (data.get("levels") or {}).get("text")) if t]
-    if said:
-        height = 0.08 + 0.18 * sum(1 + len(t) // 95 for t in said)
-        _lines(_box(slide, 0.53, top - 0.04, 7.2, height), said, 10)
-        top += height + 0.12
-    if caveats := data.get("caveats") or []:  # what could not be known, on the first page
-        height = 0.08 + 0.18 * sum(1 + len(t) // 90 for t in caveats)
-        _lines(_box(slide, 0.53, top - 0.04, 7.2, height), caveats, 10, color=WARN_TEXT,
-               bold_all=True)
-        top += height + 0.12
-    if ident := identity_rows(data):
-        record = [f"{name}: {value}" for name, value in ident]
-        height = 0.06 + 0.16 * sum(1 + len(t) // 110 for t in record)
-        _lines(_box(slide, 0.53, top - 0.04, 7.2, height), record, 9, color=GREY, bold_all=False)
-        top += height + 0.12
     return _frame(slide, data, top)
 
 
@@ -483,7 +461,7 @@ def build_report(data: dict[str, Any], out: Path, logo: Path | None = None) -> P
     def new_page() -> Any:
         slide = prs.slides.add_slide(blank)
         _header(slide, data, logo)
-        page_boxes.append(_footer(slide))
+        page_boxes.append(_footer(slide, data))
         return slide
 
     fitted = _cover(new_page(), data)

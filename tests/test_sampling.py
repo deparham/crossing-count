@@ -135,7 +135,10 @@ def test_the_window_is_kept_from_download_to_report_and_manifest(
     w.set_sensor({"out": 2})
     w.set_store(name="Test store", operator="Alex")
     cover = _texts(w.make_report(None))[0]
-    assert "Sampling: peak trading" in cover and "not of the whole day" in cover
+    # what the sample describes is kept with the record; page 1 carries the numbers only
+    kept = json.loads(Path(w.state["report"]["data"]).read_text())["data"]
+    assert "Sampling: peak trading" in kept["scope"] and "not of the whole day" in kept["scope"]
+    assert "Sampling" not in cover
     r = w.result()
     assert r["sampling"]["role"] == "peak" and "candidates" not in r["sampling"]
     assert r["traffic"]["level"] in v.TRAFFIC_NAMES and r["by_level"]

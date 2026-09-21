@@ -129,7 +129,9 @@ def test_count_check_and_report(two_tile_video: dict[str, Any], review_run_dir: 
     assert "Lismore SYN-1 Traffic System" in pages[0] and "VERIFIED COUNT" in pages[0]
     # skipped movement leaves the validation incomplete: no result is put in words
     assert "people coming in" not in pages[0] and "Validation incomplete" in pages[0]
-    assert "Validation ID: draft" in pages[0] and "Footage: clean" in pages[0]
+    assert "CC-VAL" not in pages[0]  # a draft has no ID; a finalised report shows it
+    kept = json.loads(Path(w.state["report"]["data"]).read_text())["data"]
+    assert kept["identity"]["footage"].startswith("clean")  # with the record, not on page 1
     assert Path(w.state["report"]["pdf"]).read_bytes().startswith(b"%PDF")
     assert "SYSTEM COUNT" in pages[0] and "ACCURACY" in pages[0] and "25/08/2026" in pages[0]
     assert f"Page 1 of {len(pages)}" in pages[0] and "Crossing details" in pages[1]

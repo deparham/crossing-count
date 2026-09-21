@@ -115,9 +115,13 @@ def test_hand_count_and_report(manual: Wizard, tmp_path: Path) -> None:
     assert c["verified"] == {"in": 2} and c["accuracy"]["in"]["accuracy_pct"] == 100.0
     assert c["status"] == "complete"
     pages = texts(manual.make_report())
-    assert "MANUAL COUNT" in pages[0] and "Validation ID: draft" in pages[0]
-    assert "RetailNext counted the same number of people coming in as were verified (2)" in pages[0]
-    assert "BUSIEST MOMENT" in pages[-2]  # page 1 is full: the picture has a page of its own
+    assert "MANUAL COUNT" in pages[0] and "CC-VAL" not in pages[0]
+    kept = json.loads(Path(manual.state["report"]["data"]).read_text())["data"]
+    assert "RetailNext counted the same number of people coming in as were verified (2)" in \
+        " ".join(kept["headline"])  # in words with the record; page 1 carries the numbers
+    assert "MANUAL COUNT" in pages[0] and "2" in pages[0]
+    # page 1 carries the numbers only, so the busy moment's picture fits on it
+    assert "BUSIEST MOMENT" in pages[0] and "Validation frame" not in "\n".join(pages)
     assert "Counted by hand" not in "\n".join(pages)  # the method is for the record
     kept = json.loads(Path(manual.state["report"]["data"]).read_text())["data"]
     assert any("Counted by hand" in line for line in kept["method"])

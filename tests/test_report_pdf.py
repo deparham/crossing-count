@@ -91,20 +91,17 @@ def test_page_one_leads_with_the_result_and_what_it_rests_on(tmp_path: Path) -> 
     assert card_value({"verified": 11, "system": 9, "rate": False}, True) == ("DIFFERENCE", "−2")
     pages = texts(build_report(data, tmp_path / "r.pptx"))
     cover = pages[0]
-    assert cover.index("RetailNext counted 7 fewer") < cover.index("VERIFIED")  # words first
-    assert "Validation ID: draft" in cover and "Sampling: peak: the busiest" in cover
-    assert "Ground truth: Ground Truth Specification v1.4" in cover
-    assert "Footage: clean" in cover and "Lismore's total" in cover
-    assert "RW-128\n" not in cover  # the code line gives way to the result
+    # the numbers, the accuracy and a picture of a busy moment: nothing else
+    assert "VERIFIED COUNT" in cover and "SYSTEM COUNT" in cover and "SENSOR ACCURACY" in cover
+    assert "RW-128" in cover and "Captured 22/08/2026" in cover
     assert "RW-128-PB1 · 11:22:10" in cover  # room for the picture on page 1
-    data["sample_notes"] = [f"Note {k}: " + "so many words " * 12 for k in range(6)]
-    pages = texts(build_report(data, tmp_path / "full.pptx"))
-    # no room left on page 1 for a useful picture: it has a page of its own, before the snapshots
-    assert "RW-128-PB1 · 11:22:10" not in pages[0]
-    assert "Validation frame" in pages[-2] and "RW-128-PB1 · 11:22:10" in pages[-2]
+    for gone in ("RetailNext counted 7 fewer", "Sampling: peak: the busiest",
+                 "Ground Truth Specification", "Footage: clean", "Lismore's total"):
+        assert gone not in cover, gone  # worked out and kept with the record, not printed
+    # a finalised report still carries its ID, so a printed page can be traced to its record
+    assert "CC-VAL" not in cover and "draft" not in cover
     data.update(identity={**data["identity"], "validation_id": "CC-VAL-2026-AB12-000001"})
-    assert "Validation ID: CC-VAL-2026-AB12-000001" in texts(build_report(data,
-                                                                          tmp_path / "f.pptx"))[0]
+    assert "CC-VAL-2026-AB12-000001" in texts(build_report(data, tmp_path / "f.pptx"))[0]
 
 
 def test_the_pdf_says_the_same(tmp_path: Path) -> None:
@@ -113,10 +110,11 @@ def test_the_pdf_says_the_same(tmp_path: Path) -> None:
     assert raw.startswith(b"%PDF")
     pages = len(re.findall(rb"/Type /Page\b(?!s)", raw))
     assert pages >= 4  # the result, the method and crossings, the snapshots
-    for words in (b"RetailNext counted 7 fewer", b"Validation ID", b"Ground Truth Specification",
-                  b"Lismore's total", b"Crossing snapshots",
-                  b"Page 1 of %d" % pages):
+    for words in (b"Verified count", b"Crossing snapshots", b"Page 1 of %d" % pages):
         assert words in raw.replace(b"\\'", b"'"), words
+    for gone in (b"RetailNext counted 7 fewer", b"Ground Truth Specification",
+                 b"Lismore's total"):
+        assert gone not in raw.replace(b"\\'", b"'"), gone
     data.update(complete=False, incomplete=["2 of 5 stretches were not watched."], headline=[])
     raw = build_pdf(data, tmp_path / "i.pdf", compress=False).read_bytes()
     assert b"Validation incomplete: 2 of 5 stretches" in raw

@@ -250,12 +250,12 @@ def test_video_to_total_to_saved_count_to_report(totals: Wizard) -> None:
 
     pages = "\n".join(t for t in _report_text(totals.make_report()))
     assert "MANUAL COUNT" in pages and "VERIFIED COUNT" not in pages
-    assert "Total only: no moment recorded for any crossing" in pages
     # the page that lists the crossings says why there are none, rather than "none verified"
     assert "Counted as a total only: 147 people coming in" in pages
     assert "No crossings were verified for this period" not in pages
     # how it was counted is kept with the report, not printed for the customer
     kept = json.loads(Path(totals.state["report"]["data"]).read_text())["data"]
+    assert kept["identity"]["specification"] == "Total only: no moment recorded for any crossing"
     method = " ".join(kept["method"])
     assert "keeping the number only" in method and "keeping the number only" not in pages
     assert "no recall, precision or missed-crossing rate can be worked out" in method

@@ -66,9 +66,10 @@ def test_a_finalised_validation_is_kept_and_locked(reported: Wizard, tmp_path: P
     (final,) = [folder / n for n in names if n.endswith(".pptx")]
     cover = "\n".join(sh.text_frame.text for sh in Presentation(str(final)).slides[0].shapes
                       if sh.has_text_frame)
-    assert f"Validation ID: {vid}" in cover
+    assert vid in cover  # in the footer, so a printed page can be traced to its record
     draft = Presentation(reported.state["report"]["path"]).slides[0].shapes
-    assert any("Validation ID: draft" in sh.text_frame.text for sh in draft if sh.has_text_frame)
+    # a draft has no ID, so the footer carries none: only a finalised report can be traced
+    assert not any("CC-VAL" in sh.text_frame.text for sh in draft if sh.has_text_frame)
     m = json.loads((folder / "manifest.json").read_text())
     assert m["validation_id"] == vid and m["footage"]["sha256"] and m["software"]["crossingcount"]
     assert m["system_under_test"]["numbers"]["sensor"] == {"in": 2}
