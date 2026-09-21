@@ -954,7 +954,11 @@ ENTER.retail = () => {
   const num = (attrs, v, hint = 'placeholder="e.g. 8"') => `<input type="number" min="0" step="1" ${attrs} value="${v ?? ""}" ${hint}>`;
   const head = (first) => `<tr><th>${first}</th>${s.dirs.map((d) => `<th>${LABEL[d]}</th>`).join("")}</tr>`;
   let html;
-  if (ivs.length > 1) {  // footage longer than one of RetailNext's 15-minute intervals
+  // One number for the footage's period: an hour of footage is one hour's count to compare
+  // with. The quarter-hours are asked for only when the numbers already came in that way,
+  // from a file that carried them, so they are not thrown away.
+  const perIv = ivs.length > 1 && Object.keys(s.sensor_intervals || {}).length;
+  if (perIv) {
     $("sensorHint").textContent = `The system's 15-minute numbers for ${cams} together, as in its own table.${yours}`;
     html = `<table class="ivs">${head("Time")}` + ivs.map((i) => `<tr><td>${esc(i.label)}${i.full === false ? ' <span class="muted">(partly in this footage)</span>' : ""}</td>` +
       s.dirs.map((d) => `<td>${num(`data-iv="${esc(i.key)}" data-dir="${d}"`, ((s.sensor_intervals || {})[i.key] || {})[d])}</td>`).join("") + "</tr>").join("") + "</table>";
