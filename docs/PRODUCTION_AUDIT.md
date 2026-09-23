@@ -9,7 +9,9 @@ production work starts; the items marked **Stage 1** are being fixed with it.
 A local, single-user tool that turns CCTV-style footage (RetailNext sensor exports) into
 human-verified crossing counts and compares them with the sensor's own counts, in a
 PowerPoint report. It runs on the user's computer (a server on 127.0.0.1 shown in its
-own window) and never sends footage anywhere. RetailNext's cloud API is used only for
+own window) and sends footage nowhere by itself: a finished validation can be delivered
+to the customer's own shared folder, and the footage goes with it only when the person
+ticks it for that validation and confirms. RetailNext's cloud API is used only for
 the sensor's numbers and to export footage, with keys in the system credential store.
 
 ## 2. Architecture

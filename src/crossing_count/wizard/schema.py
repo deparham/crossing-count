@@ -56,6 +56,7 @@ DEFAULTS: dict[str, Any] = {
     # a count of the total only: a number per camera and direction, no moments. Deliberately
     # without a time per press, so it can never be mistaken for a count of crossings.
     "totals": {"by_camera": {}, "notes": "", "done": False, "whole_clip": False, "actions": []},
+    "delivered": None,  # where this validation was copied for the customer, and when
 }
 
 

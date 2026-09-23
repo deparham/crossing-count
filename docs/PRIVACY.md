@@ -2,16 +2,36 @@
 
 CCTV footage shows identifiable people. Everything here follows from that.
 
-## 1. The footage never leaves this computer
+## 1. The footage leaves this computer only when someone sends it
 
 Video is opened from the computer it is already on, or downloaded from the retailer's own
-RetailNext account to it. It is never uploaded, never sent to a model service, never shared
-with the makers of any library used here. The app's pages are served to this computer only
-(see [SECURITY.md](SECURITY.md)), unless someone at it switches on **sharing on this
-network**. Then people on the same network who have the access code see the footage, frames
-and reports in their own browser, and can download reports to their own computer. Nothing
-goes beyond that network. The only things that leave are data queries to RetailNext: store,
-camera and time. No frame, count or report is ever sent anywhere by the software.
+RetailNext account to it. It is never uploaded to a model service and never shared with the
+makers of any library used here. The app's pages are served to this computer only (see
+[SECURITY.md](SECURITY.md)), unless someone at it switches on **sharing on this network**.
+Then people on the same network who have the access code see the footage, frames and reports
+in their own browser, and can download reports to their own computer. The only things the
+software sends by itself are data queries to RetailNext: store, camera and time.
+
+There is one way footage goes further, and it is never automatic. On the report page, a
+finished validation can be **delivered** to a folder for the customer, typically a
+OneDrive or SharePoint library synced to this computer. It always copies the report and the
+validation's record. It copies the footage **only when the person ticks the box for it on
+that validation**, having first been shown the destination folder, every file and its size,
+and having confirmed. The box is off every time; it is never remembered.
+
+Before ticking it, know what it means:
+
+- The footage belongs to the retailer, not to whoever runs this (section 6). Putting it in
+  a shared library is a second place it lives, under someone else's control and backup, and
+  usually a second country.
+- Everyone with access to that library can see it, including people with no part in the
+  validation.
+- Deleting it from the folder is not enough on its own: cloud libraries keep version
+  history and a recycle bin, and a synced copy may sit on other people's computers too.
+- An hour of one camera is roughly 100 MB.
+
+Sending the report alone carries frames of people as well (section 2), but a handful of
+snapshots rather than every minute of everyone who walked past.
 
 ## 2. What is kept, and where
 
@@ -28,6 +48,7 @@ The data folder is the project folder when run from source, or
 | A finalised validation | `validations/<ID>/` | **Yes**, inside the report |
 | The report | the PowerPoint file | **Yes**: a frame of the busiest moment and a snapshot per crossing |
 | Gold clips | `gold/gold_v1/*.json` | No pictures; crossing times and directions |
+| A delivered validation | `<shared>/<Brand>/<Brand Store - CODE>/` | **Yes**, inside the report; and the footage too when it was ticked |
 | Learning examples | the shared folder set on the report page | **Yes**: frames around each crossing |
 | Head-marking labels | `labels/` | **Yes**: frames |
 | The audit log | `audit/audit.jsonl` | No pictures; actions, times, and the operator's name |
@@ -67,7 +88,9 @@ Nothing here counts as advice on what that law requires where you operate.
 
 ## 6. What the tool never does
 
-- It never sends footage, frames or counts off the computer.
+- It never sends footage, frames or counts anywhere by itself. The one way they go further
+  is a delivery someone asks for and confirms (section 1), to a folder on their own shared
+  drive - never to us, and never to a service.
 - It never tries to recognise faces or identify anyone. People are found as boxes; nothing
   connects a box to a person's identity.
 - It never trains a model by itself. Learning examples are collected only when a shared

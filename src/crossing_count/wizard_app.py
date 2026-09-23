@@ -296,6 +296,11 @@ class DiagnosisIn(BaseModel):
 
 class SettingsIn(BaseModel):
     examples_dir: str
+    delivery_dir: str | None = None  # where finished validations are delivered for the customer
+
+
+class DeliverIn(BaseModel):
+    footage: bool = False  # the footage goes only when this says so, each time
 
 
 class NetworkIn(BaseModel):
@@ -953,17 +958,49 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     @app.get("/api/settings")
     def get_settings() -> dict[str, Any]:
-        return {"examples_dir": paths.load_settings().get("examples_dir", "")}
+        kept = paths.load_settings()
+        return {"examples_dir": kept.get("examples_dir", ""),
+                "delivery_dir": kept.get("delivery_dir", "")}
 
     @app.post("/api/settings")
     def set_settings(s: SettingsIn) -> dict[str, Any]:
-        if not s.examples_dir.strip():
-            return {"examples_dir": paths.save_settings({"examples_dir": ""})["examples_dir"]}
+        out: dict[str, Any] = {}
+        for name, value in (("examples_dir", s.examples_dir),
+                            ("delivery_dir", s.delivery_dir)):
+            if value is None:
+                continue
+            if not value.strip():
+                out[name] = paths.save_settings({name: ""})[name]
+                continue
+            try:
+                folder = check_folder(value.strip())
+            except (OSError, ValueError) as exc:
+                raise HTTPException(400, f"Can't use that folder: {exc}") from exc
+            out[name] = paths.save_settings({name: str(folder)})[name]
+        return {**get_settings(), **out}
+
+    def delivery_root() -> Path | None:
+        where = paths.load_settings().get("delivery_dir")
+        return Path(where) if where else None
+
+    @app.get("/api/deliver")
+    def delivery_says(footage: bool = False) -> dict[str, Any]:
+        """Where this validation would go and what would go with it: nothing is copied."""
+        return {"plan": wiz().delivery_plan(delivery_root(), footage),
+                "delivered": wiz().state.get("delivered")}
+
+    @app.post("/api/deliver")
+    def deliver(d: DeliverIn) -> dict[str, Any]:
+        root = delivery_root()
+        if root is None:
+            raise HTTPException(400, "Set the folder for finished validations first "
+                                     "(Report page).")
+        w = wiz()
         try:
-            folder = check_folder(s.examples_dir.strip())
-        except (OSError, ValueError) as exc:
-            raise HTTPException(400, f"Can't use that folder: {exc}") from exc
-        return {"examples_dir": paths.save_settings({"examples_dir": str(folder)})["examples_dir"]}
+            got = w.deliver(root, d.footage)
+        except WizardError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {**got, "delivered": w.state.get("delivered")}
 
     @app.get("/api/examples")
     def examples() -> dict[str, Any]:

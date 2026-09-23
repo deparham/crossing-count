@@ -28,6 +28,7 @@ from .. import (
     __copyright__,
     __version__,
     auditlog,
+    delivery,
     evaluate,
     independence,
     paths,
@@ -597,6 +598,41 @@ class Wizard:
             raise WizardError(f"This validation is finalised as {final['id']} and can no longer "
                               f"change. To correct it, start a new version: the finalised one "
                               f"stays as it is.")
+
+    def delivery_plan(self, root: Path | None, footage: bool) -> dict[str, Any] | None:
+        """Where this validation would be delivered and what would go with it, to be agreed
+        to before anything is copied. None when no folder for finished work is set."""
+        if root is None:
+            return None
+        report = Path(str((self.state.get("report") or {}).get("path") or ""))
+        if not report.is_file():
+            return None
+        final = self.state.get("final") or {}
+        run_folder = Path(str(final["folder"])) if final.get("folder") else None
+        try:
+            return delivery.plan(root, self.state["store"], report,
+                                 self.video if footage else None, run_folder)
+        except delivery.DeliveryError as exc:
+            return {"problem": str(exc)}
+
+    def deliver(self, root: Path, footage: bool) -> dict[str, Any]:
+        """Copy the report, the record and (when asked) the footage to the brand's folder."""
+        with self._lock:
+            report = Path(str((self.state.get("report") or {}).get("path") or ""))
+            if not report.is_file():
+                raise WizardError("Make the report first: there is nothing to deliver.")
+            final = self.state.get("final") or {}
+            try:
+                got = delivery.deliver(root, self.state["store"], report,
+                                       self.video if footage else None,
+                                       Path(str(final["folder"])) if final.get("folder") else None)
+            except delivery.DeliveryError as exc:
+                raise WizardError(str(exc)) from exc
+            self.state["delivered"] = {**got, "at": _now()}
+            self._decide("delivered", after={"folder": got["folder"], "files": got["files"],
+                                             "footage": got["footage"]})
+            self._save()
+            return got
 
     def finalise(self, shared: Path | None = None) -> dict[str, Any]:
         """Give this validation an ID and keep it, with everything needed to reproduce it,
