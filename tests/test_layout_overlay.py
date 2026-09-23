@@ -61,6 +61,31 @@ def test_the_whole_header_bar_is_found_not_just_its_darkest_rows() -> None:
     assert lay.detect_tiles_in(plain)[0].header_px == 0
 
 
+def test_a_hard_edge_as_strong_as_a_real_join_is_still_not_one() -> None:
+    """The bug this guards: CN-407's left camera has an edge down its whole height that is
+    as sharp as the join between the two cameras (median difference 68 against the join's
+    53), so nothing about the seam itself tells them apart. The layout does: two cameras in
+    a 1280-wide export make two 640s, and 302, 338, 640 is not a grid."""
+    frame = np.zeros((960, 1280, 3), dtype=np.uint8)
+    frame[240:720, 0:640] = texture(480, 640, seed=11, mean=120)
+    frame[240:720, 640:1280] = texture(480, 640, seed=12, mean=60)
+    frame[240:720, 296:302] = 240  # a wall down the whole of the left camera's picture
+    tiles = lay.detect_tiles_in(frame)
+    assert [(t.x0, t.x1) for t in tiles] == [(0, 640), (640, 1280)], [(t.x0, t.x1) for t in tiles]
+    assert len({t.width for t in tiles}) == 1  # the pictures of one export are the same size
+
+
+def test_the_grid_keeps_the_most_pictures_the_seams_agree_with() -> None:
+    assert lay._grid([], 640) == []  # one picture
+    assert lay._grid([640], 1280) == [640]  # two
+    assert lay._grid([640, 1280], 1920) == [640, 1280]  # three in a row
+    assert lay._grid([320, 640, 960], 1280) == [320, 640, 960]  # four
+    assert lay._grid([302, 640], 1280) == [640]  # a wall inside the left picture, and the join
+    assert lay._grid([302], 1280) == []  # the wall alone is not a join
+    assert lay._grid([636], 1280) == [636]  # a join a few pixels off centre is still the join
+    assert lay._grid([320, 960], 1280) == []  # two of the three a four-way grid needs
+
+
 def test_two_by_two_grid() -> None:
     frame = np.zeros((960, 1280, 3), dtype=np.uint8)
     for i, (x0, y0) in enumerate(((0, 0), (640, 0), (0, 480), (640, 480))):

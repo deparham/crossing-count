@@ -8,8 +8,11 @@ temporal median frame, so people and moving overlays do not disturb it.
 Splitting one camera's picture in two is the costly mistake here, not missing a
 join: half a picture gets its own line, its own counting rule and its own row in
 the report, and the half without the camera's name in the header looks like a
-camera nobody can name. So a seam has to hold along the whole of its line (see
-_seams), not merely on average.
+camera nobody can name. Two things keep that from happening. A seam has to hold
+along the whole of its line, not merely on average (_seams), and it has to fall
+where an even division of the picture falls, because the pictures in an export
+are a grid of equal parts (_grid). Neither is enough alone: an edge inside one
+camera's picture can run its whole height and be sharper than the real join.
 """
 
 from __future__ import annotations
@@ -29,6 +32,8 @@ BLACK_LEVEL = 8.0  # mean grey level at or below which a row/column is letterbox
 HEADER_MAX = 100.0
 HEADER_LOOK = 12  # rows below a candidate boundary that must all be picture, not more bar
 HEADER_RISE = 1.5  # how much brighter than the bar every one of them has to be
+GRID_MAX = 4  # the most camera pictures one export holds
+GRID_SLACK = 0.01  # a seam this far from an even division of the picture is still that one
 
 
 @dataclass(frozen=True)
@@ -132,6 +137,30 @@ def _header_rows(cell: NDArray[np.float64]) -> int:
     return 0
 
 
+def _grid(cuts: list[int], length: int) -> list[int]:
+    """Of the seams found, the ones that divide the picture into equal parts.
+
+    The pictures in an export are a grid: 2 side by side, 3 in a row, 2x2. Equal parts, so a
+    seam that does not fall on an even division is something inside one camera's picture, not
+    a join between two. This is what tells them apart when nothing about the seam itself
+    does: a CN-407 export split at 302 as strongly as at its real join at 640, and 302, 338,
+    640 is not a grid. The largest division the seams agree with wins, so a missing join
+    never turns 3 pictures into 2.
+    """
+    slack = max(4, int(GRID_SLACK * length))
+    for n in range(min(GRID_MAX, len(cuts) + 1), 1, -1):
+        taken: list[int] = []
+        for k in range(1, n):
+            want = round(length * k / n)
+            near = sorted(cuts, key=lambda c: abs(c - want))
+            if not near or abs(near[0] - want) > slack:
+                break
+            taken.append(near[0])
+        else:
+            return taken
+    return []
+
+
 def detect_tiles_in(median: Image) -> list[Tile]:
     g = cv2.cvtColor(median, cv2.COLOR_BGR2GRAY).astype(np.float64)
     rows = np.nonzero(g.mean(axis=1) > BLACK_LEVEL)[0]
@@ -143,8 +172,8 @@ def detect_tiles_in(median: Image) -> list[Tile]:
     region = g[y0:y1, x0:x1]
     down = np.median(np.abs(np.diff(region, axis=1)), axis=0)  # each column, along its rows
     across = np.median(np.abs(np.diff(region, axis=0)), axis=1)
-    xs = [x0] + [x0 + s for s in _seams(down, x1 - x0)] + [x1]
-    ys = [y0] + [y0 + s for s in _seams(across, y1 - y0)] + [y1]
+    xs = [x0] + [x0 + s for s in _grid(_seams(down, x1 - x0), x1 - x0)] + [x1]
+    ys = [y0] + [y0 + s for s in _grid(_seams(across, y1 - y0), y1 - y0)] + [y1]
     tiles: list[Tile] = []
     for r in range(len(ys) - 1):
         for c in range(len(xs) - 1):
