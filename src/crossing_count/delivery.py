@@ -82,8 +82,8 @@ def folder_name(brand: str, store: str, code: str) -> str:
     return NOT_IN_NAMES.sub("-", f"{words} - {str(code).strip()}").strip(" .")
 
 
-def where(root: Path, store: dict[str, Any]) -> Path:
-    """The folder this validation belongs in, made or not."""
+def destination(root: Path, store: dict[str, Any]) -> tuple[Path, str, bool]:
+    """Where this validation belongs, its brand, and whether the brand's folder is there."""
     code = str(store.get("code") or "").strip()
     if not code:
         raise DeliveryError("The store code is empty, so there is no brand to file this under.")
@@ -92,13 +92,32 @@ def where(root: Path, store: dict[str, Any]) -> Path:
         raise DeliveryError(
             f"{code} does not say which brand it is. Add its prefix on the Report page "
             f"(Shared folder), or file this validation by hand.")
-    return brand_folder(root, brand) / folder_name(brand, str(store.get("name") or ""), code)
+    folder = brand_folder(root, brand)
+    return folder / folder_name(brand, str(store.get("name") or ""), code), brand, folder.is_dir()
+
+
+def where(root: Path, store: dict[str, Any]) -> Path:
+    """The folder this validation belongs in, made or not."""
+    return destination(root, store)[0]
+
+
+def _folders(root: Path) -> list[str]:
+    try:
+        return sorted(p.name for p in root.iterdir() if p.is_dir())
+    except OSError:
+        return []
 
 
 def plan(root: Path, store: dict[str, Any], report: Path,
          video: Path | None = None) -> dict[str, Any]:
-    """What would be copied where, for the person to agree to before anything is."""
-    out = where(root, store)
+    """What would be copied where, for the person to agree to before anything is.
+
+    Including a word of warning when the brand has no folder here but other brands do. The
+    likeliest reason is that the folder chosen is a level out - the one holding the brands'
+    parent rather than the brands - and a brand folder made in the wrong place on a shared
+    drive is work nobody finds again.
+    """
+    out, brand, brand_there = destination(root, store)
     files: list[dict[str, Any]] = []
     for p in _files(report, video):
         try:
@@ -106,7 +125,15 @@ def plan(root: Path, store: dict[str, Any], report: Path,
         except OSError:
             continue
         files.append({"name": p.name, "bytes": size, "footage": p == video})
-    return {"folder": str(out), "exists": out.is_dir(), "files": files,
+    here = _folders(root)
+    warn = None
+    if not brand_there and here:
+        warn = (f"There is no {brand} folder in the folder you chose, which holds "
+                f"{', '.join(here[:4])}{' and more' if len(here) > 4 else ''}. A {brand} folder "
+                f"will be made here. If the brands live somewhere else, change the folder "
+                f"first.")
+    return {"folder": str(out), "exists": out.is_dir(), "files": files, "brand": brand,
+            "brand_exists": brand_there, "warn": warn,
             "bytes": sum(int(f["bytes"]) for f in files)}
 
 

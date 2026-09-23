@@ -176,3 +176,35 @@ def test_the_whole_way_through_the_pages(two_tile_video: dict[str, Any], tmp_pat
     assert not [p for p in out.iterdir() if p.suffix == ".json"]
     assert [d["action"] for d in Wizard(two_tile_video["video"], two_tile_video["dir"],
                                         tmp_path / "data").state["decisions"]].count("delivered") == 1
+
+
+def test_the_brand_folder_is_found_under_the_folder_you_chose(tmp_path: Path,
+                                                              monkeypatch: pytest.MonkeyPatch
+                                                              ) -> None:
+    """Choose the folder the brands sit in, and each validation lands in its brand's own."""
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path / "home"))
+    rag = tmp_path / "External" / "RAG"
+    for name in ("Connor", "Johnny Big", "Rockwear", "TAROCASH", "YD"):
+        (rag / name).mkdir(parents=True)
+    report = tmp_path / "r.pptx"
+    report.write_bytes(b"deck")
+
+    for code, store, want in (("CN-123", "Tweed Heads", "Connor/Connor Tweed Heads - CN-123"),
+                              ("JB-401", "Werribee", "Johnny Big/Johnny Big Werribee - JB-401"),
+                              ("YD-612", "Chadstone", "YD/YD Chadstone - YD-612")):
+        out = delivery.where(rag, {"code": code, "name": store})
+        assert out == rag / want
+    said = delivery.plan(rag, {"code": "CN-123", "name": "Tweed Heads"}, report)
+    assert said["brand"] == "Connor" and said["brand_exists"] is True and said["warn"] is None
+
+    # a folder one level out: the brands are not in it, so a new Connor folder would be made
+    # beside RAG rather than inside it. Said before anything is copied, not found afterwards.
+    outer = delivery.plan(tmp_path / "External", {"code": "CN-123", "name": "Tweed Heads"}, report)
+    assert outer["brand_exists"] is False
+    assert "no Connor folder in the folder you chose" in outer["warn"]
+    assert "RAG" in outer["warn"]
+
+    # an empty folder is somebody starting out, not a mistake: no warning
+    fresh = tmp_path / "new"
+    fresh.mkdir()
+    assert delivery.plan(fresh, {"code": "CN-123", "name": "Tweed Heads"}, report)["warn"] is None

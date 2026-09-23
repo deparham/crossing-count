@@ -1782,6 +1782,7 @@ async function renderDeliver() {
   if (p.problem) { box.innerHTML = `<b>Deliver to the customer</b><div class="warn" style="margin-top:6px">${esc(p.problem)}</div>`; return; }
   box.innerHTML = `<b>Deliver to the customer</b>
     <div class="muted" style="margin-top:4px">Into <code>${esc(p.folder)}</code>${p.exists ? "" : " (it will be made)"}</div>
+    ${p.warn ? `<div class="warn" style="margin-top:6px">${esc(p.warn)}</div>` : ""}
     <ul class="muted" style="margin:6px 0 0 18px">${p.files.map((f) => `<li>${esc(f.name)} <span style="opacity:.7">${fmtBytes(f.bytes)}</span>${f.footage ? ' <span class="warn">the footage</span>' : ""}</li>`).join("")}</ul>
     <label style="display:block;margin-top:8px"><input type="checkbox" id="delFootage" ${want ? "checked" : ""}> Send the footage as well <span class="muted">(it shows identifiable people and belongs to the retailer)</span></label>
     <div style="margin-top:8px"><button id="delGo" class="primary">Send ${fmtBytes(p.bytes)} to the shared drive</button></div>
