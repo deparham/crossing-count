@@ -653,13 +653,20 @@ def find_run(rec: dict[str, Any], runs_root: Path) -> tuple[Path, float, set[str
 
 
 def _video_of(run_dir: Path) -> Path:
-    st = _read(run_dir / "wizard" / "state.json") or {}
-    options: list[str] = [str(st.get("video") or "")]
+    """The video the recorded detections were made from.
+
+    Which is not always the video the run folder is named after. Counting by hand on marked
+    footage runs the tool on the clean twin, so the person's video is the marked one and the
+    detections are the clean one's. Replaying them needs the clean one: the folder's own
+    video is a last resort, for older runs whose activity does not say.
+    """
+    options: list[str] = []
     for p in sorted(run_dir.glob("*/activity.json")):
         v = (_read(p) or {}).get("video") or {}
         options.append(str(v.get("path") or ""))
         if v.get("filename"):
             options += [str(f / str(v["filename"])) for f in default_folders()]
+    options.append(str((_read(run_dir / "wizard" / "state.json") or {}).get("video") or ""))
     for o in options:
         if o and Path(o).is_file():
             return Path(o)

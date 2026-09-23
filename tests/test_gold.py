@@ -317,3 +317,28 @@ def test_windows_counted_both_ways_show_how_far_the_marks_move_a_count(
         recs += [_counted(f"X{k}", "clean", [7], "Alex", 1), _counted(f"X{k}-marked", "marked", [7], "Sam", 20)]
     said = gold.marks_effect()["sentence"]
     assert said.startswith("Across 5 windows counted both ways") and "towards the system's number 1" in said
+
+
+def test_a_clip_counted_on_marked_footage_replays_its_clean_twin(tmp_path: Path) -> None:
+    """Counting by hand on marked footage runs the tool on the clean twin, so the folder is
+    named after the person's video and the detections are the twin's. Replaying them needs
+    the twin: taking the folder's own video read the marked one and refused the whole clip
+    with "activity.json was made from a different video"."""
+    run = tmp_path / "runs" / "export-cn-9-marked-1100"
+    cam = run / "cn-9-pb1"
+    cam.mkdir(parents=True)
+    (run / "wizard").mkdir()
+    marked, clean = tmp_path / "CN-9 marked.mp4", tmp_path / "CN-9.mp4"
+    for v in (marked, clean):
+        v.write_bytes(b"not really a video, but it is on the disk")
+    (run / "wizard" / "state.json").write_text(json.dumps({"video": str(marked)}))
+    (cam / "activity.json").write_text(json.dumps(
+        {"video": {"path": str(clean), "filename": clean.name}}))
+    assert gold._video_of(run) == clean
+
+    (cam / "activity.json").write_text(json.dumps({"video": {}}))  # an older run says nothing
+    assert gold._video_of(run) == marked
+    clean.unlink()
+    marked.unlink()
+    with pytest.raises(gold.GoldError, match="no longer on this computer"):
+        gold._video_of(run)
