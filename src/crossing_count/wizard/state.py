@@ -607,11 +607,9 @@ class Wizard:
         report = Path(str((self.state.get("report") or {}).get("path") or ""))
         if not report.is_file():
             return None
-        final = self.state.get("final") or {}
-        run_folder = Path(str(final["folder"])) if final.get("folder") else None
         try:
             return delivery.plan(root, self.state["store"], report,
-                                 self.video if footage else None, run_folder)
+                                 self.video if footage else None)
         except delivery.DeliveryError as exc:
             return {"problem": str(exc)}
 
@@ -621,11 +619,9 @@ class Wizard:
             report = Path(str((self.state.get("report") or {}).get("path") or ""))
             if not report.is_file():
                 raise WizardError("Make the report first: there is nothing to deliver.")
-            final = self.state.get("final") or {}
             try:
                 got = delivery.deliver(root, self.state["store"], report,
-                                       self.video if footage else None,
-                                       Path(str(final["folder"])) if final.get("folder") else None)
+                                       self.video if footage else None)
             except delivery.DeliveryError as exc:
                 raise WizardError(str(exc)) from exc
             self.state["delivered"] = {**got, "at": _now()}

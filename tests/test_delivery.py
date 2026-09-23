@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -73,22 +72,20 @@ def test_what_would_be_copied_is_said_before_anything_is(drive: Path, tmp_path: 
     report.with_suffix(".pdf").write_bytes(b"pdf")
     video = tmp_path / "Export - CN-123.mp4"
     video.write_bytes(b"x" * 5000)
-    run = tmp_path / "CC-VAL-2026-AB12-000001"
-    run.mkdir()
-    (run / "manifest.json").write_text(json.dumps({"validation_id": "CC-VAL-2026-AB12-000001"}))
-
     store = {"code": "CN-123", "name": "Tweed Heads"}
-    said = delivery.plan(drive, store, report, video, run)
+    said = delivery.plan(drive, store, report, video)
     assert said["folder"] == str(drive / "Connor" / "Connor Tweed Heads - CN-123")
     assert said["exists"] is False  # nothing has been made yet: this is only what would be
     assert not (drive / "Connor" / "Connor Tweed Heads - CN-123").exists()
+    # the report and the footage: the customer gets the report, not the workings
     assert [f["name"] for f in said["files"]] == [
-        report.name, report.with_suffix(".pdf").name, "manifest.json", video.name]
-    assert [f["footage"] for f in said["files"]] == [False, False, False, True]
+        report.name, report.with_suffix(".pdf").name, video.name]
+    assert [f["footage"] for f in said["files"]] == [False, False, True]
     assert said["bytes"] >= 5000
 
-    without = delivery.plan(drive, store, report, None, run)
-    assert not any(f["footage"] for f in without["files"])
+    without = delivery.plan(drive, store, report, None)
+    assert [f["name"] for f in without["files"]] == [report.name,
+                                                     report.with_suffix(".pdf").name]
 
 
 def test_delivering_it(drive: Path, tmp_path: Path) -> None:
@@ -175,5 +172,7 @@ def test_the_whole_way_through_the_pages(two_tile_video: dict[str, Any], tmp_pat
     assert (out / two_tile_video["video"].name).is_file()
     assert any(p.suffix == ".pdf" for p in out.iterdir())
     assert got["delivered"]["at"] and len(list(drive.iterdir())) == 1  # no second Connor folder
+    # nothing of the validation's own record goes: that stays with the validation
+    assert not [p for p in out.iterdir() if p.suffix == ".json"]
     assert [d["action"] for d in Wizard(two_tile_video["video"], two_tile_video["dir"],
                                         tmp_path / "data").state["decisions"]].count("delivered") == 1

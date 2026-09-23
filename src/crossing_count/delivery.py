@@ -3,7 +3,9 @@
     <delivery>/<Brand>/<Brand Store - CODE>/
         the report, as a PDF and a PowerPoint
         the footage the count was made from
-        result.json and manifest.json, so the folder says what it is
+
+The customer gets the report, not the workings: the validation's own record stays with the
+validation, in validations/<ID>/ on this computer.
 
 The brand comes from the store code's prefix, because the store's name rarely carries it
 (CN-123 is "Tweed Heads"). A brand folder already on the drive is used exactly as it is
@@ -93,12 +95,12 @@ def where(root: Path, store: dict[str, Any]) -> Path:
     return brand_folder(root, brand) / folder_name(brand, str(store.get("name") or ""), code)
 
 
-def plan(root: Path, store: dict[str, Any], report: Path, video: Path | None,
-         run_folder: Path | None) -> dict[str, Any]:
+def plan(root: Path, store: dict[str, Any], report: Path,
+         video: Path | None = None) -> dict[str, Any]:
     """What would be copied where, for the person to agree to before anything is."""
     out = where(root, store)
     files: list[dict[str, Any]] = []
-    for p in _files(report, video, run_folder):
+    for p in _files(report, video):
         try:
             size = p.stat().st_size
         except OSError:
@@ -108,18 +110,15 @@ def plan(root: Path, store: dict[str, Any], report: Path, video: Path | None,
             "bytes": sum(int(f["bytes"]) for f in files)}
 
 
-def _files(report: Path, video: Path | None, run_folder: Path | None) -> list[Path]:
+def _files(report: Path, video: Path | None) -> list[Path]:
     out = [p for p in (report, report.with_suffix(".pdf")) if p.is_file()]
-    for name in ("result.json", "manifest.json"):
-        if run_folder is not None and (run_folder / name).is_file():
-            out.append(run_folder / name)
     if video is not None and video.is_file():
         out.append(video)
     return list(dict.fromkeys(out))
 
 
-def deliver(root: Path, store: dict[str, Any], report: Path, video: Path | None = None,
-            run_folder: Path | None = None) -> dict[str, Any]:
+def deliver(root: Path, store: dict[str, Any], report: Path,
+            video: Path | None = None) -> dict[str, Any]:
     """Copy this validation into the brand's folder. The footage only when it is given.
 
     A file already there is written beside the new one rather than over it: a delivered
@@ -131,7 +130,7 @@ def deliver(root: Path, store: dict[str, Any], report: Path, video: Path | None 
     except OSError as exc:
         raise DeliveryError(f"{out} could not be made ({exc}). Is the drive connected?") from exc
     done: list[str] = []
-    for src in _files(report, video, run_folder):
+    for src in _files(report, video):
         dst = out / src.name
         k = 2
         while dst.exists():
