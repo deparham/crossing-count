@@ -8,11 +8,18 @@ temporal median frame, so people and moving overlays do not disturb it.
 Splitting one camera's picture in two is the costly mistake here, not missing a
 join: half a picture gets its own line, its own counting rule and its own row in
 the report, and the half without the camera's name in the header looks like a
-camera nobody can name. Two things keep that from happening. A seam has to hold
-along the whole of its line, not merely on average (_seams), and it has to fall
-where an even division of the picture falls, because the pictures in an export
-are a grid of equal parts (_grid). Neither is enough alone: an edge inside one
-camera's picture can run its whole height and be sharper than the real join.
+camera nobody can name. Three things keep that from happening, and each was put
+there by an export the one before it could not refuse:
+
+    _seams                the seam holds along the whole of its line, not merely
+                          on average. A pillar down part of a picture averages
+                          high and stops there.
+    _grid                 it falls on an even division, because the pictures in
+                          an export are a grid of equal parts. A wall down the
+                          whole height of one camera's picture does not.
+    _shaped_like_pictures the pieces are still shaped like camera pictures. A
+                          line across the middle of a 640x480 picture holds all
+                          the way and halves it evenly; 640x239 is the giveaway.
 """
 
 from __future__ import annotations
@@ -34,6 +41,9 @@ HEADER_LOOK = 12  # rows below a candidate boundary that must all be picture, no
 HEADER_RISE = 1.5  # how much brighter than the bar every one of them has to be
 GRID_MAX = 4  # the most camera pictures one export holds
 GRID_SLACK = 0.01  # a seam this far from an even division of the picture is still that one
+# A camera picture is roughly as tall as it is wide: every one on hand is 4:3 or 1.2:1.
+# Anything far outside that is not a picture but a piece of one.
+ASPECT = (0.6, 2.2)
 
 
 @dataclass(frozen=True)
@@ -161,6 +171,18 @@ def _grid(cuts: list[int], length: int) -> list[int]:
     return []
 
 
+def _shaped_like_pictures(xs: list[int], ys: list[int]) -> bool:
+    """Whether cutting here leaves pieces shaped like camera pictures.
+
+    The last thing standing between one camera and two. A TC-410 export is one 640x480
+    camera with a hard line straight across the middle of its picture: the seam holds down
+    its whole length and 240 is an even division of 480, so neither of the other two tests
+    can refuse it. The halves give it away - 640x239 is not a camera picture.
+    """
+    return all(ASPECT[0] <= (b - a) / (d - c) <= ASPECT[1]
+               for a, b in zip(xs, xs[1:]) for c, d in zip(ys, ys[1:]) if d > c)
+
+
 def detect_tiles_in(median: Image) -> list[Tile]:
     g = cv2.cvtColor(median, cv2.COLOR_BGR2GRAY).astype(np.float64)
     rows = np.nonzero(g.mean(axis=1) > BLACK_LEVEL)[0]
@@ -172,8 +194,13 @@ def detect_tiles_in(median: Image) -> list[Tile]:
     region = g[y0:y1, x0:x1]
     down = np.median(np.abs(np.diff(region, axis=1)), axis=0)  # each column, along its rows
     across = np.median(np.abs(np.diff(region, axis=0)), axis=1)
-    xs = [x0] + [x0 + s for s in _grid(_seams(down, x1 - x0), x1 - x0)] + [x1]
-    ys = [y0] + [y0 + s for s in _grid(_seams(across, y1 - y0), y1 - y0)] + [y1]
+    cx = [x0 + s for s in _grid(_seams(down, x1 - x0), x1 - x0)]
+    cy = [y0 + s for s in _grid(_seams(across, y1 - y0), y1 - y0)]
+    # the most pictures whose pieces are still shaped like pictures; one picture last of all
+    for gx, gy in ((cx, cy), (cx, []), ([], cy), ([], [])):
+        xs, ys = [x0, *gx, x1], [y0, *gy, y1]
+        if _shaped_like_pictures(xs, ys):
+            break
     tiles: list[Tile] = []
     for r in range(len(ys) - 1):
         for c in range(len(xs) - 1):

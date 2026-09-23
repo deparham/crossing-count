@@ -131,3 +131,23 @@ def test_line_match_score_separates_true_and_moved_lines() -> None:
     assert hsv is not None
     assert ov.line_match_score(img, line, hsv) > 0.9
     assert ov.line_match_score(img, line + [0.0, 25.0], hsv) < 0.1
+
+
+def test_a_line_across_the_middle_does_not_halve_one_picture() -> None:
+    """The bug this guards: TC-410 is one 640x480 camera with a hard line straight across
+    the middle of its picture. The seam holds the whole way and 240 halves 480 evenly, so
+    neither the seam nor the grid can refuse it; it came out as two cameras, the lower one
+    with no name in its header. What gives it away is the shape: 640x239 is not a picture."""
+    frame = texture(480, 640, seed=13, mean=110)
+    frame[236:244] = 250  # a hard line straight across, at the exact halfway point
+    tiles = lay.detect_tiles_in(frame)
+    assert len(tiles) == 1, [(t.y0, t.y1) for t in tiles]
+    assert (tiles[0].width, tiles[0].height) == (640, 480)
+
+
+def test_what_counts_as_the_shape_of_a_picture() -> None:
+    assert lay._shaped_like_pictures([0, 640], [0, 480])  # one 4:3 picture
+    assert lay._shaped_like_pictures([0, 640, 1280], [0, 480])  # two side by side
+    assert lay._shaped_like_pictures([0, 640, 1280], [0, 480, 960])  # 2x2
+    assert not lay._shaped_like_pictures([0, 640], [0, 240, 480])  # halved across: 640x240
+    assert not lay._shaped_like_pictures([0, 160, 320, 480, 640], [0, 480])  # quartered down
