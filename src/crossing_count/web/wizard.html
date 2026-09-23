@@ -261,6 +261,7 @@
   <div class="card" id="namesCard" hidden>
     <div class="big">Which cameras will you count?</div>
     <div class="muted">Name each camera as it is in RetailNext, and untick any you don't want to count.</div>
+    <div id="namesWarn" class="warn" style="margin:8px 0" hidden></div>
     <div id="names" class="pics"></div>
     <button id="namesDone" class="primary">Next →</button>
   </div>
@@ -870,11 +871,17 @@ ENTER.draw = async () => {
 };
 function showDraw() {
   $("namesCard").hidden = true; $("drawWrap").hidden = false;
+  if (W.drawn && W.drawn.too_many) msg(W.drawn.too_many, "warn");
   if ($("draw").dataset.src !== W.st.draw_url) { $("draw").src = W.st.draw_url; $("draw").dataset.src = W.st.draw_url; }
   refreshDrawn(); clearInterval(W.timer); W.timer = setInterval(refreshDrawn, 3000);
 }
 function showNames() {
   $("drawWrap").hidden = true; $("namesCard").hidden = false;
+  // RetailNext's own count of the store's cameras: nothing to do with the pictures, so no
+  // wall, line or shadow in the footage can fool it
+  const many = W.drawn && W.drawn.too_many;
+  $("namesWarn").hidden = !many;
+  if (many) $("namesWarn").textContent = many;
   const current = Object.fromEntries(W.st.cameras.map((c) => [c.picture, c.sensor]));
   $("names").innerHTML = W.st.pictures.map((p, i) => {
     const drawn = W.drawn && W.drawn.pictures[i] && W.drawn.pictures[i].configs[0];

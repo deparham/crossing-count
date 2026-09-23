@@ -454,3 +454,55 @@ def test_an_hour_of_footage_asks_for_an_hour_not_four_quarters(server: list[Any]
     rn.camera_counts(CONN, ARMADALE, "392", ["Armadale_Entrance"],
                      at("2026-09-12T11:00:00"), at("2026-09-12T11:59:50"), minutes=15)
     assert json.loads(seen[-1].data)["group_bys"][0]["value"] == 15
+
+
+def test_retailnexts_own_camera_count_checks_the_pictures_found(
+        two_tile_video: dict[str, Any], tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """A check on the pictures that has nothing to do with the pictures. A wall or a line in
+    the footage can fool everything that measures pixels; it cannot fool RetailNext's own
+    count of a store's cameras."""
+    from fastapi.testclient import TestClient
+
+    from crossing_count.wizard_app import create_wizard_app
+
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path / "home"))
+    client = TestClient(create_wizard_app(two_tile_video["dir"], tmp_path / "data",
+                                          folders=[two_tile_video["video"].parent]))
+    client.post("/api/open", json={"path": str(two_tile_video["video"])})
+
+    # not connected to RetailNext: the page still works, and says nothing either way
+    got = client.get("/api/drawn").json()
+    assert got["store_cameras"] is None and got["too_many"] is None
+    assert len(got["pictures"]) == 2
+
+    # RetailNext says this store has one camera, and two pictures were found: say so
+    monkeypatch.setattr(rn, "download_info", lambda v: {"code": "CN-9"})
+    monkeypatch.setattr(rn, "video_channels", lambda nodes, uuid: {"CN-9-PB1": "v1"})
+    monkeypatch.setattr(rn, "connections", lambda: [rn.Connection("acme", "AK", "SK")])
+    monkeypatch.setattr(rn, "locations", lambda conn: NODES)
+    monkeypatch.setattr(rn, "find_store_in", lambda sets, code: ("acme", {"uuid": "s1"}))
+    said = client.get("/api/drawn").json()
+    assert said["store_cameras"] == 1
+    assert "2 were found in this video, but RetailNext says CN-9 has 1" in said["too_many"]
+    assert "may have been cut in two" in said["too_many"]
+
+    # as many cameras as pictures, or more: nothing to say
+    monkeypatch.setattr(rn, "video_channels",
+                        lambda nodes, uuid: {"CN-9-PB1": "v1", "CN-9-R2": "v2"})
+    assert client.get("/api/drawn").json()["too_many"] is None
+
+    # the store's locations are asked for once and kept, so a later outage changes nothing
+    def down(conn: Any) -> Any:
+        raise rn.RetailNextError("no network")
+
+    monkeypatch.setattr(rn, "locations", down)
+    assert client.get("/api/drawn").json()["store_cameras"] == 2  # answered from what is kept
+
+    # but a page opened while RetailNext is unreachable must still open, with no warning
+    cold = TestClient(create_wizard_app(two_tile_video["dir"], tmp_path / "data2",
+                                        folders=[two_tile_video["video"].parent]))
+    cold.post("/api/open", json={"path": str(two_tile_video["video"])})
+    again = cold.get("/api/drawn").json()
+    assert again["store_cameras"] is None and again["too_many"] is None
+    assert len(again["pictures"]) == 2

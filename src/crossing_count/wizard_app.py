@@ -509,6 +509,21 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         sub, store = rn.find_store_in(sets, code)
         return conns[sub], sets[sub], store
 
+    def rn_camera_count(code: str) -> int | None:
+        """How many cameras RetailNext says this store has, or None when it cannot be asked.
+
+        A check on the pictures found that has nothing to do with the pictures: no wall,
+        line or shadow can fool it. It is a ceiling, not an answer - an export can hold
+        fewer cameras than the store has, because whoever exported it chose the channels.
+        """
+        if not code:
+            return None
+        try:
+            _, nodes, store = rn_store(code)
+            return len(rn.video_channels(nodes, str(store["uuid"]))) or None
+        except (HTTPException, rn.RetailNextError, OSError, KeyError):
+            return None  # not connected, no such store, no network: the page still works
+
     def rn_day(text: str) -> date:
         try:
             return date.fromisoformat(text)
@@ -808,8 +823,16 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         s = setup()
         cfgs = s.existing()
         marks = s.marks()
-        info = wiz().state.get("retailnext") or {}
-        return {"pictures": [
+        w = wiz()
+        info = w.state.get("retailnext") or {}
+        code = str(info.get("code") or w.state["store"].get("code")
+                   or (rn.download_info(w.video) or {}).get("code") or "")
+        have = rn_camera_count(code)
+        many = f"More pictures than cameras: {len(s.tiles)} were found in this video, but " \
+               f"RetailNext says {code} has {have}. One camera's picture may have been cut " \
+               f"in two. Count only the pictures that are whole cameras." \
+            if have is not None and len(s.tiles) > have else None
+        return {"store_cameras": have, "too_many": many, "pictures": [
             {"picture": t.index, "marks": bool(marks[t.index]["marks"]),
              "configs": [{"sensor": c["sensor"], "file": c["file"], "how": c["how"],
                           "confident": c["confident"], "alignment": c["alignment"],
