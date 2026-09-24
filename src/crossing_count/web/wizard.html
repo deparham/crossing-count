@@ -223,7 +223,15 @@
       <button id="rnConnect" style="margin-top:8px">Connect</button>
       <span class="muted">Kept in this computer's Keychain (Credential Manager on Windows), never in a file.</span>
     </div>
-    <button id="rnFind" class="primary" style="margin-top:10px">Find the windows</button>
+    <div class="grid2" style="grid-template-columns:1fr;margin-top:8px">
+      <label>Several stores at once: their codes, separated by commas. Each store's windows are queued by the rule above, one store's worth at a time, and you can start counting the first while the rest come down.
+        <input type="text" id="rnCodes" placeholder="e.g. CN-123, JB-401, RW-409" autocomplete="off" spellcheck="false"></label>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button id="rnFind" class="primary">Find the windows</button>
+      <button id="rnQueue">Queue all these stores</button>
+    </div>
+    <div id="rnQueueBox" class="sub" style="margin-top:10px" hidden></div>
     <div id="rnWindows"></div>
   </div>
   <div class="card">
@@ -416,6 +424,7 @@
     <div id="logoInfo" class="muted" style="margin-top:6px"></div>
     <div style="margin-top:12px"><button id="make" class="primary">Make PowerPoint</button></div>
     <div id="made" style="margin-top:12px"></div>
+    <div id="nextUp" class="sub" style="margin-top:12px" hidden></div>
     <div id="finalBox" class="sub" hidden></div>
   </div>
   <div class="card" id="goldCard" hidden>
@@ -534,6 +543,7 @@ function go(key) {
 // ---------- footage ----------
 ENTER.footage = async (folder) => {
   rnSetup();
+  renderQueue();
   const r = await api(`/api/videos${folder ? "?folder=" + encodeURIComponent(folder) : ""}`);
   $("videos").innerHTML = r.videos.length
     ? `<tr><th>Video</th><th>Changed</th><th>Size</th></tr>` + r.videos.map((v) =>
@@ -817,6 +827,69 @@ $("rnFind").addEventListener("click", async () => {
         (s.notes || []).map((n) => `<div class="warn" style="margin-top:6px">${esc(n)}</div>`).join("");
   } catch (e) { $("rnWindows").innerHTML = ""; msg(e.message, "err"); }
 });
+// ---------- several stores at once ----------
+// One window comes down at a time, store by store. The first to land can be counted while
+// the rest are still coming, and when its report is made the next one is offered.
+const QSTATE = { waiting: "waiting", exporting: "RetailNext is preparing it",
+                 downloading: "downloading", ready: "ready", failed: "failed" };
+async function renderQueue(open = false) {
+  const box = $("rnQueueBox");
+  let q;
+  try { q = await api("/api/retailnext/queue"); } catch (e) { box.hidden = true; return; }
+  W.queue = q;
+  box.hidden = !q.items.length;
+  if (box.hidden) return;
+  const line = (i) => {
+    const pct = i.total ? ` ${Math.round(100 * i.done / i.total)}%` : "";
+    const what = i.state === "downloading" ? `downloading${pct}` : QSTATE[i.state] || i.state;
+    const cls = i.state === "ready" ? "ok" : i.state === "failed" ? "err" : "muted";
+    const act = i.state === "ready" ? `<button data-open="${esc(i.id)}">Count this one</button>` : "";
+    const drop = `<button data-forget="${esc(i.id)}" title="Take it out of the list">×</button>`;
+    return `<tr><td>${esc(i.label)}</td><td class="${cls}">${esc(what)}${i.state === "failed" ? `: ${esc(i.message)}` : ""}</td><td style="white-space:nowrap">${act} ${drop}</td></tr>`;
+  };
+  box.innerHTML = `<b>Footage queue</b> <span class="muted">${q.ready.length} ready, ${q.items.filter((i) => i.state !== "ready" && i.state !== "failed").length} to come${q.working ? "" : " (nothing running)"}</span>
+    <div class="scroll" style="margin-top:6px"><table class="ivs">${q.items.map(line).join("")}</table></div>`;
+  if (q.items.some((i) => i.state !== "ready" && i.state !== "failed")) {
+    clearTimeout(W.qTimer); W.qTimer = setTimeout(() => renderQueue(), 3000);
+  }
+  if (open && q.ready.length) openQueued(q.ready[0]);
+}
+async function openQueued(item) {
+  try {
+    await openVideo(item.path);
+    if (item.count) setState(await api("/api/mode", { mode: item.count === "auto" ? "auto" : "manual" }));
+    if (item.direction) setState(await api("/api/direction", { direction: item.direction }));
+    go(nextKey());
+  } catch (e) { msg(e.message, "err"); }
+}
+$("rnQueue").addEventListener("click", async () => {
+  const codes = $("rnCodes").value.split(/[,\n]+/).map((c) => c.trim()).filter(Boolean);
+  if (!codes.length) return msg("Type the store codes, separated by commas.", "warn");
+  const mode = $("rnMode").value;
+  $("rnQueue").disabled = true;
+  try {
+    const q = await api("/api/retailnext/queue", {
+      codes, date: $("rnDay").value, minutes: +$("rnMinutes").value,
+      direction: $("rnDir").value === "both" ? "in" : $("rnDir").value,
+      direction_for: $("rnDir").value, mode: $("rnSampling").value, count: mode,
+      marks: mode === "marked" || mode === "both", both: mode === "both" });
+    msg(q.problems.length ? q.problems.join(" ") : `Queued ${q.added} window(s). The first will be ready shortly.`,
+        q.problems.length ? "warn" : "ok");
+  } catch (e) { msg(e.message, "err"); }
+  finally { $("rnQueue").disabled = false; renderQueue(); }
+});
+$("rnQueueBox").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-open],[data-forget]");
+  if (!b) return;
+  if (b.dataset.open) {
+    const item = (W.queue.items || []).find((i) => i.id === b.dataset.open);
+    if (item) openQueued(item);
+  } else {
+    try { await api("/api/retailnext/queue/forget", { id: b.dataset.forget }); } catch (err) { msg(err.message, "err"); }
+    renderQueue();
+  }
+});
+
 $("rnWindows").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-win]");
   if (!b || !W.rnPick) return;
@@ -1717,7 +1790,28 @@ ENTER.report = async () => {
   showExamples(s.examples);
   $("made").innerHTML = s.report ? madeHtml(s.report.path) : "";
   renderDeliver();
+  nextUp();
 };
+async function nextUp() {
+  // Offered once this one has a report: the next window already down, or what is still coming.
+  const box = $("nextUp"), s = W.st;
+  box.hidden = !(s && s.report);
+  if (box.hidden) return;
+  let q;
+  try { q = await api("/api/retailnext/queue"); } catch (e) { box.hidden = true; return; }
+  W.queue = q;
+  const here = s.filename || "";
+  const ready = (q.ready || []).filter((i) => !(i.paths || []).some((p) => p.endsWith(here)));
+  const coming = q.items.filter((i) => i.state !== "ready" && i.state !== "failed");
+  if (!ready.length && !coming.length) { box.hidden = true; return; }
+  box.innerHTML = ready.length
+    ? `<b>Next: ${esc(ready[0].label)}</b> <span class="muted">${coming.length ? `, and ${coming.length} more still coming` : "— the last one"}</span>
+       <div style="margin-top:8px"><button id="goNext" class="primary">Count the next one →</button></div>`
+    : `<b>Still coming</b> <span class="muted">${esc(coming[0].label)}: ${esc(coming[0].state === "downloading" ? "downloading" : "RetailNext is preparing it")}. This page will offer it when it is down.</span>`;
+  if (ready.length) $("goNext").addEventListener("click", () => openQueued(ready[0]));
+  else { clearTimeout(W.nextTimer); W.nextTimer = setTimeout(nextUp, 5000); }
+}
+
 async function showGold() {  // a count by hand of every moment can be kept as a gold clip
   const card = $("goldCard");
   card.hidden = !(W.st && W.st.mode === "manual");
@@ -1848,7 +1942,7 @@ $("make").addEventListener("click", async () => {
     setState(await api("/api/store", { name: $("storeName").value, code: $("storeCode").value, location: $("storeLoc").value,
                                          report_date: $("repDate").value, operator: $("operator").value }));
     const r = await api("/api/report", {});
-    setState(r); $("made").innerHTML = madeHtml(r.path); msg(""); showExamples(r.examples); renderFinal(); renderDeliver();
+    setState(r); $("made").innerHTML = madeHtml(r.path); msg(""); showExamples(r.examples); renderFinal(); renderDeliver(); nextUp();
     while (W.st.examples && W.st.examples.status === "saving") {
       await new Promise((ok) => setTimeout(ok, 2000));
       const ex = (await api("/api/examples")).examples; W.st.examples = ex; showExamples(ex);

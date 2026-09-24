@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -160,6 +160,21 @@ class DownloadIn(BaseModel):
     until: str
     marks: bool = False  # with RetailNext's own marks (for a count by hand)
     both: bool = False  # the same window twice: clean to count on, marked to count by hand
+
+
+class QueueIn(BaseModel):
+    """Several stores' footage at once: each store's windows, in the order the stores came."""
+
+    codes: list[str]
+    date: str
+    minutes: int = 15
+    direction: str = "in"
+    mode: str = "peak"  # the sampling rule
+    seed: int | None = None
+    marks: bool = False
+    both: bool = False
+    count: str = "auto"  # how it will be counted, so opening one needs nothing remembered
+    direction_for: str = ""  # the traffic to validate, set on the wizard when it is opened
 
 
 class DirectionIn(BaseModel):
@@ -318,6 +333,8 @@ class _Current:
     calibrate: str | None = None  # where this person's calibration drawing page is mounted
     rn_nodes: dict[str, list[dict[str, Any]]] | None = None  # per subscription, fetched once
     rn_job: dict[str, Any] | None = None  # the footage being exported and downloaded
+    rn_queue: list[dict[str, Any]] = field(default_factory=list)  # footage still to fetch
+    rn_working: bool = False  # a worker is draining the queue
     rn_plan: dict[str, Any] | None = None  # the windows last found: a download records its own
     update_job: dict[str, Any] | None = None  # the installed app downloading its new version
     gold_job: dict[str, Any] | None = None  # the automatic count being scored on gold clips
@@ -692,50 +709,39 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                 "windows": plan["chosen"], "considered": len(plan["candidates"]),
                 "sampling": {k: v for k, v in plan.items() if k not in ("candidates", "chosen")}}
 
-    @app.post("/api/retailnext/download")
-    def retailnext_download(b: DownloadIn) -> dict[str, Any]:
-        """Export the store's cameras for that window from RetailNext and download the video
-        (in the background: GET this to follow it)."""
-        mine = me()
-        if mine.rn_job and mine.rn_job.get("state") in ("exporting", "downloading"):
-            raise HTTPException(409, "A download is already under way.")
-        day = rn_day(b.date)
-        try:
-            conn, nodes, store = rn_store(b.code)
-            tz = store.get("time_zone")
-            if not tz:
-                raise rn.RetailNextError(f"RetailNext gives no time zone for {store.get('name')}.")
-            channels = rn.video_channels(nodes, str(store["uuid"]))
-            if not channels:
-                raise rn.RetailNextError(
-                    f"RetailNext has no camera video for {store.get('name')}: its counts come from "
-                    f"a sensor without video, so the footage has to come from elsewhere.")
-            start, end = rn.local_period(day, b.start, b.until, str(tz))
-        except rn.RetailNextError as exc:
-            raise HTTPException(400, str(exc)) from exc
+    def _fetch(item: dict[str, Any]) -> None:
+        """Export one window from RetailNext and download it. Raises RetailNextError or OSError.
+
+        Everything the window needs is worked out here rather than when it was queued, because
+        a queue can sit for an hour: the store's cameras, its clock and where the file goes are
+        all read at the moment the work is done.
+        """
+        day = date.fromisoformat(item["date"])
+        conn, nodes, store = rn_store(item["code"])
+        tz = store.get("time_zone")
+        if not tz:
+            raise rn.RetailNextError(f"RetailNext gives no time zone for {store.get('name')}.")
+        channels = rn.video_channels(nodes, str(store["uuid"]))
+        if not channels:
+            raise rn.RetailNextError(
+                f"RetailNext has no camera video for {store.get('name')}: its counts come from "
+                f"a sensor without video, so the footage has to come from elsewhere.")
+        start_at, end_at = rn.local_period(day, item["start"], item["until"], str(tz))
         target = next((f for f in (folders or default_folders()) if f.is_dir()),
                       paths.data_root() / "footage")
         target.mkdir(parents=True, exist_ok=True)
         # one export, or the same window twice: the clean one to count on and to count by hand,
         # the marked one for RetailNext's own line and for watching its tracker (a pair)
-        wanted = [False, True] if b.both else [b.marks]
-        dests = [rn.free_path(target, rn.footage_name(str(store.get("store_id") or b.code),
-                                                      start, end, m)) for m in wanted]
-        dest = dests[-1 if b.marks else 0]
-        job: dict[str, Any] = {"state": "exporting", "message": "RetailNext is preparing the video…",
-                               "done": 0, "total": None, "path": None, "cameras": sorted(channels),
-                               "of": len(wanted), "which": 1}
-        mine.rn_job = job
-        plan = (mine.rn_plan if mine.rn_plan and mine.rn_plan["request"] == [_bare(b.code), b.date]
-                else None)
-        chosen_by = sampling.record(plan, b.start, b.until) if plan else None
-
-        def one(marks: bool, where: Path, which: int) -> None:
-            """Export this window (with or without RetailNext's marks) and download it."""
+        wanted = [False, True] if item["both"] else [item["marks"]]
+        dests = [rn.free_path(target, rn.footage_name(str(store.get("store_id") or item["code"]),
+                                                      start_at, end_at, m)) for m in wanted]
+        item.update(cameras=sorted(channels), of=len(wanted),
+                    store=store.get("name") or item.get("store"))
+        for which, (marks, where) in enumerate(zip(wanted, dests, strict=True), start=1):
             say = "with RetailNext's marks" if marks else "clean"
-            job.update(which=which, state="exporting", done=0, total=None,
-                       message=f"RetailNext is preparing the video ({say})…")
-            export_id = rn.start_export(conn, list(channels.values()), start, end, marks)
+            item.update(which=which, state="exporting", done=0, total=None,
+                        message=f"RetailNext is preparing the video ({say})…")
+            export_id = rn.start_export(conn, list(channels.values()), start_at, end_at, marks)
             waited = 0.0
             while True:
                 state, info = rn.export_status(conn, export_id)
@@ -750,34 +756,130 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                                              "30 minutes: try again later.")
                 time.sleep(EXPORT_POLL_S)
                 waited += EXPORT_POLL_S
-                job["message"] = f"RetailNext is preparing the video ({say})… ({int(waited)} s)"
-            job.update(state="downloading", message=f"Downloading ({say})…")
-            rn.download(info, where, lambda done, total: job.update(done=done, total=total))
+                item["message"] = f"RetailNext is preparing the video ({say})… ({int(waited)} s)"
+            item.update(state="downloading", message=f"Downloading ({say})…")
+            rn.download(info, where, lambda done, total: item.update(done=done, total=total))
+        for marks, where in zip(wanted, dests, strict=True):
+            twin = next((str(o.name) for m, o in zip(wanted, dests, strict=True)
+                         if m is not marks), None)
+            rn.remember_download(where, {**rn.store_summary(conn.subscription, nodes, store),
+                                         "marks": marks, "start": start_at.isoformat(),
+                                         "end": end_at.isoformat(), "sampling": item.get("sampling"),
+                                         "twin": twin})
+        item.update(state="ready", message="Downloaded.",
+                    path=str(dests[-1 if item["marks"] else 0]),
+                    paths=[str(p) for p in dests])
 
-        def work() -> None:
+    def _drain(mine: _Current) -> None:
+        """Work through one person's queue in order, one window at a time.
+
+        One at a time because RetailNext prepares an export before it can be downloaded, and
+        asking for several at once does not make it faster. A window that fails is left in the
+        queue marked failed and the next one starts: one store being unavailable must not stop
+        the others.
+        """
+        while True:
+            item = next((i for i in mine.rn_queue if i["state"] == "waiting"), None)
+            if item is None:
+                mine.rn_working = False
+                return
+            mine.rn_job = item
             try:
-                for k, (marks, where) in enumerate(zip(wanted, dests, strict=True), start=1):
-                    one(marks, where, k)
-                for marks, where in zip(wanted, dests, strict=True):
-                    twin = next((str(o.name) for m, o in zip(wanted, dests, strict=True)
-                                 if m is not marks), None)
-                    rn.remember_download(where, {**rn.store_summary(conn.subscription, nodes, store),
-                                                 "marks": marks, "start": start.isoformat(),
-                                                 "end": end.isoformat(), "sampling": chosen_by,
-                                                 "twin": twin})
-                job.update(state="done", message="Downloaded.", path=str(dest),
-                           paths=[str(p) for p in dests])
+                _fetch(item)
             except rn.RetailNextError as exc:
-                job.update(state="failed", message=str(exc))
+                item.update(state="failed", message=str(exc))
             except OSError as exc:
-                job.update(state="failed", message=f"Could not save the video: {exc}")
+                item.update(state="failed", message=f"Could not save the video: {exc}")
+            except Exception as exc:  # noqa: BLE001  a queue must never die on one window
+                item.update(state="failed", message=f"{type(exc).__name__}: {exc}")
 
-        threading.Thread(target=work, daemon=True).start()
-        return job
+    def _start(mine: _Current) -> None:
+        if not mine.rn_working:
+            mine.rn_working = True
+            threading.Thread(target=_drain, args=(mine,), daemon=True).start()
+
+    def _queued(mine: _Current) -> dict[str, Any]:
+        return {"items": list(mine.rn_queue), "working": mine.rn_working,
+                "ready": [i for i in mine.rn_queue if i["state"] == "ready"]}
+
+    def _item(code: str, store: str, day: str, window: dict[str, Any], b: Any,
+              chosen_by: dict[str, Any] | None) -> dict[str, Any]:
+        return {"id": f"{code}-{day}-{window['from']}".replace(":", ""), "code": _bare(code),
+                "store": store, "date": day, "start": window["from"], "until": window["until"],
+                "marks": bool(b.marks), "both": bool(b.both), "sampling": chosen_by,
+                "count": getattr(b, "count", "auto"),
+                "direction": getattr(b, "direction_for", "") or getattr(b, "direction", ""),
+                "label": f"{code} {store} · {window['from']}–{window['until']}"
+                         + (f" · {window.get('role')}" if window.get("role") else ""),
+                "state": "waiting", "message": "Waiting for the ones before it.",
+                "done": 0, "total": None, "which": 1, "of": 2 if b.both else 1,
+                "path": None, "paths": [], "cameras": []}
+
+    @app.post("/api/retailnext/queue")
+    def retailnext_queue(b: QueueIn) -> dict[str, Any]:
+        """Queue several stores' footage: each store's windows by the sampling rule, the
+        stores in the order they were given, and one window fetched at a time."""
+        mine = me()
+        day = rn_day(b.date)
+        added: list[dict[str, Any]] = []
+        problems: list[str] = []
+        for code in b.codes:
+            try:
+                conn, nodes, store = rn_store(code)
+                uuid_ = str(store["uuid"])
+                rows = rn.day_traffic(conn, uuid_, day, store.get("time_zone"))
+                cameras = len(rn.video_channels(nodes, uuid_)) or len(rn.entrances(nodes, uuid_)) or 1
+                plan = sampling.plan(rn.windows(rows, b.minutes, b.direction), mode=b.mode,
+                                     length_min=b.minutes, direction=b.direction,
+                                     cameras=cameras, seed=b.seed, day=day.isoformat())
+            except (rn.RetailNextError, sampling.SamplingError) as exc:
+                problems.append(f"{code}: {exc}")
+                continue
+            name = str(store.get("name") or "")
+            for w in plan["chosen"]:
+                chosen_by = sampling.record(plan, w["from"], w["until"])
+                item = _item(str(store.get("store_id") or code), name, day.isoformat(), w, b,
+                             chosen_by)
+                if not any(i["id"] == item["id"] for i in mine.rn_queue):
+                    mine.rn_queue.append(item)
+                    added.append(item)
+        if not added and problems:
+            raise HTTPException(400, " ".join(problems))
+        _start(mine)
+        return {**_queued(mine), "added": len(added), "problems": problems}
+
+    @app.get("/api/retailnext/queue")
+    def retailnext_queue_state() -> dict[str, Any]:
+        return _queued(me())
+
+    @app.post("/api/retailnext/queue/forget")
+    def retailnext_queue_forget(r: RunRef) -> dict[str, Any]:
+        """Take one out of the queue. Footage already downloaded stays on the disk."""
+        mine = me()
+        mine.rn_queue = [i for i in mine.rn_queue
+                         if i["id"] != r.id and not (r.id == "done" and i["state"] == "ready")]
+        return _queued(mine)
+
+    @app.post("/api/retailnext/download")
+    def retailnext_download(b: DownloadIn) -> dict[str, Any]:
+        """One window, which is a queue of one: the same worker fetches it."""
+        mine = me()
+        if any(i["state"] in ("waiting", "exporting", "downloading") for i in mine.rn_queue):
+            raise HTTPException(409, "A download is already under way.")
+        plan = (mine.rn_plan if mine.rn_plan and mine.rn_plan["request"] == [_bare(b.code), b.date]
+                else None)
+        item = _item(b.code, "", b.date, {"from": b.start, "until": b.until}, b,
+                     sampling.record(plan, b.start, b.until) if plan else None)
+        mine.rn_queue = [i for i in mine.rn_queue if i["id"] != item["id"]]
+        mine.rn_queue.append(item)
+        _start(mine)
+        return item
 
     @app.get("/api/retailnext/download")
     def retailnext_download_status() -> dict[str, Any]:
-        return me().rn_job or {"state": "idle"}
+        job = me().rn_job
+        return {**job, "state": "done"} if job and job["state"] == "ready" else (
+            job or {"state": "idle"})
 
     @app.post("/api/retailnext/fetch")
     def retailnext_fetch() -> dict[str, Any]:
