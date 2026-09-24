@@ -175,6 +175,7 @@ class QueueIn(BaseModel):
     both: bool = False
     count: str = "auto"  # how it will be counted, so opening one needs nothing remembered
     direction_for: str = ""  # the traffic to validate, set on the wizard when it is opened
+    per_store: int = 1  # windows queued per store: the busiest one, unless more are asked for
 
 
 class DirectionIn(BaseModel):
@@ -838,7 +839,11 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                 problems.append(f"{code}: {exc}")
                 continue
             name = str(store.get("name") or "")
-            for w in plan["chosen"]:
+            # the busiest window first, then the rest, and only as many as were asked for:
+            # queueing a store's whole plan fills the queue faster than anyone can count it
+            busiest = sorted(plan["chosen"],
+                             key=lambda w: (w.get("role") != "peak", w.get("rank") or 99))
+            for w in busiest[:max(1, b.per_store)]:
                 chosen_by = sampling.record(plan, w["start"], w["until"])
                 item = _item(str(store.get("store_id") or code), name, day.isoformat(), w, b,
                              chosen_by)

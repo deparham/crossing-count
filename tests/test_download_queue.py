@@ -90,19 +90,29 @@ def _settled(client: TestClient, seconds: float = 10.0) -> dict[str, Any]:
     raise AssertionError("the queue never finished")
 
 
-def test_the_queue_runs_store_by_store_in_the_order_given(stubs: dict[str, Any]) -> None:
+def test_one_window_a_store_the_busiest_one(stubs: dict[str, Any]) -> None:
+    """Six stores ticked, six videos queued. A store's whole plan would fill the queue
+    faster than anyone can count it, so only its busiest window is taken."""
     client = stubs["client"]
     got = client.post("/api/retailnext/queue", json={
         "codes": ["CN-123", "JB-401", "RW-409"], "date": "2026-09-19"}).json()
-    assert got["added"] == 4 and got["problems"] == []  # CN-123 has two windows, the others one
+    assert got["added"] == 3 and got["problems"] == []  # one each, though CN-123 has two
     assert [i["label"].split(" · ")[1] for i in got["items"]] == [
-        "10:45–11:00", "14:00–14:15", "11:15–11:30", "13:15–13:30"]
+        "10:45–11:00", "11:15–11:30", "13:15–13:30"]
+    assert all("peak" in i["label"] for i in got["items"])  # the busiest, never the control
 
     done = _settled(client)
-    assert [i["state"] for i in done["items"]] == ["ready"] * 4
-    # both of CN-123's windows before JB-401's, and JB-401's before RW-409's
-    assert stubs["exported"] == ["CN-123@10:45", "CN-123@14:00", "JB-401@11:15", "RW-409@13:15"]
+    assert [i["state"] for i in done["items"]] == ["ready"] * 3
+    assert stubs["exported"] == ["CN-123@10:45", "JB-401@11:15", "RW-409@13:15"]
     assert all(Path(i["path"]).is_file() for i in done["items"])
+
+
+def test_more_than_one_a_store_only_when_it_is_asked_for(stubs: dict[str, Any]) -> None:
+    client = stubs["client"]
+    got = client.post("/api/retailnext/queue", json={
+        "codes": ["CN-123"], "date": "2026-09-19", "per_store": 2}).json()
+    assert [i["label"].split(" · ")[2] for i in got["items"]] == ["peak", "control"]
+    _settled(client)
 
 
 def test_one_store_being_down_does_not_stop_the_others(stubs: dict[str, Any]) -> None:
@@ -114,7 +124,7 @@ def test_one_store_being_down_does_not_stop_the_others(stubs: dict[str, Any]) ->
     by = {i["code"]: i for i in done["items"]}
     assert by["JB-401"]["state"] == "failed" and "is down" in by["JB-401"]["message"]
     assert by["CN-123"]["state"] == "ready" and by["RW-409"]["state"] == "ready"
-    assert len(done["ready"]) == 3  # the rest still came down
+    assert len(done["ready"]) == 2  # the other two still came down
 
 
 def test_the_first_is_ready_while_the_rest_are_still_coming(stubs: dict[str, Any]) -> None:
@@ -151,7 +161,8 @@ def test_one_window_on_its_own_uses_the_same_queue(stubs: dict[str, Any]) -> Non
 
 def test_taking_one_out_of_the_queue(stubs: dict[str, Any]) -> None:
     client = stubs["client"]
-    client.post("/api/retailnext/queue", json={"codes": ["CN-123"], "date": "2026-09-19"})
+    client.post("/api/retailnext/queue", json={"codes": ["CN-123"], "date": "2026-09-19",
+                                               "per_store": 2})
     done = _settled(client)["items"]
     assert len(done) == 2
     left = client.post("/api/retailnext/queue/forget", json={"id": done[0]["id"]}).json()
