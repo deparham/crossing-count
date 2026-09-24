@@ -223,9 +223,11 @@
       <button id="rnConnect" style="margin-top:8px">Connect</button>
       <span class="muted">Kept in this computer's Keychain (Credential Manager on Windows), never in a file.</span>
     </div>
-    <div class="grid2" style="grid-template-columns:1fr;margin-top:8px">
-      <label>Several stores at once: their codes, separated by commas. Each store's windows are queued by the rule above, one store's worth at a time, and you can start counting the first while the rest come down.
-        <input type="text" id="rnCodes" placeholder="e.g. CN-123, JB-401, RW-409" autocomplete="off" spellcheck="false"></label>
+    <div style="margin-top:10px">
+      <div class="muted">Several stores at once: tick them below. Each store's windows are queued by the rule above, one store's worth at a time, and you can start counting the first while the rest come down. A shopping centre usually has one store per brand, so searching for the centre finds them all.</div>
+      <input type="text" id="rnFilter" placeholder="search the brand's stores by code or name" autocomplete="off" spellcheck="false" style="margin-top:6px">
+      <div id="rnPickList" class="scroll" style="max-height:220px;margin-top:6px"></div>
+      <div id="rnPicked" class="muted" style="margin-top:6px"></div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
       <button id="rnFind" class="primary">Find the windows</button>
@@ -786,9 +788,10 @@ async function rnStoresFor(sub) {  // only the chosen brand's stores
   try {
     if (!W.rnStores[sub]) W.rnStores[sub] = (await api(`/api/retailnext/stores?subscription=${encodeURIComponent(sub)}`)).stores;
     $("rnStores").innerHTML = W.rnStores[sub].map((s) => `<option value="${esc(s.code)}">${esc(s.name)}</option>`).join("");
+    renderPicks();
   } catch (e) { msg(e.message, "err"); }
 }
-$("rnSub").addEventListener("change", () => { $("rnStore").value = ""; $("rnWindows").innerHTML = ""; W.rnPick = null; rnBrand(); });
+$("rnSub").addEventListener("change", () => { $("rnStore").value = ""; $("rnWindows").innerHTML = ""; W.rnPick = null; rnBrand(); renderPicks(); });
 async function rnConnect() {
   const sub = rnSubName($("rnSub").value);
   if (!$("rnAccess").value.trim() || !$("rnSecret").value.trim()) { msg("Enter both the access key and the secret key.", "warn"); return; }
@@ -862,9 +865,37 @@ async function openQueued(item) {
     go(nextKey());
   } catch (e) { msg(e.message, "err"); }
 }
+function renderPicks() {
+  const sub = rnSubName($("rnSub").value), all = (W.rnStores || {})[sub] || [];
+  W.picked = W.picked || new Set();
+  const q = $("rnFilter").value.trim().toLowerCase();
+  const hit = all.filter((s) => !q || s.code.toLowerCase().includes(q) || (s.name || "").toLowerCase().includes(q));
+  const shown = hit.slice(0, 200);
+  $("rnPickList").innerHTML = !all.length
+    ? '<div class="muted">Choose a connected brand to see its stores.</div>'
+    : !shown.length ? `<div class="muted">No store of ${esc(sub)} matches “${esc(q)}”.</div>`
+    : `<table class="ivs">${shown.map((s) => {
+        const id = `${sub}/${s.code}`;
+        return `<tr><td style="width:2em"><input type="checkbox" data-pick="${esc(id)}" ${W.picked.has(id) ? "checked" : ""}></td><td><b>${esc(s.code)}</b></td><td>${esc(s.name || "")}</td></tr>`;
+      }).join("")}</table>${hit.length > shown.length ? `<div class="muted">and ${hit.length - shown.length} more: narrow the search</div>` : ""}`;
+  const n = W.picked.size;
+  $("rnPicked").innerHTML = n
+    ? `Ticked ${n} store${n > 1 ? "s" : ""}: ${[...W.picked].map((c) => esc(c.split("/").pop())).join(", ")} · <a href="#" id="rnClear">clear</a>`
+    : "No store ticked yet.";
+  $("rnQueue").textContent = n ? `Queue these ${n} store${n > 1 ? "s" : ""}` : "Queue the ticked stores";
+  if ($("rnClear")) $("rnClear").addEventListener("click", (e) => { e.preventDefault(); W.picked.clear(); renderPicks(); });
+}
+$("rnFilter").addEventListener("input", renderPicks);
+$("rnPickList").addEventListener("change", (e) => {
+  const b = e.target.closest("[data-pick]");
+  if (!b) return;
+  W.picked = W.picked || new Set();
+  if (b.checked) W.picked.add(b.dataset.pick); else W.picked.delete(b.dataset.pick);
+  renderPicks();
+});
 $("rnQueue").addEventListener("click", async () => {
-  const codes = $("rnCodes").value.split(/[,\n]+/).map((c) => c.trim()).filter(Boolean);
-  if (!codes.length) return msg("Type the store codes, separated by commas.", "warn");
+  const codes = [...(W.picked || [])];
+  if (!codes.length) return msg("Tick the stores you want first.", "warn");
   const mode = $("rnMode").value;
   $("rnQueue").disabled = true;
   try {
