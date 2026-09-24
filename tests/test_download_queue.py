@@ -18,11 +18,14 @@ from crossing_count import retailnext as rn
 from crossing_count import sampling
 from crossing_count.wizard_app import create_wizard_app
 
+# the words retailnext.windows really uses for a window's edges: "start" and "until".
+# The stub said "from" before, agreed with the bug in _item, and passed while queueing
+# raised KeyError on the real thing.
 WINDOWS = {
-    "CN-123": [{"from": "10:45", "until": "11:00", "role": "peak"},
-               {"from": "14:00", "until": "14:15", "role": "control"}],
-    "JB-401": [{"from": "11:15", "until": "11:30", "role": "peak"}],
-    "RW-409": [{"from": "13:15", "until": "13:30", "role": "peak"}],
+    "CN-123": [{"start": "10:45", "until": "11:00", "role": "peak"},
+               {"start": "14:00", "until": "14:15", "role": "control"}],
+    "JB-401": [{"start": "11:15", "until": "11:30", "role": "peak"}],
+    "RW-409": [{"start": "13:15", "until": "13:30", "role": "peak"}],
 }
 
 

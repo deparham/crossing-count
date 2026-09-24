@@ -804,12 +804,14 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     def _item(code: str, store: str, day: str, window: dict[str, Any], b: Any,
               chosen_by: dict[str, Any] | None) -> dict[str, Any]:
-        return {"id": f"{code}-{day}-{window['from']}".replace(":", ""), "code": _bare(code),
-                "store": store, "date": day, "start": window["from"], "until": window["until"],
+        # a window's own words for its edges: retailnext.windows gives "start" and "until"
+        frm, until = str(window["start"]), str(window["until"])
+        return {"id": f"{code}-{day}-{frm}".replace(":", ""), "code": _bare(code),
+                "store": store, "date": day, "start": frm, "until": until,
                 "marks": bool(b.marks), "both": bool(b.both), "sampling": chosen_by,
                 "count": getattr(b, "count", "auto"),
                 "direction": getattr(b, "direction_for", "") or getattr(b, "direction", ""),
-                "label": f"{code} {store} · {window['from']}–{window['until']}"
+                "label": f"{code} {store} · {frm}–{until}"
                          + (f" · {window.get('role')}" if window.get("role") else ""),
                 "state": "waiting", "message": "Waiting for the ones before it.",
                 "done": 0, "total": None, "which": 1, "of": 2 if b.both else 1,
@@ -837,7 +839,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                 continue
             name = str(store.get("name") or "")
             for w in plan["chosen"]:
-                chosen_by = sampling.record(plan, w["from"], w["until"])
+                chosen_by = sampling.record(plan, w["start"], w["until"])
                 item = _item(str(store.get("store_id") or code), name, day.isoformat(), w, b,
                              chosen_by)
                 if not any(i["id"] == item["id"] for i in mine.rn_queue):
@@ -868,7 +870,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
             raise HTTPException(409, "A download is already under way.")
         plan = (mine.rn_plan if mine.rn_plan and mine.rn_plan["request"] == [_bare(b.code), b.date]
                 else None)
-        item = _item(b.code, "", b.date, {"from": b.start, "until": b.until}, b,
+        item = _item(b.code, "", b.date, {"start": b.start, "until": b.until}, b,
                      sampling.record(plan, b.start, b.until) if plan else None)
         mine.rn_queue = [i for i in mine.rn_queue if i["id"] != item["id"]]
         mine.rn_queue.append(item)
