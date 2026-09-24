@@ -506,3 +506,27 @@ def test_retailnexts_own_camera_count_checks_the_pictures_found(
     again = cold.get("/api/drawn").json()
     assert again["store_cameras"] is None and again["too_many"] is None
     assert len(again["pictures"]) == 2
+
+
+def test_a_grouping_finer_than_retailnext_keeps_is_refused(server: list[Any]) -> None:
+    """Measured against the live API: asked to group by less than a quarter-hour RetailNext
+    does not refuse, it answers with the whole range's total under a too-short label. A
+    quarter-hour's 12 people came back as "11:15-11:20: 12", which reads as 12 in five
+    minutes. Believing that would overstate the traffic threefold."""
+    at = datetime.fromisoformat
+    for minutes in (1, 5, 10, 14):
+        with pytest.raises(rn.RetailNextError, match="15-minute intervals"):
+            rn.traffic_request(["u1"], date(2026, 9, 12), "11:15", "11:30", minutes)
+    for minutes in (15, 30, 45, 60, 75):  # each served and labelled truthfully
+        body = rn.traffic_request(["u1"], date(2026, 9, 12), "11:00", "12:15", minutes)
+        assert body["group_bys"] == [{"group": "time", "unit": "minutes", "value": minutes}]
+
+    seen = server.pop(0)  # the whole period as one group, which is what a fetch now asks for
+    group = {"type": "time", "start": "11:00", "finish": "12:00"}
+    server.append({"ok": True, "metrics": [
+        {"name": "traffic_in", "ok": True,
+         "data": [{"value": 45, "validity": "complete", "group": group}]}]})
+    got = rn.camera_counts(CONN, ARMADALE, "392", ["Armadale_Entrance"],
+                           at("2026-09-12T11:00:00"), at("2026-09-12T11:59:50"))
+    assert json.loads(seen[-1].data)["group_bys"][0]["value"] == 60
+    assert got["total"][0]["in"] == 45

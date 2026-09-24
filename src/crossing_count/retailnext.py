@@ -9,6 +9,23 @@ settings.json keeps only the subscription name.
 As documented (retailnext.atlassian.net, PUBLICDOCS, "API"): Basic authentication with
 the access key and secret key; POST v2/location lists locations; POST v2/datamine gives
 metrics such as traffic_in and traffic_out, grouped by time.
+
+RetailNext keeps traffic in quarter-hours, and that is the finest it will serve. Asked to
+group by anything smaller it does not refuse: it answers with the whole range's total in a
+single group, labelled with the width that was asked for. A quarter-hour's 12 people comes
+back as "11:15-11:20: 12", which reads as 12 people in five minutes. Measured against the
+live API on 23 September 2026:
+
+    11:00-12:00 by 15 min -> 4 points: 11, 12, 13, 9   (sums to 45)
+    11:00-12:00 by 30 min -> 2 points: 23, 22
+    11:00-11:45 by 45 min -> 1 point:  36              correctly labelled
+    11:00-12:15 by 75 min -> 1 point:  52              correctly labelled
+    11:15-11:30 by  5 min -> 1 point:  12  labelled 11:15-11:20   WRONG
+    11:15-11:30 by 10 min -> 1 point:  12  labelled 11:15-11:25   WRONG
+
+So any grouping of a quarter-hour or more is served and labelled truthfully, and anything
+finer is refused here rather than believed. There are no per-person times in this API: a
+crossing's own moment is not something it can be asked for.
 """
 
 from __future__ import annotations
@@ -310,6 +327,9 @@ def _utc(at: datetime) -> str:
     return at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+FINEST_MINUTES = 15  # the smallest grouping RetailNext serves truthfully (see the note above)
+
+
 def traffic_request(location_uuids: list[str], day: date, start: str | None, until: str | None,
                     minutes: int = 15, time_zone: str | None = None) -> dict[str, Any]:
     """Traffic in and out for part of one day, per `minutes` ("HH:MM" from and until;
@@ -319,6 +339,11 @@ def traffic_request(location_uuids: list[str], day: date, start: str | None, unt
     day, given in UTC as the API's gregorian dates are, and the answer's times are the
     store's own, as the API documents.
     """
+    if minutes < FINEST_MINUTES:
+        raise RetailNextError(
+            f"RetailNext keeps traffic in {FINEST_MINUTES}-minute intervals and will not "
+            f"serve {minutes}. Asked for less it answers with the whole period's total under "
+            f"a {minutes}-minute label, which reads as far busier than it was.")
     if time_zone:
         tz = ZoneInfo(time_zone)
         frm = _utc(datetime.combine(day, datetime.min.time(), tz))
