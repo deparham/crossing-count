@@ -92,6 +92,18 @@ def rows(path: Path, sheet: str) -> dict[int, dict[str, str]]:
     return out
 
 
+def next_row(listed: dict[int, dict[str, str]]) -> int:
+    """Where a store not listed yet goes: after the last row holding anything at all.
+
+    Not after the last row with a store code. Under the validated stores the team's workbook
+    lists the ones still to be done - brand, store and region filled in, the code column
+    empty - and going by the codes would write the new store over the first of those.
+    Only rows with something in them count, so a row carrying nothing but formatting (this
+    workbook has one at 1048576, the last row a spreadsheet has) is not the end of the sheet.
+    """
+    return max(listed) + 1 if listed else 2
+
+
 def find(listed: dict[int, dict[str, str]], code: str) -> int | None:
     """The row this store is already on: the last of them, when it is on more than one."""
     want = _bare(code)
@@ -154,16 +166,83 @@ def plan(path: Path, *, code: str, brand: str, store: str, day: date,
     if at is None:  # a store not listed yet needs saying who and where as well
         values |= {"brand": brand_as_listed(everywhere, code, brand),
                    "code": code, "store": store}
-    return {"file": str(path), "sheet": sheet, "row": at or (max(listed) + 1 if listed else 2),
+    return {"file": str(path), "sheet": sheet, "row": at or next_row(listed),
             "adding": at is None, "open_elsewhere": open_elsewhere(path),
             "changes": [{"column": COLUMNS[k], "what": k,
                          "from": was.get(COLUMNS[k], ""), "to": v}
                         for k, v in values.items() if v != ""]}
 
 
+def library_root(path: Path) -> Path | None:
+    """The synced library's own folder ("validations - Documents"), above the team's folders."""
+    m = SYNCED.search(path.as_posix())
+    return Path(path.as_posix()[:m.start("rest")].rstrip("/")) if m else None
+
+
+def backups(path: Path) -> Path:
+    """Where copies of the workbook are kept: the library's root, not the folder the team
+    works in. Beside the workbook they would turn up in everyone's External/RAG."""
+    return (library_root(path) or path.parent) / "CrossingCount backups"
+
+
+DATE_FMTS = frozenset({"14", "15", "16", "17", "22"})  # the built-in date and time formats
+PCT_FMTS = frozenset({"9", "10"})  # 0% and 0.00%
+
+
+def _formats(styles: bytes | None) -> dict[str, set[str]]:
+    """Which style indexes show a date and which show a percentage, by this workbook's own
+    styles.xml. Custom formats count too: the team's d/mm/yyyy;@ is one of theirs."""
+    if not styles:
+        return {"date": set(), "pct": set()}
+    root = ET.fromstring(styles)
+    codes = {f.get("numFmtId"): (f.get("formatCode") or "") for f in root.iter(f"{M}numFmt")}
+    out: dict[str, set[str]] = {"date": set(), "pct": set()}
+    xfs = root.find(f"{M}cellXfs")
+    for i, xf in enumerate(xfs if xfs is not None else []):
+        nid = xf.get("numFmtId") or "0"
+        code = codes.get(nid, "")
+        if nid in DATE_FMTS or ("y" in code and ("d" in code or "m" in code)):
+            out["date"].add(str(i))
+        if nid in PCT_FMTS or "%" in code:
+            out["pct"].add(str(i))
+    return out
+
+
+def _style_in(data: ET.Element, col: str, row: int, prefer: set[str] | None = None) -> str:
+    """The style the rest of this column uses, from the nearest row that has the cell.
+
+    A style that really shows a date (or a percentage) is taken first, then a cell with
+    something in it, then an empty one. The team types many of their dates as text, so those
+    cells are General: going by the nearest cell alone would give a new row's date the format
+    that shows 46287 where the rest of the column shows 22/09/2026.
+    """
+    best: list[tuple[int, str]] = []
+    filled: list[tuple[int, str]] = []
+    empty: list[tuple[int, str]] = []
+    for r in data:
+        try:
+            n = int(str(r.get("r")))
+        except (TypeError, ValueError):
+            continue
+        if n == row or n <= 1:  # never the header's own formatting
+            continue
+        for c in r:
+            if str(c.get("r", "")) == f"{col}{n}" and c.get("s"):
+                has = c.find(f"{M}v") is not None or c.find(f"{M}is") is not None
+                style = str(c.get("s"))
+                if prefer and style in prefer:
+                    best.append((abs(n - row), style))
+                (filled if has else empty).append((abs(n - row), style))
+                break
+    for found in (best, filled, empty):
+        if found:
+            return min(found)[1]
+    return ""
+
+
 def keep(path: Path) -> Path:
-    """A copy beside the workbook before it is written to, the last KEEP of them kept."""
-    folder = path.parent / "CrossingCount backups"
+    """A copy of the workbook before it is written to, the last KEEP of them kept."""
+    folder = backups(path)
     folder.mkdir(parents=True, exist_ok=True)
     out = folder / f"{path.stem} {datetime.now().astimezone():%Y%m%d-%H%M%S}{path.suffix}"
     shutil.copy2(path, out)
@@ -189,6 +268,8 @@ def write(path: Path, said: dict[str, Any]) -> dict[str, Any]:
             names = z.namelist()
             blobs = {n: z.read(n) for n in names}
         root = ET.fromstring(blobs[part])
+        kinds = _formats(blobs.get("xl/styles.xml"))
+        shows = {COLUMNS["date"]: kinds["date"], COLUMNS["accuracy"]: kinds["pct"]}
         data = root.find(f"{M}sheetData")
         if data is None:
             raise TrackerError(f"{said['sheet']!r} has no rows.")
@@ -201,6 +282,13 @@ def write(path: Path, said: dict[str, Any]) -> dict[str, Any]:
             c = at.get(ref)
             if c is None:
                 c = ET.SubElement(here, f"{M}c", {"r": ref})
+                # a cell made from nothing carries no format, and this workbook keeps the
+                # percentage and the date format on the cell rather than on the column: a new
+                # row would read 0.937 and 46287 where the rest of the column reads 94% and
+                # 22/09/2026. The neighbours say what the column looks like.
+                style = _style_in(data, col, row, shows.get(col))
+                if style:
+                    c.set("s", style)
             for child in list(c):
                 c.remove(child)
             c.attrib.pop("t", None)

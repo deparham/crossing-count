@@ -1974,7 +1974,8 @@ async function renderSheet() {
     <div class="muted" style="margin-top:4px">${esc(got.file)} · <b>${esc(p.sheet)}</b> · row ${p.row}${
       p.adding ? " (a new row: this store is not listed yet)" : " (this store's row, filled in)"}</div>
     ${got.incomplete && got.incomplete.length ? `<div class="warn" style="margin-top:6px">This validation is not complete, so it has no accuracy: ${esc(got.incomplete.join(" "))}</div>` : ""}
-    ${!acc.pct && acc.why.length ? `<div class="warn" style="margin-top:6px">No accuracy goes in: ${esc(acc.why.join(". ").replace(/\.?$/, "."))} The date and the link still go in.</div>` : ""}
+    ${acc.pct === null ? `<div class="warn" style="margin-top:6px">There is no accuracy to put in: the system gave no number for this window. The date and the link still go in.</div>` : ""}
+    ${acc.pct !== null && acc.thin.length ? `<div class="warn" style="margin-top:6px">It goes in, but it rests on little: ${esc(acc.thin.join(". ").replace(/\.?$/, "."))} The report prints the counts and the difference instead of this percentage.</div>` : ""}
     ${Object.keys(acc.each).length > 1 ? `<div class="muted" style="margin-top:6px">Measured ${
       Object.entries(acc.each).map(([d, v]) => `${d} ${v.toFixed(1)}%`).join(", ")}; the lower one goes in the single Accuracy column.</div>` : ""}
     <ul class="muted" style="margin:6px 0 0 18px">${p.changes.map(sheetCell).join("")}</ul>

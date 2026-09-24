@@ -52,6 +52,15 @@ def book(tmp_path: Path) -> Path:
                    '/package/2006/relationships">'
                    '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/>'
                    '<Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>')
+        # styles like the team's: 5 shows a date, 54 a percentage, 7 and 4 plain text. The
+        # date and the percentage live on the cell here, not on the column.
+        z.writestr("xl/styles.xml",
+                   f'<?xml version="1.0"?><styleSheet xmlns="{NS}">'
+                   '<numFmts count="1"><numFmt numFmtId="164" formatCode="d/mm/yyyy;@"/></numFmts>'
+                   '<cellXfs count="55">'
+                   + "".join(f'<xf numFmtId="{ {5: "164", 54: "9", 45: "0"}.get(i, "0") }"/>'
+                             for i in range(55))
+                   + '</cellXfs></styleSheet>')
         z.writestr("xl/sharedStrings.xml",
                    '<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/'
                    'spreadsheetml/2006/main"/>')
@@ -311,30 +320,25 @@ def test_the_whole_way_through_the_pages(two_tile_video: dict[str, Any], tmp_pat
     assert [d["action"] for d in trail.state["decisions"]].count("sheet_updated") == 1
 
 
-def test_too_few_crossings_for_a_percentage_puts_no_percentage_in(
+def test_an_accuracy_on_one_crossing_still_goes_in(
         two_tile_video: dict[str, Any], tmp_path: Path, book: Path,
         monkeypatch: pytest.MonkeyPatch) -> None:
-    """The report refuses a percentage below validation.MIN_VERIFIED_FOR_PCT verified crossings.
-    A number in a shared spreadsheet outlives the report it came from, so the sheet refuses it
-    too - the date and the link still go in, and the accuracy cell is left as it was."""
-    from crossing_count.export import sensor_accuracy
-    from crossing_count.validation import MIN_VERIFIED_FOR_PCT, quote
+    """The spreadsheet takes every accuracy the tool can work out, however few crossings it
+    rests on: a blank cell there reads as "not done" rather than "too few to quote". The panel
+    says what it rests on, and the report is unchanged - it still prints the counts and the
+    difference below validation.MIN_VERIFIED_FOR_PCT."""
+    from crossing_count.validation import quote
 
     monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path / "home"))
-    few = MIN_VERIFIED_FOR_PCT - 1
-    assert quote(few, few)["rate"] is False
-    assert sensor_accuracy(few, few)["accuracy_pct"] == 100.0  # there is one, and it is unquotable
-    client, on_drive, _ = _validated(two_tile_video, tmp_path, book,
-                                     crossings=few, sensor=few)
+    assert quote(1, 1)["rate"] is False  # the report would print no percentage for this
+    client, on_drive, _ = _validated(two_tile_video, tmp_path, book, crossings=1, sensor=1)
 
     got = client.get("/api/sheet").json()["sheet"]
-    assert got["accuracy"]["pct"] is None and got["accuracy"]["why"]  # and it says why
-    # no link either: tmp_path is not a synced drive, so there is no address to be had
-    assert [c["what"] for c in got["plan"]["changes"]] == ["date"]
-    was = sheet.rows(on_drive, sheet.WEEKEND)[got["plan"]["row"]].get(sheet.COLUMNS["accuracy"])
+    assert got["accuracy"]["pct"] == 100.0 and got["accuracy"]["thin"]  # in, and said to be thin
+    assert "accuracy" in [c["what"] for c in got["plan"]["changes"]]
     client.post("/api/sheet", json={"link": "https://x/y"})
     row = sheet.rows(on_drive, sheet.WEEKEND)[got["plan"]["row"]]
-    assert row.get(sheet.COLUMNS["accuracy"]) == was  # the accuracy cell untouched
+    assert row[sheet.COLUMNS["accuracy"]] == "1.0000"
     assert row[sheet.COLUMNS["link"]] == "https://x/y"
 
 
@@ -344,3 +348,134 @@ def test_a_percentage_the_person_types_in_goes_in_instead(book: Path) -> None:
                       day=date(2026, 9, 19), accuracy=87.5, link="")
     assert [(c["what"], c["to"]) for c in said["changes"]] == [("date", "46284"),
                                                               ("accuracy", "0.8750")]
+
+
+# ---------- what an added row looks like, and where the copies go ----------
+
+def _styles(path: Path, sheet_name: str, row: int) -> dict[str, str]:
+    """The style index on each cell of one row: what decides how it is displayed."""
+    import xml.etree.ElementTree as ET
+    with zipfile.ZipFile(path) as z:
+        root = ET.fromstring(z.read(sheet._part(z, sheet_name)))
+    for r in root.find(f"{sheet.M}sheetData") or []:
+        if int(str(r.get("r"))) == row:
+            return {str(c.get("r"))[:1]: str(c.get("s") or "") for c in r}
+    return {}
+
+
+def _styled(book: Path) -> Path:
+    """The workbook with the real one's formatting: the percentage and the date live on the
+    cell, not on the column, so a cell made from nothing shows 0.937 where the column shows 94%."""
+    out = book.parent / "styled.xlsx"
+    body = [f'<?xml version="1.0"?><worksheet xmlns="{NS}"><sheetData>']
+    body.append('<row r="1">' + "".join(
+        f'<c r="{chr(ord("A") + k)}1" s="7" t="inlineStr"><is><t>{h}</t></is></c>'
+        for k, h in enumerate(HEADERS)) + "</row>")
+    for n in range(2, 6):  # E, F and G carry the date, percentage and link styles per cell,
+        body.append(f'<row r="{n}">'  # as the team's workbook has them
+                    f'<c r="A{n}" s="4" t="inlineStr"><is><t>Connor</t></is></c>'
+                    f'<c r="B{n}" s="4" t="inlineStr"><is><t>CN-1{n:02d}</t></is></c>'
+                    f'<c r="C{n}" s="4" t="inlineStr"><is><t>Somewhere</t></is></c>'
+                    f'<c r="E{n}" s="5"/><c r="F{n}" s="54"/><c r="G{n}" s="45"/></row>')
+    body.append("</sheetData></worksheet>")
+    made = "".join(body).encode()
+    with zipfile.ZipFile(book) as z, zipfile.ZipFile(out, "w") as w:
+        for part in z.namelist():
+            w.writestr(part, made if part == "xl/worksheets/sheet2.xml" else z.read(part))
+    return out
+
+
+def test_an_added_row_keeps_the_column_s_percentage_and_date_format(book: Path) -> None:
+    """Otherwise the accuracy reads 0.937 and the date 46287 on every row the tool adds, while
+    the rows the team typed read 94% and 22/09/2026."""
+    styled = _styled(book)
+    assert _styles(styled, sheet.WEEKEND, 3)["F"] == "54"  # what the column looks like
+    said = sheet.plan(styled, code="RW-409", brand="Rockwear", store="Chadstone",
+                      day=date(2026, 9, 19), accuracy=93.7, link="https://x/RW-409")
+    assert said["adding"] is True
+    sheet.write(styled, said)
+    now = _styles(styled, sheet.WEEKEND, said["row"])
+    assert now["F"] == "54" and now["E"] == "5" and now["G"] == "45"
+
+
+def test_a_row_already_there_keeps_its_own_formatting(book: Path) -> None:
+    styled = _styled(book)
+    said = sheet.plan(styled, code="CN-103", brand="Connor", store="Somewhere",
+                      day=date(2026, 9, 19), accuracy=88.0, link="https://x/CN-103")
+    assert said["adding"] is False
+    sheet.write(styled, said)
+    assert _styles(styled, sheet.WEEKEND, said["row"])["F"] == "54"
+
+
+def test_the_copies_go_to_the_library_root_not_the_folder_the_team_works_in(
+        book: Path, tmp_path: Path) -> None:
+    """Beside the workbook they turn up in everyone's External/RAG and sync to the whole team."""
+    drive = (tmp_path / "Library/CloudStorage/OneDrive-AcmePtyLtd/validations - Documents"
+             / "External" / "RAG")
+    drive.mkdir(parents=True)
+    here = drive / book.name
+    shutil.copy2(book, here)
+    assert sheet.library_root(here) == drive.parent.parent
+    assert sheet.backups(here) == drive.parent.parent / "CrossingCount backups"
+
+    said = sheet.plan(here, code="JB-401", brand="Johnny Bigg", store="Werribee",
+                      day=date(2026, 9, 19), accuracy=89.2, link="https://x/JB-401")
+    kept = Path(sheet.write(here, said)["kept"])
+    assert kept.parent == drive.parent.parent / "CrossingCount backups"
+    assert not (drive / "CrossingCount backups").exists()  # not where the team works
+
+
+def test_a_workbook_that_is_not_on_a_synced_drive_keeps_its_copies_beside_it(book: Path) -> None:
+    assert sheet.library_root(book) is None
+    assert sheet.backups(book) == book.parent / "CrossingCount backups"
+
+
+def test_the_date_takes_a_format_that_shows_a_date_not_the_nearest_cell(book: Path) -> None:
+    """The team types many of their dates as text ("16/9/2026"), and those cells are General.
+    Going by the nearest cell alone gives a new row a date cell reading 46287."""
+    out = book.parent / "mixed.xlsx"
+    rows = ['<row r="1">' + "".join(
+        f'<c r="{chr(ord("A") + k)}1" s="7" t="inlineStr"><is><t>{h}</t></is></c>'
+        for k, h in enumerate(HEADERS)) + "</row>"]
+    rows.append('<row r="2"><c r="B2" s="4" t="inlineStr"><is><t>CN-100</t></is></c>'
+                '<c r="E2" s="5"><v>46284</v></c></row>')  # a real date, further away
+    for n in (3, 4):  # nearer, but text typed into a General cell
+        rows.append(f'<row r="{n}"><c r="B{n}" s="4" t="inlineStr"><is><t>CN-10{n}</t></is></c>'
+                    f'<c r="E{n}" s="45" t="inlineStr"><is><t>16/9/2026</t></is></c></row>')
+    body = f'<?xml version="1.0"?><worksheet xmlns="{NS}"><sheetData>{"".join(rows)}'
+    with zipfile.ZipFile(book) as z, zipfile.ZipFile(out, "w") as w:
+        for part in z.namelist():
+            w.writestr(part, (body + "</sheetData></worksheet>").encode()
+                       if part == "xl/worksheets/sheet2.xml" else z.read(part))
+
+    said = sheet.plan(out, code="RW-409", brand="Rockwear", store="Chadstone",
+                      day=date(2026, 9, 19), accuracy=93.7, link="https://x")
+    sheet.write(out, said)
+    assert _styles(out, sheet.WEEKEND, said["row"])["E"] == "5"  # the one that shows a date
+
+
+def test_a_store_waiting_to_be_validated_is_not_written_over(book: Path) -> None:
+    """Under the validated stores the workbook lists the ones still to do: brand, store and
+    region filled in, the code column empty. A new row goes after those, never onto them."""
+    out = book.parent / "waiting.xlsx"
+    rows = ['<row r="1">' + "".join(
+        f'<c r="{chr(ord("A") + k)}1" s="7" t="inlineStr"><is><t>{h}</t></is></c>'
+        for k, h in enumerate(HEADERS)) + "</row>",
+        ('<row r="2"><c r="A2" s="4" t="inlineStr"><is><t>Connor</t></is></c>'
+         '<c r="B2" s="4" t="inlineStr"><is><t>CN-100</t></is></c></row>')]
+    for n in (3, 4, 5):  # waiting: a brand and a store, no code
+        rows.append(f'<row r="{n}"><c r="A{n}" s="4" t="inlineStr"><is><t>Connor</t></is></c>'
+                    f'<c r="C{n}" s="4" t="inlineStr"><is><t>Northland</t></is></c></row>')
+    body = f'<?xml version="1.0"?><worksheet xmlns="{NS}"><sheetData>{"".join(rows)}'
+    with zipfile.ZipFile(book) as z, zipfile.ZipFile(out, "w") as w:
+        for part in z.namelist():
+            w.writestr(part, (body + "</sheetData></worksheet>").encode()
+                       if part == "xl/worksheets/sheet2.xml" else z.read(part))
+
+    said = sheet.plan(out, code="RW-409", brand="Rockwear", store="Chadstone",
+                      day=date(2026, 9, 19), accuracy=93.7, link="https://x")
+    assert said["row"] == 6  # after the waiting ones, not onto row 3
+    sheet.write(out, said)
+    still = sheet.rows(out, sheet.WEEKEND)
+    assert still[3] == {"A": "Connor", "C": "Northland"}  # untouched
+    assert still[6]["B"] == "RW-409"

@@ -632,25 +632,26 @@ class Wizard:
             return got
 
     # ---------- the team's own spreadsheet ----------
-    # One row a validation, in the folder finished work is delivered to. The accuracy written
-    # there obeys the same rule as the report: below validation.MIN_VERIFIED_FOR_PCT verified
-    # crossings the report prints no percentage, so neither does this. A number in a shared
-    # spreadsheet outlives the report it came from, and one the report would not print is
-    # worse there than nowhere.
+    # One row a validation, in the folder finished work is delivered to. Every accuracy the
+    # tool can work out goes in, however few crossings it rests on: the spreadsheet is the
+    # team's own record of what was measured, and a blank cell there reads as "not done"
+    # rather than "too few to quote". The report is the other way round - below
+    # validation.MIN_VERIFIED_FOR_PCT it prints the counts and the difference instead of a
+    # percentage - so the panel says beside the number what it rests on, and the report is
+    # unchanged.
 
     def sheet_accuracy(self, c: dict[str, Any]) -> dict[str, Any]:
-        """Each direction's accuracy that may be quoted, and the one number for the sheet.
+        """Each direction's accuracy, and the one number for the sheet's single column.
 
-        The sheet has one Accuracy column and the tool measures each direction separately, so
-        the lower of them is offered: it never flatters the sensor the way a combined figure
-        can, where five too many in and five too few out read as agreement.
+        The lower of the directions is offered: it never flatters the sensor the way a
+        combined figure can, where five too many in and five too few out read as agreement.
         """
         each = {d: c["accuracy"][d]["accuracy_pct"] for d in self.dirs()
-                if c["quote"][d]["rate"] and c["accuracy"][d]["accuracy_pct"] is not None}
-        why = [c["quote"][d]["reason"] for d in self.dirs()
-               if not c["quote"][d]["rate"] and c["quote"][d]["reason"]]
+                if c["accuracy"][d]["accuracy_pct"] is not None}
+        thin = [c["quote"][d]["reason"] for d in self.dirs()
+                if not c["quote"][d]["rate"] and c["quote"][d]["reason"]]
         return {"each": each, "pct": min(each.values()) if each else None,
-                "why": list(dict.fromkeys(why))}
+                "thin": list(dict.fromkeys(thin))}
 
     def sheet_plan(self, root: Path | None, workbook: str = "", accuracy: float | None = None,
                    link: str = "") -> dict[str, Any] | None:
