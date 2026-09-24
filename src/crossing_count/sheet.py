@@ -28,6 +28,7 @@ import zipfile
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 M = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
@@ -221,3 +222,73 @@ def write(path: Path, said: dict[str, Any]) -> dict[str, Any]:
                            f"copy made first is at {kept}.") from exc
     return {"written": True, "row": row, "sheet": said["sheet"], "kept": str(kept),
             "adding": said["adding"], "changes": said["changes"]}
+
+
+# ---------- the workbook, and a link to put in it ----------
+# The links already in the sheet are share links somebody copied out of SharePoint
+# (".../:v:/s/validations/IQBRYizp...?e=sQEzZR"). The token in one is minted by the server
+# when a person presses Copy link; it cannot be worked out from a path, so nothing here
+# pretends to. What can be worked out is the folder's own web address, which opens the same
+# folder for anyone who has the drive, and which a person can paste over.
+SYNCED = re.compile(r"CloudStorage/OneDrive-[^/]+/(?P<site>[^/]+?) - (?P<library>[^/]+)/(?P<rest>.+)")
+DEFAULT_LIBRARY = {"Documents": "Shared Documents"}  # what the default library is called on the web
+COPYISH = re.compile(r"\b(cop(y|ies)|backup|old|draft|conflict)\b|\(\d+\)", re.IGNORECASE)
+
+
+def workbooks(root: Path) -> list[Path]:
+    """The spreadsheets in the folder finished work is delivered to, likeliest first.
+
+    A name saying validation comes before one that does not, and a copy comes last however
+    it is named: the real sheet and a "Store_installations_Validation - Copy.xlsx" sit side
+    by side on this drive, and writing the accuracy into the copy would lose it quietly.
+    """
+    try:
+        here = [p for p in sorted(root.iterdir())
+                if p.suffix.lower() == ".xlsx" and not p.name.startswith(("~$", "."))]
+    except OSError:
+        return []
+    return sorted(here, key=lambda p: (bool(COPYISH.search(p.stem)),
+                                       "validation" not in p.stem.lower(), p.name.lower()))
+
+
+def find_workbook(root: Path) -> Path | None:
+    """The workbook to offer, when the folder settles which one it is on its own.
+
+    One candidate that is not a copy, or one whose name says validation among copies that do
+    not. Anything less clear than that and the person picks, because nobody's spreadsheet is
+    written to by guess.
+    """
+    here = workbooks(root)
+    real = [p for p in here if not COPYISH.search(p.stem)]
+    return real[0] if len(real) == 1 else None
+
+
+def host_in(path: Path) -> str:
+    """The SharePoint host the sheet's own links point at, so none is invented here."""
+    for name in (INITIAL, WEEKEND):
+        try:
+            listed = rows(path, name)
+        except TrackerError:
+            continue
+        for cells in listed.values():
+            m = re.match(r"https://([a-z0-9-]+\.sharepoint\.com)/",
+                         cells.get(COLUMNS["link"], ""), re.IGNORECASE)
+            if m:
+                return m.group(1)
+    return ""
+
+
+def link_for(path: Path, folder: Path) -> str:
+    """The web address of a folder on the synced drive, or "" when it cannot be known.
+
+    The synced folder's name says which site and which library it is ("validations -
+    Documents"), and the workbook's own links say which host. Anything else and this gives
+    nothing back rather than a link that goes nowhere.
+    """
+    m = SYNCED.search(folder.as_posix())
+    host = host_in(path)
+    if not m or not host:
+        return ""
+    library = DEFAULT_LIBRARY.get(m["library"], m["library"])
+    parts = [m["site"], library, *m["rest"].split("/")]
+    return f"https://{host}/sites/" + "/".join(quote(p) for p in parts)

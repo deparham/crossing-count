@@ -36,6 +36,7 @@ from .. import (
     runs,
     sampling,
     sensors,
+    sheet,
     validation,
 )
 from .. import correspondence as co
@@ -627,6 +628,87 @@ class Wizard:
             self.state["delivered"] = {**got, "at": _now()}
             self._decide("delivered", after={"folder": got["folder"], "files": got["files"],
                                              "footage": got["footage"]})
+            self._save()
+            return got
+
+    # ---------- the team's own spreadsheet ----------
+    # One row a validation, in the folder finished work is delivered to. The accuracy written
+    # there obeys the same rule as the report: below validation.MIN_VERIFIED_FOR_PCT verified
+    # crossings the report prints no percentage, so neither does this. A number in a shared
+    # spreadsheet outlives the report it came from, and one the report would not print is
+    # worse there than nowhere.
+
+    def sheet_accuracy(self, c: dict[str, Any]) -> dict[str, Any]:
+        """Each direction's accuracy that may be quoted, and the one number for the sheet.
+
+        The sheet has one Accuracy column and the tool measures each direction separately, so
+        the lower of them is offered: it never flatters the sensor the way a combined figure
+        can, where five too many in and five too few out read as agreement.
+        """
+        each = {d: c["accuracy"][d]["accuracy_pct"] for d in self.dirs()
+                if c["quote"][d]["rate"] and c["accuracy"][d]["accuracy_pct"] is not None}
+        why = [c["quote"][d]["reason"] for d in self.dirs()
+               if not c["quote"][d]["rate"] and c["quote"][d]["reason"]]
+        return {"each": each, "pct": min(each.values()) if each else None,
+                "why": list(dict.fromkeys(why))}
+
+    def sheet_plan(self, root: Path | None, workbook: str = "", accuracy: float | None = None,
+                   link: str = "") -> dict[str, Any] | None:
+        """What would change in the spreadsheet, for someone to agree to before it does.
+
+        None when there is no folder for finished work, so nothing here goes looking for a
+        spreadsheet on a drive nobody has pointed the tool at.
+        """
+        if root is None:
+            return None
+        here = sheet.workbooks(root)
+        chosen = next((p for p in here if p.name == workbook), None) or sheet.find_workbook(root)
+        out: dict[str, Any] = {"workbooks": [p.name for p in here],
+                               "file": chosen.name if chosen else "",
+                               "written": self.state.get("sheet")}
+        if chosen is None:
+            out["problem"] = (f"Which spreadsheet? {root} holds {len(here)} of them."
+                              if here else f"There is no spreadsheet in {root}.")
+            return out
+        start = self._period()[0]
+        if start is None:
+            out["problem"] = "The footage has no date, so which sheet it belongs to is unknown."
+            return out
+        day = start.date()
+        c = self.counts()
+        acc = self.sheet_accuracy(c)
+        store = self.state["store"]
+        folder = delivery.where(root, store) if store.get("code") else None
+        try:
+            said = sheet.plan(
+                chosen, code=str(store.get("code") or ""),
+                brand=delivery.brand_of(str(store.get("code") or "")) or "",
+                store=str(store.get("name") or ""), day=day,
+                accuracy=acc["pct"] if accuracy is None else accuracy,
+                link=link or (sheet.link_for(chosen, folder) if folder else ""))
+        except (sheet.TrackerError, delivery.DeliveryError) as exc:
+            out["problem"] = str(exc)
+            return out
+        return {**out, "plan": said, "day": day.isoformat(), "accuracy": acc,
+                "incomplete": c["incomplete"],
+                "link": link or (sheet.link_for(chosen, folder) if folder else "")}
+
+    def sheet_write(self, root: Path, workbook: str = "", accuracy: float | None = None,
+                    link: str = "") -> dict[str, Any]:
+        """Put this validation in the spreadsheet, exactly as the plan said it would be."""
+        with self._lock:
+            said = self.sheet_plan(root, workbook, accuracy, link)
+            if said is None or said.get("problem"):
+                raise WizardError((said or {}).get("problem")
+                                  or "No folder for finished work is set.")
+            try:
+                got = sheet.write(Path(said["plan"]["file"]), said["plan"])
+            except sheet.TrackerError as exc:
+                raise WizardError(str(exc)) from exc
+            self.state["sheet"] = {**got, "at": _now(), "file": said["file"]}
+            self._decide("sheet_updated", after={"file": said["file"], "sheet": got.get("sheet"),
+                                                 "row": got.get("row"),
+                                                 "adding": got.get("adding")})
             self._save()
             return got
 
