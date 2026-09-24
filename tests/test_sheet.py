@@ -3,6 +3,7 @@ workbook left exactly as it was."""
 
 from __future__ import annotations
 
+import io
 import shutil
 import zipfile
 from datetime import date
@@ -474,8 +475,117 @@ def test_a_store_waiting_to_be_validated_is_not_written_over(book: Path) -> None
 
     said = sheet.plan(out, code="RW-409", brand="Rockwear", store="Chadstone",
                       day=date(2026, 9, 19), accuracy=93.7, link="https://x")
-    assert said["row"] == 6  # after the waiting ones, not onto row 3
+    assert said["row"] == 6 and said["adding"] is True  # after them, not onto row 3
     sheet.write(out, said)
     still = sheet.rows(out, sheet.WEEKEND)
     assert still[3] == {"A": "Connor", "C": "Northland"}  # untouched
     assert still[6]["B"] == "RW-409"
+
+
+def test_the_row_put_aside_for_a_store_is_the_one_filled_in(book: Path) -> None:
+    """The team lists a store before it is validated - brand, store and region, no code - and
+    fills that row in when it is done. A second row at the bottom is not where they look."""
+    out = book.parent / "putaside.xlsx"
+    rows = ['<row r="1">' + "".join(
+        f'<c r="{chr(ord("A") + k)}1" s="7" t="inlineStr"><is><t>{h}</t></is></c>'
+        for k, h in enumerate(HEADERS)) + "</row>"]
+    for n, (bd, st) in enumerate([("Connor", "Northland"), ("Johnny Bigg", "Northland"),
+                                  ("Connor", "Knox")], start=2):
+        rows.append(f'<row r="{n}"><c r="A{n}" s="4" t="inlineStr"><is><t>{bd}</t></is></c>'
+                    f'<c r="C{n}" s="4" t="inlineStr"><is><t>{st}</t></is></c>'
+                    f'<c r="D{n}" s="4" t="inlineStr"><is><t>VIC</t></is></c></row>')
+    body = f'<?xml version="1.0"?><worksheet xmlns="{NS}"><sheetData>{"".join(rows)}'
+    with zipfile.ZipFile(book) as z, zipfile.ZipFile(out, "w") as w:
+        for part in z.namelist():
+            w.writestr(part, (body + "</sheetData></worksheet>").encode()
+                       if part == "xl/worksheets/sheet2.xml" else z.read(part))
+
+    said = sheet.plan(out, code="CN-212", brand="Connor", store="Northland",
+                      day=date(2026, 9, 19), accuracy=94.4, link="https://x/CN-212")
+    assert said["row"] == 2 and said["waiting"] is True and said["adding"] is False
+    # only the code is missing from that row: their own brand and store spelling stay
+    assert sorted(c["what"] for c in said["changes"]) == ["accuracy", "code", "date", "link"]
+    sheet.write(out, said)
+    now = sheet.rows(out, sheet.WEEKEND)
+    assert now[2]["B"] == "CN-212" and now[2]["F"] == "0.9440"
+    assert now[3] == {"A": "Johnny Bigg", "C": "Northland", "D": "VIC"}  # the other brand's
+    assert 5 not in now  # nothing added at the bottom
+
+
+def test_a_store_waiting_twice_over_is_left_to_the_person(book: Path) -> None:
+    """Two rows for the same store and nothing says which. Better a new row they can see than
+    the wrong one of theirs filled in."""
+    out = book.parent / "twice.xlsx"
+    rows = ['<row r="1">' + "".join(
+        f'<c r="{chr(ord("A") + k)}1" s="7" t="inlineStr"><is><t>{h}</t></is></c>'
+        for k, h in enumerate(HEADERS)) + "</row>"]
+    for n in (2, 3):
+        rows.append(f'<row r="{n}"><c r="A{n}" s="4" t="inlineStr"><is><t>Connor</t></is></c>'
+                    f'<c r="C{n}" s="4" t="inlineStr"><is><t>Northland</t></is></c></row>')
+    body = f'<?xml version="1.0"?><worksheet xmlns="{NS}"><sheetData>{"".join(rows)}'
+    with zipfile.ZipFile(book) as z, zipfile.ZipFile(out, "w") as w:
+        for part in z.namelist():
+            w.writestr(part, (body + "</sheetData></worksheet>").encode()
+                       if part == "xl/worksheets/sheet2.xml" else z.read(part))
+    said = sheet.plan(out, code="CN-212", brand="Connor", store="Northland",
+                      day=date(2026, 9, 19), accuracy=94.4, link="https://x")
+    assert said["adding"] is True and said["row"] == 4
+
+
+def test_the_brand_tells_two_waiting_rows_at_one_centre_apart(book: Path) -> None:
+    """Four brands are often waiting at the same shopping centre, and their spelling differs
+    from ours by a letter: the drive says "Johnny Big" and the sheet "Johnny Bigg"."""
+    listed = {2: {"A": "Connor", "C": "Northland"}, 3: {"A": "Johnny Bigg", "C": "Northland"},
+              4: {"A": "Rockwear", "C": "Knox"}}
+    assert sheet.waiting(listed, "Connor", "Northland") == 2
+    assert sheet.waiting(listed, "Johnny Big", "Northland") == 3  # a letter apart, still theirs
+    assert sheet.waiting(listed, "TAROCASH", "Northland") is None  # not waiting there at all
+
+
+def test_the_sheet_s_shorter_store_name_still_matches(book: Path) -> None:
+    """The sheet says "Knox" where RetailNext says "Knox City". Two centres that merely share
+    a word are not the same store, though, and neither starts the other."""
+    listed = {2: {"A": "Johnny Bigg", "C": "Knox"}, 3: {"A": "Connor", "C": "Pacific Epping"}}
+    assert sheet.waiting(listed, "Johnny Big", "Knox City") == 2
+    assert sheet.waiting(listed, "Connor", "Epping") is None  # a different centre
+    assert sheet.waiting({2: {"A": "Connor", "C": "Knox"}}, "Connor", "Box Hill") is None
+
+
+def test_a_row_that_already_has_a_code_is_not_treated_as_waiting(book: Path) -> None:
+    """CN-167 is on the weekend sheet with its code. Another store at the same centre must not
+    take that row just because the names match."""
+    listed = sheet.rows(book, sheet.WEEKEND)
+    assert sheet.waiting(listed, "Connor", "Settlement City") is None
+
+
+def test_the_workbook_keeps_its_identity_on_a_synced_drive(book: Path) -> None:
+    """Written over itself, not replaced by a new file renamed into place. On OneDrive the
+    rename leaves a different file where the tracked one was, and the change can sit there
+    without ever going up."""
+    was = book.stat().st_ino
+    said = sheet.plan(book, code="JB-401", brand="Johnny Bigg", store="Werribee",
+                      day=date(2026, 9, 19), accuracy=89.2, link="https://x/JB-401")
+    sheet.write(book, said)
+    assert book.stat().st_ino == was  # the same file OneDrive has been watching
+    assert sheet.rows(book, sheet.WEEKEND)[said["row"]]["F"] == "0.8920"
+    assert not list(book.parent.glob("*.writing"))  # and nothing left beside it
+
+
+def test_a_workbook_that_cannot_be_rebuilt_whole_is_not_written_over(book: Path) -> None:
+    """The bytes only go down once they are a whole workbook: a half-written one on a shared
+    drive is everyone's problem."""
+    with zipfile.ZipFile(book) as z:
+        names, blobs = z.namelist(), {n: z.read(n) for n in z.namelist()}
+    assert sheet.rebuild(names, blobs)  # all there: fine
+
+    short = {n: b for n, b in blobs.items() if n != ODDITY}  # one part lost on the way through
+    with pytest.raises(sheet.TrackerError, match="1 part"):
+        sheet.rebuild(names, short)
+
+
+def test_every_part_survives_the_rebuild(book: Path) -> None:
+    with zipfile.ZipFile(book) as z:
+        names, blobs = z.namelist(), {n: z.read(n) for n in z.namelist()}
+    with zipfile.ZipFile(io.BytesIO(sheet.rebuild(names, blobs))) as out:
+        assert out.namelist() == names
+        assert out.read(ODDITY) == ODD_BYTES  # the part nothing here can parse, byte for byte

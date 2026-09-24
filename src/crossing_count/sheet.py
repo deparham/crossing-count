@@ -21,6 +21,8 @@ copied aside first (keep), and a workbook open in Excel is left alone.
 
 from __future__ import annotations
 
+import io
+import os
 import re
 import shutil
 import xml.etree.ElementTree as ET
@@ -112,6 +114,41 @@ def find(listed: dict[int, dict[str, str]], code: str) -> int | None:
     return hits[-1] if hits else None
 
 
+def _alike(a: str, b: str, least: int = 3) -> bool:
+    """One name being the start of the other, case and punctuation aside.
+
+    For brands, because their spelling differs from ours by a letter: "Johnny Big" on the
+    drive, "Johnny Bigg" in the sheet. For stores, because the sheet is shorter than
+    RetailNext: "Knox" against "Knox City". It does not run the other way - "Epping" and
+    "Pacific Epping" are two centres and neither starts the other - and nothing is decided on
+    this alone: the brand has to agree too, only one row may match, and a person sees the row
+    before it is written.
+    """
+    x, y = _bare(a), _bare(b)
+    return len(x) >= least and len(y) >= least and (x.startswith(y) or y.startswith(x))
+
+
+def waiting(listed: dict[int, dict[str, str]], brand: str, store: str) -> int | None:
+    """The row already put aside for this store, waiting to be validated.
+
+    Under the validated stores the workbook lists the ones still to do: the brand, the store
+    and the region filled in, the store code and everything after it empty. That is the row
+    the team fills in when the validation is done, so a store listed there is not added again
+    at the bottom where nobody is looking for it.
+
+    Only when exactly one row is waiting for that brand at that store, and only when its code
+    is empty - a row with a code is somebody's finished validation and is matched by code.
+    Four brands are often waiting at the same centre, so the brand has to agree as well.
+    """
+    if len(_bare(store)) < 4 or not _bare(brand):
+        return None
+    hits = [n for n, cells in listed.items()
+            if n > 1 and not cells.get(COLUMNS["code"], "").strip()
+            and _alike(cells.get(COLUMNS["brand"], ""), brand)
+            and _alike(cells.get(COLUMNS["store"], ""), store, least=4)]
+    return hits[0] if len(hits) == 1 else None
+
+
 def _bare(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(text).lower())
 
@@ -153,21 +190,25 @@ def plan(path: Path, *, code: str, brand: str, store: str, day: date,
     sheet = sheet_for(day)
     listed = rows(path, sheet)
     at = find(listed, code)
+    held = waiting(listed, brand, store) if at is None else None
     # the brand's spelling is looked for in both sheets: a brand can have no store at all in
     # the one this validation belongs to, and the sheets agree about what a brand is called
     everywhere = dict(listed)
     for other in (INITIAL, WEEKEND):
         if other != sheet:
             everywhere |= {n + 100_000: cells for n, cells in rows(path, other).items()}
-    was = listed.get(at or 0, {})
+    was = listed.get(at or held or 0, {})
     values = {"date": str(serial(day)),
               "accuracy": "" if accuracy is None else f"{accuracy / 100:.4f}",
               "link": link}
-    if at is None:  # a store not listed yet needs saying who and where as well
+    if held is not None:  # the row put aside for it: only the code is missing from it
+        values |= {"code": code}
+    elif at is None:  # a store not listed at all needs saying who and where as well
         values |= {"brand": brand_as_listed(everywhere, code, brand),
                    "code": code, "store": store}
-    return {"file": str(path), "sheet": sheet, "row": at or next_row(listed),
-            "adding": at is None, "open_elsewhere": open_elsewhere(path),
+    return {"file": str(path), "sheet": sheet, "row": at or held or next_row(listed),
+            "adding": at is None and held is None, "waiting": held is not None,
+            "open_elsewhere": open_elsewhere(path),
             "changes": [{"column": COLUMNS[k], "what": k,
                          "from": was.get(COLUMNS[k], ""), "to": v}
                         for k, v in values.items() if v != ""]}
@@ -240,6 +281,43 @@ def _style_in(data: ET.Element, col: str, row: int, prefer: set[str] | None = No
     return ""
 
 
+def rebuild(names: list[str], blobs: dict[str, bytes]) -> bytes:
+    """The workbook as one whole zip again, every part in the order it came in.
+
+    Checked before it is handed back, because what it replaces is a file the whole team
+    shares: a part that went missing on the way through is not written over the real one.
+    """
+    if gone := [n for n in names if n not in blobs]:
+        raise TrackerError(f"the workbook could not be put back together: "
+                           f"{len(gone)} part(s) missing, the first being {gone[0]}. "
+                           f"Nothing was written.")
+    made = io.BytesIO()
+    with zipfile.ZipFile(made, "w", zipfile.ZIP_DEFLATED) as w:
+        for n in names:  # every part but the one sheet, byte for byte
+            w.writestr(n, blobs[n])
+    whole = made.getvalue()
+    with zipfile.ZipFile(io.BytesIO(whole)) as check:
+        if set(check.namelist()) != set(names) or check.testzip() is not None:
+            raise TrackerError("the workbook could not be put back together. Nothing was "
+                               "written.")
+    return whole
+
+
+def _overwrite(path: Path, whole: bytes) -> None:
+    """Write the workbook over itself, keeping the file OneDrive is already tracking.
+
+    Not by building a new file and renaming it into place: on a synced drive that leaves a
+    different file where the tracked one was, and the change can sit there without going up.
+    Excel writes in place for the same reason. The bytes are only written once they are a
+    whole workbook (checked above), and a copy is kept before any of this.
+    """
+    with path.open("r+b") as f:
+        f.write(whole)
+        f.truncate()
+        f.flush()
+        os.fsync(f.fileno())
+
+
 def keep(path: Path) -> Path:
     """A copy of the workbook before it is written to, the last KEEP of them kept."""
     folder = backups(path)
@@ -300,14 +378,10 @@ def write(path: Path, said: dict[str, Any]) -> dict[str, Any]:
         here[:] = sorted(here, key=lambda c: (len(str(c.get("r"))), str(c.get("r"))))
         data[:] = sorted(data, key=lambda r: int(str(r.get("r"))))
         blobs[part] = ET.tostring(root, xml_declaration=True, encoding="UTF-8")
-        tmp = path.with_name(path.name + ".writing")
-        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as w:
-            for n in names:  # every other part, byte for byte
-                w.writestr(n, blobs[n])
-        tmp.replace(path)
+        _overwrite(path, rebuild(names, blobs))
     except (OSError, zipfile.BadZipFile, ET.ParseError) as exc:
-        raise TrackerError(f"{path.name} could not be written ({exc}). It is unchanged; the "
-                           f"copy made first is at {kept}.") from exc
+        raise TrackerError(f"{path.name} could not be written ({exc}). The copy made first is "
+                           f"at {kept}; put it back if the workbook will not open.") from exc
     return {"written": True, "row": row, "sheet": said["sheet"], "kept": str(kept),
             "adding": said["adding"], "changes": said["changes"]}
 

@@ -1972,7 +1972,8 @@ async function renderSheet() {
   const p = got.plan, acc = got.accuracy;
   box.innerHTML = `${head}
     <div class="muted" style="margin-top:4px">${esc(got.file)} · <b>${esc(p.sheet)}</b> · row ${p.row}${
-      p.adding ? " (a new row: this store is not listed yet)" : " (this store's row, filled in)"}</div>
+      p.waiting ? " (the row waiting for this store, filled in)"
+      : p.adding ? " (a new row: this store is not listed yet)" : " (this store's row, filled in)"}</div>
     ${got.incomplete && got.incomplete.length ? `<div class="warn" style="margin-top:6px">This validation is not complete, so it has no accuracy: ${esc(got.incomplete.join(" "))}</div>` : ""}
     ${acc.pct === null ? `<div class="warn" style="margin-top:6px">There is no accuracy to put in: the system gave no number for this window. The date and the link still go in.</div>` : ""}
     ${acc.pct !== null && acc.thin.length ? `<div class="warn" style="margin-top:6px">It goes in, but it rests on little: ${esc(acc.thin.join(". ").replace(/\.?$/, "."))} The report prints the counts and the difference instead of this percentage.</div>` : ""}
@@ -1997,7 +1998,8 @@ function wireSheet(got) {
   if (!$("shGo")) return;
   $("shGo").addEventListener("click", async () => {
     const p = got.plan;
-    if (!confirm(`${p.adding ? "Add a row to" : "Fill in row " + p.row + " of"}\n${got.file} — ${p.sheet}\n\n`
+    if (!confirm(`${p.adding ? "Add a row to" : "Fill in row " + p.row + " of"}\n${got.file} — ${p.sheet}${
+      p.waiting ? "\n(the row already waiting for this store)" : ""}\n\n`
       + p.changes.map((c) => `${c.column}: ${c.from ? c.from.slice(0, 40) + " → " : ""}${c.to}`).join("\n")
       + `\n\nA copy of the workbook is kept first.`)) return;
     $("shGo").disabled = true;
