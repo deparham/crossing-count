@@ -17,7 +17,7 @@ or git. The client id and tenant are not secrets and live in the settings beside
 
 The tenant needs an app registration for this to sign in to, made once by whoever administers
 it: a public client (no secret), "Allow public client flows" turned on, and delegated
-Microsoft Graph permissions Files.ReadWrite.All and Sites.ReadWrite.All. Its Application
+Microsoft Graph permissions Files.ReadWrite.All and Sites.Read.All. Its Application
 (client) ID and Directory (tenant) ID are what go in the settings.
 """
 
@@ -47,7 +47,11 @@ ACCOUNT = "graph"
 LOGIN = "https://login.microsoftonline.com"
 GRAPH = "https://graph.microsoft.com/v1.0"
 # offline_access is what allows a refresh token, so signing in is a once-only thing
-SCOPES = "offline_access Files.ReadWrite.All Sites.ReadWrite.All User.Read"
+# Sites is asked for read only: every /sites/ call here is a GET, for the id of a site and of
+# a library. Everything written goes through /drives/{id}/..., which Files.ReadWrite.All
+# covers. It is the difference between asking an administrator to allow "edit or delete items
+# in all site collections" and "read items in all site collections".
+SCOPES = "offline_access Files.ReadWrite.All Sites.Read.All User.Read"
 CHUNK = 8 * 1024 * 1024  # what goes up in one piece of a large upload; a multiple of 320 KiB
 SMALL = 4 * 1024 * 1024  # up to this, a file goes up in a single put
 TIMEOUT = 60.0
@@ -79,7 +83,7 @@ def registration() -> tuple[str, str]:
         raise NotSignedIn(
             "Microsoft sign-in is not set up yet. Whoever administers your Microsoft 365 "
             "tenant registers an application for this once - a public client with the "
-            "delegated Graph permissions Files.ReadWrite.All and Sites.ReadWrite.All - and "
+            "delegated Graph permissions Files.ReadWrite.All and Sites.Read.All - and "
             "its Application (client) ID and Directory (tenant) ID go on the Report page.")
     return tenant, client
 
