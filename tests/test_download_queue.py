@@ -6,6 +6,7 @@ RetailNext is stubbed at its own edge, so what runs here is the queue itself.
 
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -32,7 +33,10 @@ WINDOWS = {
 @pytest.fixture
 def stubs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path / "home"))
-    state: dict[str, Any] = {"exported": [], "fail": set(), "slow": set()}
+    # "held" waits on the gate instead of sleeping, so a test can hold a download open for
+    # as long as it needs rather than hoping a sleep is long enough on whatever machine runs it
+    state: dict[str, Any] = {"exported": [], "fail": set(), "held": set(),
+                             "gate": threading.Event()}
 
     monkeypatch.setattr(rn, "connections", lambda: [rn.Connection("acme", "A", "S")])
     monkeypatch.setattr(rn, "locations", lambda conn: [])
@@ -67,8 +71,8 @@ def stubs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(rn, "export_status", lambda conn, eid: ("ready", {"url": eid}))
 
     def download(info: Any, where: Path, on: Any) -> None:
-        if any(f in str(info) for f in state["slow"]):
-            time.sleep(0.4)
+        if any(f in str(info) for f in state["held"]):
+            assert state["gate"].wait(timeout=10), "the test never let the download go"
         where.write_bytes(b"video")
         on(5, 5)
 
@@ -128,28 +132,37 @@ def test_one_store_being_down_does_not_stop_the_others(stubs: dict[str, Any]) ->
 
 
 def test_the_first_is_ready_while_the_rest_are_still_coming(stubs: dict[str, Any]) -> None:
-    """The point of the queue: validate the first while the others download."""
-    stubs["slow"].add("RW-409")
+    """The whole point of the queue: count the first while the others are still coming.
+
+    The second download is held open until this test lets it go, so what is checked is the
+    queue's doing and not how fast the machine happens to be.
+    """
+    stubs["held"].add("RW-409")
     client = stubs["client"]
     client.post("/api/retailnext/queue", json={"codes": ["CN-123", "RW-409"],
                                                "date": "2026-09-19"})
     end = time.monotonic() + 10.0
-    while time.monotonic() < end:
+    while time.monotonic() < end:  # the first lands; the second is held at the gate
         got = client.get("/api/retailnext/queue").json()
-        if got["ready"] and got["working"]:
+        if got["ready"]:
             break
-        time.sleep(0.02)
+        time.sleep(0.01)
     else:
-        raise AssertionError("never had one ready while still working")
+        raise AssertionError("the first one never came down")
+    assert got["working"] is True  # and the queue is still going, by the gate
     assert Path(got["ready"][0]["path"]).is_file()  # openable now, the rest still coming
-    _settled(client)
+    assert got["ready"][0]["code"] == "CN-123"
+    stubs["gate"].set()
+    assert len(_settled(client)["ready"]) == 2
 
 
 def test_one_window_on_its_own_uses_the_same_queue(stubs: dict[str, Any]) -> None:
     client = stubs["client"]
     one = client.post("/api/retailnext/download", json={
         "code": "CN-123", "date": "2026-09-19", "start": "10:45", "until": "11:00"}).json()
-    assert one["state"] in ("waiting", "exporting", "downloading")  # the worker starts at once
+    # never what state it is in by now: the worker starts at once, and on a quick machine a
+    # stubbed download is over before the answer is even written out
+    assert one["code"] == "CN-123" and one["start"] == "10:45" and one["until"] == "11:00"
     busy = client.post("/api/retailnext/download", json={
         "code": "CN-123", "date": "2026-09-19", "start": "14:00", "until": "14:15"})
     assert busy.status_code in (200, 409)  # refused while one is under way, as it always was
