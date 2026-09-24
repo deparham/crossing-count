@@ -766,3 +766,29 @@ def test_a_spreadsheet_that_will_not_take_it_does_not_stop_the_delivery(
     got = client.post("/api/deliver", json={"footage": False}).json()
     assert got["files"] and Path(got["folder"]).is_dir()  # delivered all the same
     assert "open in Excel" in got["sheet"]["problem"]
+
+
+def test_the_link_is_the_one_sharepoint_itself_gave_back(
+        two_tile_video: dict[str, Any], tmp_path: Path, book: Path,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the report went up through Graph, the folder's address comes back with it, and
+    that one is the server's own rather than worked out from a path on this disk."""
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path / "home"))
+    client, on_drive, _ = _validated(two_tile_video, tmp_path, book, crossings=40, sensor=36)
+    url = "https://acme.sharepoint.com/sites/validations/Shared%20Documents/RAG/C/CN-167"
+    from crossing_count.wizard import Wizard
+
+    real = Wizard.deliver
+
+    def delivered(self: Any, root: Path, footage: bool) -> dict[str, Any]:
+        self.state["delivered"] = {"url": url, "folder": "x", "files": [], "footage": False}
+        return {"url": url, "folder": "x", "files": ["r.pptx"], "footage": False,
+                "sheet": self.sheet_after_delivery(root)}
+
+    monkeypatch.setattr(Wizard, "deliver", delivered)
+    try:
+        got = client.post("/api/deliver", json={"footage": False}).json()
+    finally:
+        monkeypatch.setattr(Wizard, "deliver", real)
+    assert got["sheet"]["by_itself"] is True
+    assert sheet.rows(on_drive, sheet.WEEKEND)[got["sheet"]["written"]["row"]]["G"] == url

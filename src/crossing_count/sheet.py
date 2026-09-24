@@ -27,7 +27,6 @@ import re
 import shutil
 import xml.etree.ElementTree as ET
 import zipfile
-from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -496,36 +495,13 @@ def link_for(path: Path, folder: Path) -> str:
 # External/RAG of the Documents library of the site "validations". Only the host has to be
 # learned, and the links already in the sheet say it (host_in).
 
-@dataclass(frozen=True)
-class Online:
-    """A workbook on SharePoint: which site, which library, and where in it."""
-
-    site: str  # https://acme.sharepoint.com/sites/validations
-    library: str  # the library's name, or "" for the site's default one
-    path: str  # External/RAG/Store_installations_Validation.xlsx
-
-    @property
-    def name(self) -> str:
-        return self.path.rsplit("/", 1)[-1]
-
-
-_drives: dict[tuple[str, str], str] = {}  # what Graph called each library, asked once
-
-
-def drive_of(place: Online) -> str:
-    if (place.site, place.library) not in _drives:
-        _drives[(place.site, place.library)] = graph.drive_id(
-            graph.site_id(place.site), place.library)
-    return _drives[(place.site, place.library)]
+Online = graph.Place  # a workbook on SharePoint; the idea itself lives in graph.py
+drive_of = graph.drive_of
 
 
 def online_for(root: Path, workbook: str, host: str) -> Online | None:
     """Where the workbook the team shares sits on SharePoint, or None when it cannot be told."""
-    m = SYNCED.search((root / workbook).as_posix())
-    if not m or not host:
-        return None
-    return Online(site=f"https://{host}/sites/{m['site']}",
-                  library=DEFAULT_LIBRARY.get(m["library"], m["library"]), path=m["rest"])
+    return graph.place_for(root / workbook, host)
 
 
 def online_plan(place: Online, **about: Any) -> tuple[dict[str, Any], str]:

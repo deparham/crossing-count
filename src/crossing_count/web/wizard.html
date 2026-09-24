@@ -423,6 +423,7 @@
         <input type="text" id="delDir" placeholder="e.g. ~/Library/CloudStorage/OneDrive-YourCompany/External/RAG"></label>
     </div>
     <div id="delBox" class="sub" style="margin-top:10px" hidden></div>
+    <div id="msBox" class="sub" style="margin-top:10px"></div>
     <div id="sheetBox" class="sub" style="margin-top:10px" hidden></div>
     <div id="logoInfo" class="muted" style="margin-top:6px"></div>
     <div style="margin-top:12px"><button id="make" class="primary">Make PowerPoint</button></div>
@@ -1823,6 +1824,7 @@ ENTER.report = async () => {
   $("made").innerHTML = s.report ? madeHtml(s.report.path) : "";
   renderDeliver();
   renderSheet();
+  renderMicrosoft();
   nextUp();
 };
 async function nextUp() {
@@ -1915,7 +1917,7 @@ async function renderDeliver() {
   if (!p) { box.innerHTML = '<span class="muted">Make the report first.</span>'; return; }
   if (p.problem) { box.innerHTML = `<b>Deliver to the customer</b><div class="warn" style="margin-top:6px">${esc(p.problem)}</div>`; return; }
   box.innerHTML = `<b>Deliver to the customer</b>
-    <div class="muted" style="margin-top:4px">Into <code>${esc(p.folder)}</code>${p.exists ? "" : " (it will be made)"}</div>
+    <div class="muted" style="margin-top:4px">${p.online ? "Straight to SharePoint, into" : "Into"} <code>${esc(p.folder)}</code>${p.online || p.exists ? "" : " (it will be made)"}</div>
     ${p.warn ? `<div class="warn" style="margin-top:6px">${esc(p.warn)}</div>` : ""}
     <ul class="muted" style="margin:6px 0 0 18px">${p.files.map((f) => `<li>${esc(f.name)} <span style="opacity:.7">${fmtBytes(f.bytes)}</span>${f.footage ? ' <span class="warn">the footage</span>' : ""}</li>`).join("")}</ul>
     <label style="display:block;margin-top:8px"><input type="checkbox" id="delFootage" ${want ? "checked" : ""}> Send the footage as well <span class="muted">(it shows identifiable people and belongs to the retailer)</span></label>
@@ -1926,11 +1928,74 @@ async function renderDeliver() {
     const footage = $("delFootage").checked;
     if (!confirm(`Copy this validation to\n${p.folder}\n\n${p.files.length} file(s), ${fmtBytes(p.bytes)}${footage ? ", including the footage" : ""}?`)) return;
     $("delGo").disabled = true;
-    try { await api("/api/deliver", { footage }); msg("Sent to the shared drive.", "ok"); }
+    try {
+      const sent = await api("/api/deliver", { footage });
+      const row = sent.sheet || {};
+      if (row.by_itself) msg(`Sent, and the spreadsheet row went in (${row.written.sheet} row ${row.written.row}).`, "ok");
+      else if (row.waiting_on_a_person) msg(`Sent. The spreadsheet row is waiting for you: ${row.waiting_on_a_person}.`, "warn");
+      else if (row.problem) msg(`Sent. The spreadsheet could not be updated: ${row.problem}`, "warn");
+      else msg("Sent to the shared drive.", "ok");
+    }
     catch (e) { msg(e.message, "err"); }
     finally { renderDeliver(); renderSheet(); }  // the folder the link points at exists now
   });
 }
+// ---------- the Microsoft account the app writes to SharePoint with ----------
+// Signed in, the report, the footage and the spreadsheet row go to SharePoint itself rather
+// than into the synced folder for OneDrive to carry up later. Only a refresh token is a
+// secret and it never leaves the computer's credential store; the two ids below are not.
+let MS = null, MS_POLL = null;
+async function renderMicrosoft() {
+  const box = $("msBox");
+  try { MS = await api("/api/microsoft"); } catch (e) { box.innerHTML = `<span class="err">${esc(e.message)}</span>`; return; }
+  const head = `<b>Microsoft account</b> <span class="muted">— so the report, the footage and the spreadsheet row go straight to SharePoint, instead of waiting on OneDrive to carry them up.</span>`;
+  if (MS.signed_in) {
+    box.innerHTML = `${head}
+      <div class="ok" style="margin-top:6px">Connected. Deliveries and the spreadsheet go to SharePoint itself.</div>
+      <div style="margin-top:8px"><button id="msOut">Sign out</button></div>`;
+    $("msOut").addEventListener("click", async () => {
+      if (!confirm("Sign out of Microsoft?\n\nDeliveries would go back to the OneDrive folder and wait for it to sync.")) return;
+      try { await api("/api/microsoft/forget", {}); } catch (e) { msg(e.message, "err"); }
+      renderMicrosoft();
+    });
+    return;
+  }
+  if (MS.code) {  // waiting for them to type it in
+    box.innerHTML = `${head}
+      <div style="margin-top:8px">Go to <a href="${esc(MS.code.url)}" target="_blank" rel="noopener">${esc(MS.code.url)}</a> and enter this code:</div>
+      <div style="font:600 28px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:3px;margin:6px 0">${esc(MS.code.code)}</div>
+      <div class="muted">Waiting for you to finish signing in${MS.code.expires_in ? ` — the code lasts ${Math.floor(MS.code.expires_in / 60)} more minute(s)` : ""}.</div>`;
+    return;
+  }
+  box.innerHTML = `${head}
+    ${MS.registered ? "" : `<div class="warn" style="margin-top:6px">${esc(MS.problem || "")}</div>`}
+    <div class="grid2" style="margin-top:8px">
+      <label>Directory (tenant) ID<input type="text" id="msTenant" value="${esc(MS.tenant || "")}" placeholder="00000000-0000-0000-0000-000000000000"></label>
+      <label>Application (client) ID<input type="text" id="msClient" value="${esc(MS.client_id || "")}" placeholder="00000000-0000-0000-0000-000000000000"></label>
+    </div>
+    <label style="display:block;margin-top:6px">SharePoint address <span class="muted">— only needed if the spreadsheet holds no links to learn it from, e.g. <code>yourcompany.sharepoint.com</code></span>
+      <input type="text" id="msHost" value="${esc(MS.host || "")}" style="width:100%"></label>
+    <div class="muted" style="margin-top:6px">${MS.registered ? "Neither ID is a secret; the sign-in itself is kept in this computer's credential store." : "Neither ID is a secret. They are on the registration's own page in Entra ID."}</div>
+    <div style="margin-top:8px"><button id="msSave">Save</button>
+      <button id="msIn" class="primary" style="margin-left:6px"${MS.registered ? "" : " disabled"}>Sign in</button></div>`;
+  $("msSave").addEventListener("click", async () => {
+    try { await api("/api/microsoft", { tenant: $("msTenant").value.trim(), client_id: $("msClient").value.trim(), host: $("msHost").value.trim() }); msg("Saved.", "ok"); }
+    catch (e) { msg(e.message, "err"); }
+    renderMicrosoft();
+  });
+  $("msIn").addEventListener("click", async () => {
+    try { await api("/api/microsoft/signin", {}); } catch (e) { msg(e.message, "err"); return; }
+    await renderMicrosoft();
+    clearInterval(MS_POLL);  // ask every few seconds until they have done it, then stop
+    MS_POLL = setInterval(async () => {
+      let got;
+      try { got = await api("/api/microsoft/signin", {}); }
+      catch (e) { clearInterval(MS_POLL); MS_POLL = null; msg(e.message, "err"); renderMicrosoft(); return; }
+      if (got.signed_in || !got.code) { clearInterval(MS_POLL); MS_POLL = null; renderMicrosoft(); renderDeliver(); renderSheet(); }
+    }, 4000);
+  });
+}
+
 // ---------- the team's spreadsheet ----------
 // One row a validation, in the workbook sitting in the same folder. Every cell that would
 // change is shown with what is in it now, because a store validated before has a row already

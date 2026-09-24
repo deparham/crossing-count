@@ -29,6 +29,7 @@ from . import (
     auditlog,
     engagement,
     gold,
+    graph,
     independence,
     network,
     paths,
@@ -62,6 +63,9 @@ HOST_ONLY = frozenset({
     # the team's spreadsheet is one file everyone's rows live in, rewritten in place: two
     # people writing it at once is how a row goes missing, so it is this computer's to write
     ("POST", "/api/sheet"),
+    # the Microsoft account is this computer's, exactly as its RetailNext keys are
+    ("POST", "/api/microsoft"), ("POST", "/api/microsoft/signin"),
+    ("POST", "/api/microsoft/forget"),
 })
 
 
@@ -320,6 +324,12 @@ class SettingsIn(BaseModel):
 
 class DeliverIn(BaseModel):
     footage: bool = False  # the footage goes only when this says so, each time
+
+
+class MicrosoftIn(BaseModel):
+    tenant: str = ""  # Directory (tenant) ID; not a secret
+    client_id: str = ""  # Application (client) ID; not a secret
+    host: str = ""  # e.g. acme.sharepoint.com, when the sheet's own links do not say
 
 
 class SheetIn(BaseModel):
@@ -1142,6 +1152,56 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         except WizardError as exc:
             raise HTTPException(400, str(exc)) from exc
         return {**got, "delivered": w.state.get("delivered")}
+
+    # ---------- the Microsoft account the app writes to SharePoint with ----------
+    # Only the refresh token is a secret and it never leaves the credential store; the tenant
+    # and client id are not, and are kept beside the folders. Signing in and out is this
+    # computer's to do, like the RetailNext keys.
+    signing_in: dict[str, Any] = {}
+
+    @app.get("/api/microsoft")
+    def microsoft() -> dict[str, Any]:
+        kept = paths.load_settings()
+        out: dict[str, Any] = {
+            "signed_in": graph.signed_in(),
+            "tenant": kept.get("graph_tenant", ""), "client_id": kept.get("graph_client_id", ""),
+            "host": kept.get("graph_host", ""), "registered": True}
+        try:
+            graph.registration()
+        except graph.NotSignedIn as exc:
+            out |= {"registered": False, "problem": str(exc)}
+        if started := signing_in.get("started"):
+            out["code"] = {"code": started.code, "url": started.url,
+                           "expires_in": max(0, int(started.expires_at - time.time()))}
+        return out
+
+    @app.post("/api/microsoft")
+    def microsoft_set(d: MicrosoftIn) -> dict[str, Any]:
+        paths.save_settings({"graph_tenant": d.tenant.strip(),
+                             "graph_client_id": d.client_id.strip(),
+                             "graph_host": d.host.strip()})
+        return microsoft()
+
+    @app.post("/api/microsoft/signin")
+    def microsoft_signin() -> dict[str, Any]:
+        """Start a sign-in, or ask once whether the code has been entered yet."""
+        try:
+            started = signing_in.get("started")
+            if started is None or started.expires_at < time.time():
+                signing_in["started"] = graph.begin()
+                return microsoft()
+            if graph.poll(started):
+                signing_in.pop("started", None)
+        except graph.GraphError as exc:
+            signing_in.pop("started", None)
+            raise HTTPException(400, str(exc)) from exc
+        return microsoft()
+
+    @app.post("/api/microsoft/forget")
+    def microsoft_forget() -> dict[str, Any]:
+        signing_in.pop("started", None)
+        graph.forget()
+        return microsoft()
 
     @app.get("/api/sheet")
     def sheet_says(workbook: str = "", link: str = "") -> dict[str, Any]:

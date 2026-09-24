@@ -208,3 +208,101 @@ def test_the_brand_folder_is_found_under_the_folder_you_chose(tmp_path: Path,
     fresh = tmp_path / "new"
     fresh.mkdir()
     assert delivery.plan(fresh, {"code": "CN-123", "name": "Tweed Heads"}, report)["warn"] is None
+
+
+# ---------- straight to SharePoint ----------
+
+def test_where_the_brand_s_folder_is_on_sharepoint(tmp_path: Path,
+                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path / "home"))
+    root = Path("/Users/x/Library/CloudStorage/OneDrive-AcmePtyLtd/validations - Documents"
+                "/External/RAG")
+    place = delivery.online_where(root, {"code": "CN-212", "name": "Northland"},
+                                  "acme.sharepoint.com")
+    assert place is not None
+    assert place.site == "https://acme.sharepoint.com/sites/validations"
+    assert place.path == "External/RAG/Connor/Connor Northland - CN-212"
+    assert delivery.online_where(Path("/Users/x/Desktop"), {"code": "CN-212", "name": "N"},
+                                 "acme.sharepoint.com") is None
+
+
+def test_the_report_and_the_footage_go_up_themselves(tmp_path: Path,
+                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 79 MB export copied into the synced folder is only delivered once OneDrive has
+    finished with it. Here the upload is the delivery."""
+    from crossing_count import graph
+
+    report = tmp_path / "CN-212 Northland.pptx"
+    report.write_bytes(b"deck")
+    (tmp_path / "CN-212 Northland.pdf").write_bytes(b"pdf")
+    video = tmp_path / "Export - CN-212 marked.mp4"
+    video.write_bytes(b"footage" * 100)
+
+    made: list[str] = []
+    put: list[tuple[str, int]] = []
+
+    def made_folder(drive: str, at: str) -> dict[str, Any]:
+        made.append(at)
+        return {"id": "f"}
+
+    def went_up(drive: str, at: str, src: Path, on: Any = None) -> dict[str, Any]:
+        put.append((at, src.stat().st_size))
+        return {"name": Path(at).name}
+
+    monkeypatch.setattr(graph, "drive_of", lambda place: "drive1")
+    monkeypatch.setattr(graph, "folder", made_folder)
+    monkeypatch.setattr(graph, "upload", went_up)
+
+    place = graph.Place("https://acme.sharepoint.com/sites/validations", "Shared Documents",
+                        "External/RAG/Connor/Connor Northland - CN-212")
+    said = delivery.online_plan(place, report, video)
+    assert said["online"] is True and said["bytes"] == 4 + 3 + 700
+    assert not made and not put  # asking is not sending
+
+    got = delivery.online_deliver(place, report, video)
+    assert made == ["External/RAG/Connor/Connor Northland - CN-212"]  # and everything above it
+    assert [p for p, _ in put] == [
+        "External/RAG/Connor/Connor Northland - CN-212/CN-212 Northland.pptx",
+        "External/RAG/Connor/Connor Northland - CN-212/CN-212 Northland.pdf",
+        "External/RAG/Connor/Connor Northland - CN-212/Export - CN-212 marked.mp4"]
+    assert got["footage"] is True
+    assert got["url"] == ("https://acme.sharepoint.com/sites/validations/Shared%20Documents/"
+                          "External/RAG/Connor/Connor%20Northland%20-%20CN-212")
+
+
+def test_the_footage_stays_behind_unless_it_is_asked_for(tmp_path: Path,
+                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    from crossing_count import graph
+
+    report = tmp_path / "r.pptx"
+    report.write_bytes(b"deck")
+    put: list[str] = []
+
+    def went_up(drive: str, at: str, src: Path, on: Any = None) -> dict[str, Any]:
+        put.append(at)
+        return {"name": Path(at).name}
+
+    monkeypatch.setattr(graph, "drive_of", lambda place: "d")
+    monkeypatch.setattr(graph, "folder", lambda d, p: {"id": "f"})
+    monkeypatch.setattr(graph, "upload", went_up)
+    place = graph.Place("https://acme.sharepoint.com/sites/v", "Shared Documents", "RAG/X")
+    got = delivery.online_deliver(place, report)  # no video given
+    assert got["footage"] is False and not any(".mp4" in p for p in put)
+
+
+def test_sharepoint_refusing_is_a_delivery_problem_in_words(tmp_path: Path,
+                                                            monkeypatch: pytest.MonkeyPatch
+                                                            ) -> None:
+    from crossing_count import graph
+
+    report = tmp_path / "r.pptx"
+    report.write_bytes(b"deck")
+
+    def no(*a: object, **k: object) -> None:
+        raise graph.GraphError("SharePoint would not do that (507).")
+
+    monkeypatch.setattr(graph, "drive_of", lambda place: "d")
+    monkeypatch.setattr(graph, "folder", no)
+    place = graph.Place("https://acme.sharepoint.com/sites/v", "Shared Documents", "RAG/X")
+    with pytest.raises(delivery.DeliveryError, match="507"):
+        delivery.online_deliver(place, report)

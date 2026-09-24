@@ -19,12 +19,15 @@ person's decision each time, and docs/PRIVACY.md says what it means.
 
 from __future__ import annotations
 
+import functools
 import re
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
-from . import paths
+from . import graph, paths
 
 # A store code's prefix, and the brand it belongs to. The folders on the drive are spelled
 # as their owners spell them; what is here is only used when no folder matches yet.
@@ -170,3 +173,56 @@ def deliver(root: Path, store: dict[str, Any], report: Path,
         done.append(dst.name)
     return {"folder": str(out), "files": done,
             "footage": bool(video is not None and video.is_file())}
+
+
+# ---------- straight to SharePoint, rather than into the folder OneDrive carries up ----------
+# The same folder and the same files, put there by the app itself. A 79 MB export copied into
+# the synced folder is only delivered once OneDrive has finished with it, and until then the
+# customer's folder is half there; here the upload is the delivery, and it either worked or
+# it said why.
+
+def _telling(on: Callable[[str, int, int], None], name: str, sent: int, size: int) -> None:
+    on(name, sent, size)
+
+
+def online_where(root: Path, store: dict[str, Any], host: str) -> graph.Place | None:
+    """The brand's folder on SharePoint, or None when nothing says where that is."""
+    return graph.place_for(where(root, store), host)
+
+
+def online_plan(place: graph.Place, report: Path, video: Path | None = None) -> dict[str, Any]:
+    """What would be uploaded where, for the person to agree to before any of it is."""
+    files: list[dict[str, Any]] = []
+    for p in _files(report, video):
+        try:
+            files.append({"name": p.name, "bytes": p.stat().st_size, "footage": p == video})
+        except OSError:
+            continue
+    return {"folder": place.path, "site": place.site, "online": True, "files": files,
+            "bytes": sum(int(f["bytes"]) for f in files)}
+
+
+def online_deliver(place: graph.Place, report: Path, video: Path | None = None,
+                   on: Callable[[str, int, int], None] | None = None) -> dict[str, Any]:
+    """Upload this validation into the brand's folder on SharePoint.
+
+    The folder, and every folder above it, is made first. A file already there is not
+    replaced: SharePoint is asked to rename the new one instead, because a delivered folder
+    is the customer's (graph.upload).
+    """
+    drive = graph.drive_of(place)
+    try:
+        graph.folder(drive, place.path)
+        done: list[str] = []
+        for src in _files(report, video):
+            watch: Callable[[int, int], None] | None = None
+            if on is not None:
+                watch = functools.partial(_telling, on, src.name)
+            got = graph.upload(drive, place.under(src.name).path, src, on=watch)
+            done.append(str(got.get("name") or src.name))
+    except graph.GraphError as exc:
+        raise DeliveryError(str(exc)) from exc
+    return {"folder": place.path, "site": place.site, "files": done, "online": True,
+            "footage": bool(video is not None and video.is_file()),
+            "url": f"{place.site}/{place.library.replace(' ', '%20')}/"
+                   + "/".join(quote(p) for p in place.path.split("/"))}

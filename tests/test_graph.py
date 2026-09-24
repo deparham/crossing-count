@@ -316,3 +316,66 @@ def test_the_site_is_found_from_a_link_out_of_the_sheet(ms: Microsoft) -> None:
     got = graph.site_id("https://acme.sharepoint.com/sites/validations/Shared%20Documents/x")
     assert got == "acme.sharepoint.com,guid1,guid2"
     assert ms.asked[-1]["url"].endswith("/sites/acme.sharepoint.com:/sites/validations")
+
+
+# ---------- through the pages ----------
+
+def test_signing_in_from_the_report_page(ms: Microsoft, tmp_path: Path,
+                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi.testclient import TestClient
+
+    from crossing_count.wizard_app import create_wizard_app
+
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path / "home"))
+    kept: dict[str, Any] = {}
+    monkeypatch.setattr(paths, "load_settings", lambda: dict(kept))
+    monkeypatch.setattr(paths, "save_settings", lambda v: kept.update(v) or dict(kept))
+    client = TestClient(create_wizard_app(tmp_path / "sites", tmp_path / "data", []))
+
+    said = client.get("/api/microsoft").json()
+    assert said["signed_in"] is False and said["registered"] is False
+    assert "Files.ReadWrite.All" in said["problem"]  # what to ask the tenant's admin for
+
+    said = client.post("/api/microsoft", json={"tenant": TENANT, "client_id": CLIENT}).json()
+    assert said["registered"] is True and said["tenant"] == TENANT
+
+    ms.will("devicecode", {"user_code": "ABC-DEF", "verification_uri": "https://aka.ms/devicelogin",
+                           "device_code": "dev", "interval": 5, "expires_in": 900})
+    said = client.post("/api/microsoft/signin", json={}).json()
+    assert said["code"]["code"] == "ABC-DEF" and said["code"]["expires_in"] > 0
+
+    ms.will("oauth2/v2.0/token", {"error": "authorization_pending"},
+            {"refresh_token": "r1", "access_token": "a1", "expires_in": 3600})
+    assert client.post("/api/microsoft/signin", json={}).json()["signed_in"] is False
+    said = client.post("/api/microsoft/signin", json={}).json()
+    assert said["signed_in"] is True and "code" not in said  # done, stop asking
+
+    assert client.post("/api/microsoft/forget", json={}).json()["signed_in"] is False
+
+
+def test_nothing_of_the_sign_in_comes_back_over_the_wire(ms: Microsoft, tmp_path: Path,
+                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    """The two ids are not secrets and are shown. The tokens are, and never leave the
+    credential store - not to the page, not to a log, not to a file."""
+    from fastapi.testclient import TestClient
+
+    from crossing_count.wizard_app import create_wizard_app
+
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path / "home"))
+    kept = {"graph_tenant": TENANT, "graph_client_id": CLIENT}
+    monkeypatch.setattr(paths, "load_settings", lambda: dict(kept))
+    client = TestClient(create_wizard_app(tmp_path / "sites", tmp_path / "data", []))
+    _signed_in(ms)
+
+    raw = client.get("/api/microsoft").text
+    assert "r1" not in raw and "a1" not in raw and "refresh" not in raw
+    assert TENANT in raw  # and what is not secret is there to be seen
+
+
+def test_signing_in_is_this_computer_s_to_do(ms: Microsoft) -> None:
+    """Somebody on the network share cannot connect or disconnect the account, any more than
+    they can the RetailNext keys."""
+    from crossing_count.wizard_app import HOST_ONLY
+
+    for route in ("/api/microsoft", "/api/microsoft/signin", "/api/microsoft/forget"):
+        assert ("POST", route) in HOST_ONLY

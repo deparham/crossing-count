@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import ssl
 import time
 import urllib.error
@@ -239,6 +240,47 @@ def _said(exc: urllib.error.HTTPError, url: str) -> GraphError:
 
 def _quote(path: str) -> str:
     return urllib.parse.quote(str(path).strip("/"), safe="/")
+
+
+# Where a thing is on SharePoint, worked out from the synced folder's own name: a folder
+# ".../CloudStorage/OneDrive-Acme/validations - Documents/External/RAG" is External/RAG of the
+# Documents library of the site "validations". Only the host has to be learned from elsewhere.
+SYNCED = re.compile(r"CloudStorage/OneDrive-[^/]+/(?P<site>[^/]+?) - (?P<library>[^/]+)/(?P<rest>.+)")
+DEFAULT_LIBRARY = {"Documents": "Shared Documents"}  # what the default library is called there
+
+
+@dataclass(frozen=True)
+class Place:
+    """Somewhere in a document library: which site, which library, and where in it."""
+
+    site: str  # https://acme.sharepoint.com/sites/validations
+    library: str  # the library's name, or "" for the site's default one
+    path: str  # External/RAG/Connor/Connor Northland - CN-212
+
+    @property
+    def name(self) -> str:
+        return self.path.rsplit("/", 1)[-1]
+
+    def under(self, *more: str) -> Place:
+        return Place(self.site, self.library, "/".join([self.path, *more]).strip("/"))
+
+
+_drives: dict[tuple[str, str], str] = {}  # what Graph called each library, asked once
+
+
+def drive_of(place: Place) -> str:
+    if (place.site, place.library) not in _drives:
+        _drives[(place.site, place.library)] = drive_id(site_id(place.site), place.library)
+    return _drives[(place.site, place.library)]
+
+
+def place_for(local: Path, host: str) -> Place | None:
+    """Where a folder on the synced drive is on SharePoint, or None when it cannot be told."""
+    m = SYNCED.search(local.as_posix())
+    if not m or not host:
+        return None
+    return Place(site=f"https://{host}/sites/{m['site']}",
+                 library=DEFAULT_LIBRARY.get(m["library"], m["library"]), path=m["rest"])
 
 
 def site_id(url: str) -> str:

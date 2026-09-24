@@ -602,6 +602,27 @@ class Wizard:
                               f"change. To correct it, start a new version: the finalised one "
                               f"stays as it is.")
 
+    def delivery_online(self, root: Path) -> graph.Place | None:
+        """The brand's folder on SharePoint, when the app can put it there itself.
+
+        None when no Microsoft account is connected, or when nothing says which host the
+        team's SharePoint is on - and then it is copied into the synced folder as before, and
+        OneDrive carries it up when it can.
+        """
+        if not graph.signed_in():
+            return None
+        host = str(paths.load_settings().get("graph_host") or "").strip()
+        if not host:
+            chosen = sheet.find_workbook(root)
+            if chosen is not None:
+                with contextlib.suppress(sheet.TrackerError):
+                    host = sheet.host_in(chosen)
+        if not host or not self.state["store"].get("code"):
+            return None
+        with contextlib.suppress(delivery.DeliveryError):
+            return delivery.online_where(root, self.state["store"], host)
+        return None
+
     def delivery_plan(self, root: Path | None, footage: bool) -> dict[str, Any] | None:
         """Where this validation would be delivered and what would go with it, to be agreed
         to before anything is copied. None when no folder for finished work is set."""
@@ -611,9 +632,12 @@ class Wizard:
         if not report.is_file():
             return None
         try:
+            place = self.delivery_online(root)
+            if place is not None:
+                return delivery.online_plan(place, report, self.video if footage else None)
             return delivery.plan(root, self.state["store"], report,
                                  self.video if footage else None)
-        except delivery.DeliveryError as exc:
+        except (delivery.DeliveryError, graph.GraphError) as exc:
             return {"problem": str(exc)}
 
     def deliver(self, root: Path, footage: bool) -> dict[str, Any]:
@@ -622,10 +646,15 @@ class Wizard:
             report = Path(str((self.state.get("report") or {}).get("path") or ""))
             if not report.is_file():
                 raise WizardError("Make the report first: there is nothing to deliver.")
+            place = self.delivery_online(root)
             try:
-                got = delivery.deliver(root, self.state["store"], report,
-                                       self.video if footage else None)
-            except delivery.DeliveryError as exc:
+                if place is not None:  # straight there, rather than through OneDrive
+                    got = delivery.online_deliver(place, report,
+                                                  self.video if footage else None)
+                else:
+                    got = delivery.deliver(root, self.state["store"], report,
+                                           self.video if footage else None)
+            except (delivery.DeliveryError, graph.GraphError) as exc:
                 raise WizardError(str(exc)) from exc
             self.state["delivered"] = {**got, "at": _now()}
             self._decide("delivered", after={"folder": got["folder"], "files": got["files"],
@@ -682,7 +711,10 @@ class Wizard:
         acc = self.sheet_accuracy(c)
         store = self.state["store"]
         folder = delivery.where(root, store) if store.get("code") else None
-        where = link or (sheet.link_for(chosen, folder) if folder else "")
+        # the address the upload itself came back with, when it went straight to SharePoint:
+        # that one is the server's own, not one worked out from a path on this disk
+        sent = str((self.state.get("delivered") or {}).get("url") or "")
+        where = link or sent or (sheet.link_for(chosen, folder) if folder else "")
         about: dict[str, Any] = {"code": str(store.get("code") or ""),
                  "brand": delivery.brand_of(str(store.get("code") or "")) or "",
                  "store": str(store.get("name") or ""), "day": day,
