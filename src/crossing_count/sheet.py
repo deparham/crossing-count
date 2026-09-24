@@ -27,10 +27,13 @@ import re
 import shutil
 import xml.etree.ElementTree as ET
 import zipfile
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+
+from . import graph, paths
 
 M = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
@@ -75,16 +78,28 @@ def _text(c: ET.Element, sst: list[str]) -> str:
     return sst[int(v.text)] if c.get("t") == "s" else v.text
 
 
-def rows(path: Path, sheet: str) -> dict[int, dict[str, str]]:
+Source = Path | bytes  # the workbook on this disk, or as it came off SharePoint
+
+
+def _named(src: Source) -> str:
+    return src.name if isinstance(src, Path) else "the workbook"
+
+
+def _open(src: Source) -> Any:
+    """What zipfile will take: the file itself, or the bytes read from the server."""
+    return io.BytesIO(src) if isinstance(src, bytes) else src
+
+
+def rows(src: Source, sheet: str) -> dict[int, dict[str, str]]:
     """Every row of one sheet that holds anything, by row number, column letter to text."""
     try:
-        with zipfile.ZipFile(path) as z:
+        with zipfile.ZipFile(_open(src)) as z:
             part = _part(z, sheet)
             sst = ["".join(t.text or "" for t in si.iter(f"{M}t"))
                    for si in ET.fromstring(z.read("xl/sharedStrings.xml"))]
             root = ET.fromstring(z.read(part))
     except (OSError, zipfile.BadZipFile, ET.ParseError) as exc:
-        raise TrackerError(f"{path.name} could not be read ({exc}).") from exc
+        raise TrackerError(f"{_named(src)} could not be read ({exc}).") from exc
     out: dict[int, dict[str, str]] = {}
     for r in root.find(f"{M}sheetData") or []:
         cells = {re.sub(r"\d", "", str(c.get("r"))): _text(c, sst) for c in r}
@@ -184,11 +199,11 @@ def open_elsewhere(path: Path) -> bool:
     return (path.parent / f"~${path.name}").exists()
 
 
-def plan(path: Path, *, code: str, brand: str, store: str, day: date,
+def plan(src: Source, *, code: str, brand: str, store: str, day: date,
          accuracy: float | None, link: str) -> dict[str, Any]:
     """What would change, for someone to agree to before anything does."""
     sheet = sheet_for(day)
-    listed = rows(path, sheet)
+    listed = rows(src, sheet)
     at = find(listed, code)
     held = waiting(listed, brand, store) if at is None else None
     # the brand's spelling is looked for in both sheets: a brand can have no store at all in
@@ -196,7 +211,7 @@ def plan(path: Path, *, code: str, brand: str, store: str, day: date,
     everywhere = dict(listed)
     for other in (INITIAL, WEEKEND):
         if other != sheet:
-            everywhere |= {n + 100_000: cells for n, cells in rows(path, other).items()}
+            everywhere |= {n + 100_000: cells for n, cells in rows(src, other).items()}
     was = listed.get(at or held or 0, {})
     values = {"date": str(serial(day)),
               "accuracy": "" if accuracy is None else f"{accuracy / 100:.4f}",
@@ -206,9 +221,11 @@ def plan(path: Path, *, code: str, brand: str, store: str, day: date,
     elif at is None:  # a store not listed at all needs saying who and where as well
         values |= {"brand": brand_as_listed(everywhere, code, brand),
                    "code": code, "store": store}
-    return {"file": str(path), "sheet": sheet, "row": at or held or next_row(listed),
+    return {"file": str(src) if isinstance(src, Path) else "", "sheet": sheet,
+            "row": at or held or next_row(listed),
             "adding": at is None and held is None, "waiting": held is not None,
-            "open_elsewhere": open_elsewhere(path),
+            # a lock file is a thing on a disk; SharePoint says a file is open by refusing
+            "open_elsewhere": isinstance(src, Path) and open_elsewhere(src),
             "changes": [{"column": COLUMNS[k], "what": k,
                          "from": was.get(COLUMNS[k], ""), "to": v}
                         for k, v in values.items() if v != ""]}
@@ -330,18 +347,16 @@ def keep(path: Path) -> Path:
     return out
 
 
-def write(path: Path, said: dict[str, Any]) -> dict[str, Any]:
-    """Make the changes in `said` (from plan), having copied the workbook aside first."""
-    if said["open_elsewhere"] or open_elsewhere(path):
-        raise TrackerError(f"{path.name} is open in Excel. Close it and try again: writing to "
-                           f"it now would lose whatever is being typed into it.")
-    if not said["changes"]:
-        return {"written": False, "why": "nothing to change"}
-    kept = keep(path)
+def apply(blob: bytes, said: dict[str, Any]) -> bytes:
+    """The workbook with the changes in `said` made, as bytes. Touches no file.
+
+    The same for a workbook on this disk and one fetched from SharePoint, so a row goes in
+    the same way whichever it is.
+    """
     row, want = int(said["row"]), {c["column"]: c["to"] for c in said["changes"]}
     numeric = {COLUMNS["date"], COLUMNS["accuracy"]}
     try:
-        with zipfile.ZipFile(path) as z:
+        with zipfile.ZipFile(io.BytesIO(blob)) as z:
             part = _part(z, said["sheet"])
             names = z.namelist()
             blobs = {n: z.read(n) for n in names}
@@ -378,11 +393,30 @@ def write(path: Path, said: dict[str, Any]) -> dict[str, Any]:
         here[:] = sorted(here, key=lambda c: (len(str(c.get("r"))), str(c.get("r"))))
         data[:] = sorted(data, key=lambda r: int(str(r.get("r"))))
         blobs[part] = ET.tostring(root, xml_declaration=True, encoding="UTF-8")
-        _overwrite(path, rebuild(names, blobs))
-    except (OSError, zipfile.BadZipFile, ET.ParseError) as exc:
+        return rebuild(names, blobs)
+    except (zipfile.BadZipFile, ET.ParseError) as exc:
+        raise TrackerError(f"{_named(blob)} could not be changed ({exc}). Nothing was "
+                           f"written.") from exc
+
+
+def write(path: Path, said: dict[str, Any]) -> dict[str, Any]:
+    """Make the changes in `said` (from plan) to the workbook on this disk.
+
+    A copy is kept first, and the workbook is written over itself rather than replaced, so a
+    synced drive keeps watching the file it was already watching.
+    """
+    if said["open_elsewhere"] or open_elsewhere(path):
+        raise TrackerError(f"{path.name} is open in Excel. Close it and try again: writing to "
+                           f"it now would lose whatever is being typed into it.")
+    if not said["changes"]:
+        return {"written": False, "why": "nothing to change"}
+    kept = keep(path)
+    try:
+        _overwrite(path, apply(path.read_bytes(), said))
+    except (OSError, TrackerError) as exc:
         raise TrackerError(f"{path.name} could not be written ({exc}). The copy made first is "
                            f"at {kept}; put it back if the workbook will not open.") from exc
-    return {"written": True, "row": row, "sheet": said["sheet"], "kept": str(kept),
+    return {"written": True, "row": int(said["row"]), "sheet": said["sheet"], "kept": str(kept),
             "adding": said["adding"], "changes": said["changes"]}
 
 
@@ -454,3 +488,105 @@ def link_for(path: Path, folder: Path) -> str:
     library = DEFAULT_LIBRARY.get(m["library"], m["library"])
     parts = [m["site"], library, *m["rest"].split("/")]
     return f"https://{host}/sites/" + "/".join(quote(p) for p in parts)
+
+
+# ---------- the workbook on SharePoint, rather than the copy OneDrive keeps ----------
+# Where it is is worked out from the synced folder's own name, which says the site and the
+# library: ".../CloudStorage/OneDrive-Acme/validations - Documents/External/RAG" is the folder
+# External/RAG of the Documents library of the site "validations". Only the host has to be
+# learned, and the links already in the sheet say it (host_in).
+
+@dataclass(frozen=True)
+class Online:
+    """A workbook on SharePoint: which site, which library, and where in it."""
+
+    site: str  # https://acme.sharepoint.com/sites/validations
+    library: str  # the library's name, or "" for the site's default one
+    path: str  # External/RAG/Store_installations_Validation.xlsx
+
+    @property
+    def name(self) -> str:
+        return self.path.rsplit("/", 1)[-1]
+
+
+_drives: dict[tuple[str, str], str] = {}  # what Graph called each library, asked once
+
+
+def drive_of(place: Online) -> str:
+    if (place.site, place.library) not in _drives:
+        _drives[(place.site, place.library)] = graph.drive_id(
+            graph.site_id(place.site), place.library)
+    return _drives[(place.site, place.library)]
+
+
+def online_for(root: Path, workbook: str, host: str) -> Online | None:
+    """Where the workbook the team shares sits on SharePoint, or None when it cannot be told."""
+    m = SYNCED.search((root / workbook).as_posix())
+    if not m or not host:
+        return None
+    return Online(site=f"https://{host}/sites/{m['site']}",
+                  library=DEFAULT_LIBRARY.get(m["library"], m["library"]), path=m["rest"])
+
+
+def online_plan(place: Online, **about: Any) -> tuple[dict[str, Any], str]:
+    """What would change in the workbook as it is on the server this moment, and its eTag.
+
+    The plan is worked out on what the server holds, not on a copy of it, so a row somebody
+    added a minute ago is already taken into account.
+    """
+    blob, etag = graph.read(drive_of(place), place.path)
+    said = plan(blob, **about)
+    return {**said, "file": place.name, "online": True}, etag
+
+
+def online_write(place: Online, said: dict[str, Any], etag: str = "") -> dict[str, Any]:
+    """Put the row in, on the server, only if nobody has saved the file since it was read.
+
+    The workbook is read again here rather than trusting the copy the plan was made from: a
+    minute can pass while a person looks at it. If that reading changes what would happen -
+    a different row, or an accuracy now there that was not - nothing is written and they are
+    asked to look again.
+    """
+    if not said["changes"]:
+        return {"written": False, "why": "nothing to change"}
+    drive = drive_of(place)
+    blob, now = graph.read(drive, place.path)
+    if etag and now != etag:
+        raise graph.Clash(f"{place.name} was saved by somebody else while this was being "
+                          f"prepared. Nothing was written; look at it again and it will be "
+                          f"read afresh.")
+    kept = keep_bytes(blob, place.name)
+    graph.replace(drive, place.path, apply(blob, said), etag=now)
+    return {"written": True, "row": int(said["row"]), "sheet": said["sheet"], "kept": str(kept),
+            "adding": said["adding"], "waiting": said.get("waiting", False),
+            "changes": said["changes"], "online": True, "where": place.path}
+
+
+def needs_asking(said: dict[str, Any]) -> str:
+    """Why a person should see this one before it is written, or "" when nobody need be asked.
+
+    A row put aside for the store, or a store not listed at all, is nobody's result yet and
+    goes in on its own. A row that already holds an accuracy is somebody's earlier validation,
+    and replacing a number in a sheet the whole team reads is not something to do quietly.
+    """
+    for c in said.get("changes", []):
+        if c["what"] == "accuracy" and str(c.get("from") or "").strip():
+            return (f"row {said['row']} of {said['sheet']} already gives an accuracy for this "
+                    f"store, and this would replace it")
+    return ""
+
+
+def keep_bytes(blob: bytes, name: str) -> Path:
+    """The workbook as it was, kept on this computer before the server's copy is changed.
+
+    Not beside it on the drive: these are this computer's own safety net, and SharePoint
+    keeps the version history everyone shares.
+    """
+    folder = paths.data_root() / "workbook backups"
+    folder.mkdir(parents=True, exist_ok=True)
+    stem = Path(name).stem
+    out = folder / f"{stem} {datetime.now().astimezone():%Y%m%d-%H%M%S}{Path(name).suffix}"
+    out.write_bytes(blob)
+    for old in sorted(folder.glob(f"{stem} *"))[:-KEEP]:
+        old.unlink(missing_ok=True)
+    return out

@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from crossing_count import sheet
+from crossing_count import graph, sheet
 
 HEADERS = ["Brand", "Store ID", "Store Name", "Region", "Validation Date", "Accuracy",
            "Validation Link", "NOTES"]
@@ -589,3 +589,180 @@ def test_every_part_survives_the_rebuild(book: Path) -> None:
     with zipfile.ZipFile(io.BytesIO(sheet.rebuild(names, blobs))) as out:
         assert out.namelist() == names
         assert out.read(ODDITY) == ODD_BYTES  # the part nothing here can parse, byte for byte
+
+
+# ---------- the workbook on SharePoint, rather than the copy OneDrive keeps ----------
+
+def test_where_the_workbook_is_on_sharepoint_comes_from_the_synced_folder(book: Path) -> None:
+    root = Path("/Users/x/Library/CloudStorage/OneDrive-AcmePtyLtd/validations - Documents"
+                "/External/RAG")
+    place = sheet.online_for(root, "Store_installations_Validation.xlsx", "acme.sharepoint.com")
+    assert place is not None
+    assert place.site == "https://acme.sharepoint.com/sites/validations"
+    assert place.library == "Shared Documents"
+    assert place.path == "External/RAG/Store_installations_Validation.xlsx"
+    assert place.name == "Store_installations_Validation.xlsx"
+    # nothing to go on: no host, or a folder that is not on a synced drive
+    assert sheet.online_for(root, "x.xlsx", "") is None
+    assert sheet.online_for(Path("/Users/x/Desktop/RAG"), "x.xlsx", "acme.sharepoint.com") is None
+
+
+class _SharePoint:
+    """Stands in for the server: holds the workbook, its eTag, and what was put back."""
+
+    def __init__(self, blob: bytes) -> None:
+        self.blob, self.etag, self.puts = blob, '"v1"', 0
+
+    def read(self, drive: str, path: str) -> tuple[bytes, str]:
+        return self.blob, self.etag
+
+    def replace(self, drive: str, path: str, blob: bytes, etag: str = "") -> dict[str, Any]:
+        if etag and etag != self.etag:
+            raise graph.Clash("somebody else saved it")
+        self.blob, self.etag, self.puts = blob, f'"v{self.puts + 2}"', self.puts + 1
+        return {"eTag": self.etag}
+
+    def somebody_else_saves(self, blob: bytes) -> None:
+        self.blob, self.etag = blob, '"vOther"'
+
+
+@pytest.fixture
+def server(book: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _SharePoint:
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path / "home"))
+    it = _SharePoint(book.read_bytes())
+    monkeypatch.setattr(graph, "read", it.read)
+    monkeypatch.setattr(graph, "replace", it.replace)
+    monkeypatch.setattr(sheet, "drive_of", lambda place: "drive1")
+    return it
+
+
+PLACE = sheet.Online(site="https://acme.sharepoint.com/sites/validations",
+                     library="Shared Documents",
+                     path="External/RAG/Store_installations_Validation.xlsx")
+ABOUT = {"code": "JB-401", "brand": "Johnny Bigg", "store": "Werribee",
+         "day": date(2026, 9, 19), "accuracy": 89.2, "link": "https://x/JB-401"}
+
+
+def test_the_row_goes_into_the_file_on_the_server(server: _SharePoint) -> None:
+    said, etag = sheet.online_plan(PLACE, **ABOUT)
+    assert said["online"] is True and said["file"] == PLACE.name
+    assert server.puts == 0  # asking is not writing
+
+    got = sheet.online_write(PLACE, said, etag)
+    assert got["written"] is True and server.puts == 1
+    assert sheet.rows(server.blob, sheet.WEEKEND)[got["row"]]["F"] == "0.8920"
+    assert Path(got["kept"]).is_file()  # as it was, kept on this computer
+
+
+def test_a_colleague_saving_in_between_stops_it(server: _SharePoint, book: Path) -> None:
+    """The whole reason the eTag is carried. Their save is not quietly written over."""
+    said, etag = sheet.online_plan(PLACE, **ABOUT)
+    server.somebody_else_saves(book.read_bytes())  # they save while the plan is on screen
+    with pytest.raises(graph.Clash, match="Nothing was written"):
+        sheet.online_write(PLACE, said, etag)
+    assert server.puts == 0
+
+
+def test_the_plan_is_made_on_what_the_server_holds_now(server: _SharePoint, book: Path) -> None:
+    """Not on a copy: a row somebody added a minute ago is already taken into account."""
+    said = sheet.plan(book, code="RW-409", brand="Rockwear", store="Chadstone",
+                      day=date(2026, 9, 19), accuracy=93.7, link="https://x")
+    server.somebody_else_saves(sheet.apply(book.read_bytes(), said))  # they add RW-409
+
+    mine, _ = sheet.online_plan(PLACE, code="RW-409", brand="Rockwear", store="Chadstone",
+                                day=date(2026, 9, 19), accuracy=88.0, link="https://y")
+    assert mine["adding"] is False and mine["row"] == said["row"]  # their row, not a second one
+
+
+def test_nothing_to_change_writes_nothing(server: _SharePoint) -> None:
+    said, etag = sheet.online_plan(PLACE, **ABOUT)
+    assert sheet.online_write(PLACE, {**said, "changes": []}, etag)["written"] is False
+    assert server.puts == 0
+
+
+def test_the_copies_kept_for_an_online_write_stay_on_this_computer(server: _SharePoint,
+                                                                   tmp_path: Path) -> None:
+    said, etag = sheet.online_plan(PLACE, **ABOUT)
+    kept = Path(sheet.online_write(PLACE, said, etag)["kept"])
+    assert kept.parent.name == "workbook backups"
+    assert tmp_path in kept.parents  # the app's own folder, not the team's drive
+    assert kept.read_bytes() != server.blob  # it is the workbook as it was
+
+
+def test_only_the_last_few_copies_are_kept(server: _SharePoint) -> None:
+    for _ in range(sheet.KEEP + 3):
+        said, etag = sheet.online_plan(PLACE, **ABOUT)
+        kept = Path(sheet.online_write(PLACE, said, etag)["kept"])
+    assert len(list(kept.parent.iterdir())) <= sheet.KEEP
+
+
+# ---------- what goes in on its own, and what wants looking at ----------
+
+def test_a_store_waiting_or_not_listed_goes_in_on_its_own(book: Path) -> None:
+    for code, store in (("CN-212", "Northland"), ("RW-409", "Chadstone")):
+        said = sheet.plan(book, code=code, brand="Connor" if code[0] == "C" else "Rockwear",
+                          store=store, day=date(2026, 9, 19), accuracy=94.4, link="https://x")
+        assert sheet.needs_asking(said) == ""  # nobody's result yet
+
+
+def test_replacing_somebody_s_accuracy_is_not_done_quietly(book: Path) -> None:
+    first = sheet.plan(book, code="CN-167", brand="Connor", store="Settlement City",
+                       day=date(2026, 9, 19), accuracy=94.4, link="https://x")
+    assert sheet.needs_asking(first) == ""  # the row is there but holds no accuracy yet
+    sheet.write(book, first)
+
+    again = sheet.plan(book, code="CN-167", brand="Connor", store="Settlement City",
+                       day=date(2026, 9, 26), accuracy=81.0, link="https://y")
+    why = sheet.needs_asking(again)
+    assert "already gives an accuracy" in why and sheet.WEEKEND in why
+
+
+# ---------- no hands: the row goes in when the validation is delivered ----------
+
+def test_delivering_puts_the_row_in_without_being_asked(
+        two_tile_video: dict[str, Any], tmp_path: Path, book: Path,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """A store waiting to be validated is nobody's result yet, so nobody is asked."""
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path / "home"))
+    client, on_drive, _ = _validated(two_tile_video, tmp_path, book, crossings=40, sensor=36)
+
+    before = sheet.rows(on_drive, sheet.WEEKEND)
+    got = client.post("/api/deliver", json={"footage": False}).json()
+    assert got["sheet"]["by_itself"] is True  # nobody pressed anything
+    written = got["sheet"]["written"]
+    assert written["written"] is True
+    row = sheet.rows(on_drive, sheet.WEEKEND)[written["row"]]
+    assert row["F"] == "0.9000" and row["B"] == "CN-167"
+    assert written["row"] not in before or not before[written["row"]].get("F")
+
+
+def test_it_stops_short_of_replacing_somebody_s_accuracy(
+        two_tile_video: dict[str, Any], tmp_path: Path, book: Path,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """The one case a person is wanted for: the row already gives an accuracy."""
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path / "home"))
+    client, on_drive, _ = _validated(two_tile_video, tmp_path, book, crossings=40, sensor=36)
+    # somebody validated this store before and their number is in the sheet
+    already = sheet.plan(on_drive, code="CN-167", brand="Connor", store="Settlement City",
+                         day=date(2026, 9, 19), accuracy=71.0, link="https://theirs")
+    sheet.write(on_drive, already)
+    kept = sheet.rows(on_drive, sheet.WEEKEND)[already["row"]]["F"]
+
+    got = client.post("/api/deliver", json={"footage": False}).json()
+    assert "already gives an accuracy" in got["sheet"]["waiting_on_a_person"]
+    assert "by_itself" not in got["sheet"]
+    assert sheet.rows(on_drive, sheet.WEEKEND)[already["row"]]["F"] == kept  # untouched
+    assert got["files"]  # and the delivery itself went through regardless
+
+
+def test_a_spreadsheet_that_will_not_take_it_does_not_stop_the_delivery(
+        two_tile_video: dict[str, Any], tmp_path: Path, book: Path,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Delivering the report to the customer is the thing that matters; the row can wait."""
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path / "home"))
+    client, on_drive, _ = _validated(two_tile_video, tmp_path, book, crossings=40, sensor=36)
+    (on_drive.parent / f"~${on_drive.name}").write_bytes(b"")  # open in Excel
+
+    got = client.post("/api/deliver", json={"footage": False}).json()
+    assert got["files"] and Path(got["folder"]).is_dir()  # delivered all the same
+    assert "open in Excel" in got["sheet"]["problem"]

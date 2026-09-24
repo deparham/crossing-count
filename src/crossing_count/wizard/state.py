@@ -8,6 +8,7 @@ child processes, and their progress is read from what they print.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import pickle
@@ -30,6 +31,7 @@ from .. import (
     auditlog,
     delivery,
     evaluate,
+    graph,
     independence,
     paths,
     provenance,
@@ -629,7 +631,7 @@ class Wizard:
             self._decide("delivered", after={"folder": got["folder"], "files": got["files"],
                                              "footage": got["footage"]})
             self._save()
-            return got
+        return {**got, "sheet": self.sheet_after_delivery(root)}
 
     # ---------- the team's own spreadsheet ----------
     # One row a validation, in the folder finished work is delivered to. Every accuracy the
@@ -680,19 +682,38 @@ class Wizard:
         acc = self.sheet_accuracy(c)
         store = self.state["store"]
         folder = delivery.where(root, store) if store.get("code") else None
+        where = link or (sheet.link_for(chosen, folder) if folder else "")
+        about: dict[str, Any] = {"code": str(store.get("code") or ""),
+                 "brand": delivery.brand_of(str(store.get("code") or "")) or "",
+                 "store": str(store.get("name") or ""), "day": day,
+                 "accuracy": acc["pct"] if accuracy is None else accuracy, "link": where}
+        place, etag = self.sheet_online(root, chosen), ""
         try:
-            said = sheet.plan(
-                chosen, code=str(store.get("code") or ""),
-                brand=delivery.brand_of(str(store.get("code") or "")) or "",
-                store=str(store.get("name") or ""), day=day,
-                accuracy=acc["pct"] if accuracy is None else accuracy,
-                link=link or (sheet.link_for(chosen, folder) if folder else ""))
-        except (sheet.TrackerError, delivery.DeliveryError) as exc:
+            if place is not None:  # the file on SharePoint, not the copy OneDrive keeps
+                said, etag = sheet.online_plan(place, **about)
+            else:
+                said = sheet.plan(chosen, **about)
+        except (sheet.TrackerError, delivery.DeliveryError, graph.GraphError) as exc:
             out["problem"] = str(exc)
             return out
         return {**out, "plan": said, "day": day.isoformat(), "accuracy": acc,
-                "incomplete": c["incomplete"],
-                "link": link or (sheet.link_for(chosen, folder) if folder else "")}
+                "incomplete": c["incomplete"], "link": where, "etag": etag,
+                "online": place is not None, "asking": sheet.needs_asking(said)}
+
+    def sheet_online(self, root: Path, workbook: Path) -> sheet.Online | None:
+        """Where this workbook is on SharePoint, when the app can write there itself.
+
+        None when no Microsoft account is connected, or when nothing says which host the
+        team's SharePoint is on - and then the workbook on this disk is written instead, and
+        OneDrive carries it up when it can.
+        """
+        if not graph.signed_in():
+            return None
+        host = str(paths.load_settings().get("graph_host") or "").strip()
+        if not host:
+            with contextlib.suppress(sheet.TrackerError):
+                host = sheet.host_in(workbook)
+        return sheet.online_for(root, workbook.name, host) if host else None
 
     def sheet_write(self, root: Path, workbook: str = "", accuracy: float | None = None,
                     link: str = "") -> dict[str, Any]:
@@ -702,16 +723,41 @@ class Wizard:
             if said is None or said.get("problem"):
                 raise WizardError((said or {}).get("problem")
                                   or "No folder for finished work is set.")
+            place = self.sheet_online(root, Path(said["plan"]["file"] or said["file"]))
             try:
-                got = sheet.write(Path(said["plan"]["file"]), said["plan"])
-            except sheet.TrackerError as exc:
+                if place is not None:
+                    got = sheet.online_write(place, said["plan"], said.get("etag", ""))
+                else:
+                    got = sheet.write(Path(said["plan"]["file"]), said["plan"])
+            except (sheet.TrackerError, graph.GraphError) as exc:
                 raise WizardError(str(exc)) from exc
             self.state["sheet"] = {**got, "at": _now(), "file": said["file"]}
             self._decide("sheet_updated", after={"file": said["file"], "sheet": got.get("sheet"),
                                                  "row": got.get("row"),
-                                                 "adding": got.get("adding")})
+                                                 "adding": got.get("adding"),
+                                                 "online": got.get("online", False)})
             self._save()
             return got
+
+    def sheet_after_delivery(self, root: Path | None) -> dict[str, Any] | None:
+        """Put the row in without being asked, now the folder the link points at exists.
+
+        Only when the row is nobody's result yet - one put aside for this store, or a store
+        not listed at all. A row that already gives an accuracy is somebody's earlier
+        validation, and replacing a number the whole team reads is left to a person
+        (sheet.needs_asking). Nothing here is allowed to stop a delivery that has worked.
+        """
+        if root is None or self.state.get("sheet"):
+            return None
+        try:
+            said = self.sheet_plan(root)
+            if said is None or said.get("problem") or not said.get("plan"):
+                return said
+            if why := str(said.get("asking") or ""):
+                return {**said, "waiting_on_a_person": why}
+            return {"written": self.sheet_write(root), "by_itself": True}
+        except (WizardError, sheet.TrackerError, graph.GraphError, OSError) as exc:
+            return {"problem": str(exc)}
 
     def finalise(self, shared: Path | None = None) -> dict[str, Any]:
         """Give this validation an ID and keep it, with everything needed to reproduce it,
