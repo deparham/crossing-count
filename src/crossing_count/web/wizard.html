@@ -226,7 +226,7 @@
     <div style="margin-top:10px">
       <div class="muted">Several stores at once: tick them below. Each store's windows are queued by the rule above, one store's worth at a time, and you can start counting the first while the rest come down. A shopping centre usually has one store per brand, so searching for the centre finds them all.</div>
       <input type="text" id="rnFilter" placeholder="search the brand's stores by code or name" autocomplete="off" spellcheck="false" style="margin-top:6px">
-      <div id="rnPickList" class="scroll" style="max-height:220px;margin-top:6px"></div>
+      <div id="rnPickList" style="max-height:240px;overflow-y:auto;overflow-x:hidden;margin-top:6px;border:1px solid var(--border);border-radius:8px;background:var(--panel2)"></div>
       <div id="rnPicked" class="muted" style="margin-top:6px"></div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
@@ -851,7 +851,7 @@ async function renderQueue(open = false) {
     return `<tr><td>${esc(i.label)}</td><td class="${cls}">${esc(what)}${i.state === "failed" ? `: ${esc(i.message)}` : ""}</td><td style="white-space:nowrap">${act} ${drop}</td></tr>`;
   };
   box.innerHTML = `<b>Footage queue</b> <span class="muted">${q.ready.length} ready, ${q.items.filter((i) => i.state !== "ready" && i.state !== "failed").length} to come${q.working ? "" : " (nothing running)"}</span>
-    <div class="scroll" style="margin-top:6px"><table class="ivs">${q.items.map(line).join("")}</table></div>`;
+    <div style="max-height:260px;overflow-y:auto;margin-top:6px"><table class="ivs">${q.items.map(line).join("")}</table></div>`;
   if (q.items.some((i) => i.state !== "ready" && i.state !== "failed")) {
     clearTimeout(W.qTimer); W.qTimer = setTimeout(() => renderQueue(), 3000);
   }
