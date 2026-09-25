@@ -792,3 +792,57 @@ def test_the_link_is_the_one_sharepoint_itself_gave_back(
         monkeypatch.setattr(Wizard, "deliver", real)
     assert got["sheet"]["by_itself"] is True
     assert sheet.rows(on_drive, sheet.WEEKEND)[got["sheet"]["written"]["row"]]["G"] == url
+
+
+# ---------- whether a write will actually leave this computer ----------
+
+def test_a_workbook_on_a_synced_drive_with_no_onedrive_running_says_so(
+        book: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    drive = (tmp_path / "Library/CloudStorage/OneDrive-AcmePtyLtd/validations - Documents"
+             / "External" / "RAG")
+    drive.mkdir(parents=True)
+    here = drive / book.name
+    shutil.copy2(book, here)
+    assert sheet.syncs_itself(here) is True
+    assert sheet.syncs_itself(book) is False  # a plain folder: nothing carries it anywhere
+
+    monkeypatch.setattr(sheet, "sync_running", lambda: False)
+    assert "OneDrive is not running" in sheet.sync_warning(here)
+    assert sheet.sync_warning(book) == ""  # not on a synced drive, so nothing to say
+
+    monkeypatch.setattr(sheet, "sync_running", lambda: True)
+    assert sheet.sync_warning(here) == ""
+    monkeypatch.setattr(sheet, "sync_running", lambda: None)  # cannot be asked
+    assert sheet.sync_warning(here) == ""  # and nothing is claimed either way
+
+
+def test_a_workbook_replaced_rather_than_written_to_is_called_out(book: Path) -> None:
+    """The one certain thing: a swapped-out file is what stopped OneDrive following it."""
+    assert "may never leave this computer" in sheet.sync_warning(book, replaced=True)
+
+
+def test_a_normal_write_says_nothing_about_syncing(book: Path,
+                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sheet, "sync_running", lambda: True)
+    said = sheet.plan(book, code="JB-401", brand="Johnny Bigg", store="Werribee",
+                      day=date(2026, 9, 19), accuracy=89.2, link="https://x")
+    assert sheet.write(book, said)["warning"] == ""
+
+
+def test_the_write_notices_if_the_workbook_is_swapped_out_under_it(
+        book: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A guard on our own doing: writing in place is what keeps a synced drive following it."""
+    real = sheet._overwrite
+
+    def swaps(path: Path, whole: bytes) -> None:  # the old way: a new file, renamed over
+        tmp = path.with_suffix(".new")
+        tmp.write_bytes(whole)
+        tmp.replace(path)
+
+    monkeypatch.setattr(sheet, "_overwrite", swaps)
+    said = sheet.plan(book, code="JB-401", brand="Johnny Bigg", store="Werribee",
+                      day=date(2026, 9, 19), accuracy=89.2, link="https://x")
+    got = sheet.write(book, said)
+    assert "replaced rather than written to" in got["warning"]
+    assert got["written"] is True  # it did go in; what is said is that it may not travel
+    monkeypatch.setattr(sheet, "_overwrite", real)

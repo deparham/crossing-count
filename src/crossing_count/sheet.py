@@ -25,6 +25,8 @@ import io
 import os
 import re
 import shutil
+import subprocess
+import sys
 import xml.etree.ElementTree as ET
 import zipfile
 from datetime import date, datetime
@@ -411,12 +413,18 @@ def write(path: Path, said: dict[str, Any]) -> dict[str, Any]:
         return {"written": False, "why": "nothing to change"}
     kept = keep(path)
     try:
+        was = path.stat().st_ino
         _overwrite(path, apply(path.read_bytes(), said))
+        # the same file it was, not a new one in its place: replacing it is what stopped
+        # OneDrive following the workbook, and it is the one thing about syncing that can be
+        # known here for certain rather than guessed at
+        replaced = path.stat().st_ino != was
     except (OSError, TrackerError) as exc:
         raise TrackerError(f"{path.name} could not be written ({exc}). The copy made first is "
                            f"at {kept}; put it back if the workbook will not open.") from exc
     return {"written": True, "row": int(said["row"]), "sheet": said["sheet"], "kept": str(kept),
-            "adding": said["adding"], "changes": said["changes"]}
+            "adding": said["adding"], "waiting": said.get("waiting", False),
+            "changes": said["changes"], "warning": sync_warning(path, replaced)}
 
 
 # ---------- the workbook, and a link to put in it ----------
@@ -566,3 +574,53 @@ def keep_bytes(blob: bytes, name: str) -> Path:
     for old in sorted(folder.glob(f"{stem} *"))[:-KEEP]:
         old.unlink(missing_ok=True)
     return out
+
+
+# ---------- whether a write will actually leave this computer ----------
+# Writing into the synced folder is a write to a disk: OneDrive carries it up afterwards, or
+# it does not, and the workbook can sit there changed while the team sees the old one. There
+# is no local mark that says "uploaded" - two thirds of the files on this drive carry
+# com.apple.FinderInfo and a third do not, synced either way - so nothing here guesses at one.
+# What can be known for certain is checked, and nothing else is claimed.
+SYNC_APPS = {"darwin": ("OneDrive",), "win32": ("OneDrive.exe",)}
+
+
+def syncs_itself(path: Path) -> bool:
+    """Whether this workbook is somewhere a sync client is meant to carry up."""
+    return library_root(path) is not None
+
+
+def sync_running() -> bool | None:
+    """Whether OneDrive is running. None when this computer cannot be asked."""
+    names = SYNC_APPS.get(sys.platform)
+    if not names:
+        return None
+    try:
+        if sys.platform == "win32":
+            out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {names[0]}"],
+                                 capture_output=True, text=True, timeout=5, check=False)
+            return names[0].lower() in out.stdout.lower()
+        out = subprocess.run(["/usr/bin/pgrep", "-x", names[0]],
+                             capture_output=True, text=True, timeout=5, check=False)
+        return bool(out.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def sync_warning(path: Path, replaced: bool = False) -> str:
+    """What is certainly wrong about this write reaching the team, or "" when nothing is.
+
+    Only two things can be known without asking the server, and both are certain rather than
+    guessed: the workbook was replaced instead of written to, which is what stops a sync
+    client following it; and the sync client is not running, in which case nothing is going
+    anywhere yet. Everything else - whether the upload has actually happened - needs the
+    server, which is what signing in to Microsoft is for.
+    """
+    if replaced:
+        return ("The workbook was replaced rather than written to. A synced drive stops "
+                "following a file that has been swapped out, so this change may never leave "
+                "this computer. Tell whoever looks after the tool.")
+    if syncs_itself(path) and sync_running() is False:
+        return ("OneDrive is not running, so this stays on this computer until it is. Start "
+                "OneDrive and it will go up; until then the team sees the workbook as it was.")
+    return ""

@@ -1942,7 +1942,8 @@ async function renderDeliver() {
     try {
       const sent = await api("/api/deliver", { footage });
       const row = sent.sheet || {};
-      if (row.by_itself) msg(`Sent, and the spreadsheet row went in (${row.written.sheet} row ${row.written.row}).`, "ok");
+      if (row.by_itself && row.written.warning) msg(`Sent, and the row went in — but ${row.written.warning}`, "warn");
+      else if (row.by_itself) msg(`Sent, and the spreadsheet row went in (${row.written.sheet} row ${row.written.row}).`, "ok");
       else if (row.waiting_on_a_person) msg(`Sent. The spreadsheet row is waiting for you: ${row.waiting_on_a_person}.`, "warn");
       else if (row.problem) msg(`Sent. The spreadsheet could not be updated: ${row.problem}`, "warn");
       else msg("Sent to the shared drive.", "ok");
@@ -2061,7 +2062,8 @@ async function renderSheet() {
       <input type="text" id="shLink" value="${esc(got.link || "")}" style="width:100%"></label>
     <div style="margin-top:8px"><button id="shGo" class="primary"${p.open_elsewhere ? " disabled" : ""}>Write this row</button>
       ${p.open_elsewhere ? '<span class="warn" style="margin-left:8px">The workbook is open in Excel. Close it first.</span>' : ""}</div>
-    ${done ? `<div class="ok" style="margin-top:8px">Written ${esc(new Date(done.at).toLocaleString("en-AU"))}: ${esc(done.sheet)} row ${done.row}. A copy of the workbook was kept first.</div>` : ""}`;
+    ${done ? `<div class="ok" style="margin-top:8px">Written ${esc(new Date(done.at).toLocaleString("en-AU"))}: ${esc(done.sheet)} row ${done.row}.${done.online ? " Straight to SharePoint." : " A copy of the workbook was kept first."}</div>` : ""}
+    ${done && done.warning ? `<div class="warn" style="margin-top:6px">${esc(done.warning)}</div>` : ""}`;
   wireSheet(got);
 }
 function sheetPicker(got) {

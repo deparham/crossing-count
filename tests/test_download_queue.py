@@ -6,6 +6,7 @@ RetailNext is stubbed at its own edge, so what runs here is the queue itself.
 
 from __future__ import annotations
 
+import functools
 import json
 import threading
 import time
@@ -224,3 +225,50 @@ def test_footage_opened_but_not_finished_is_still_offered(stubs: dict[str, Any],
     where.mkdir(parents=True, exist_ok=True)
     (where / "state.json").write_text(json.dumps({"report": None}))  # opened, nothing finished
     assert client.get("/api/retailnext/queue").json()["items"][0]["counted"] is False
+
+
+# the shape sampling.plan gives back under each rule, with the busiest window in the middle
+# of the list so that taking the first of them is plainly not the same as taking the busiest
+STRATA = [
+    {"start": "07:00", "until": "07:15", "role": "stratum", "rank": 1, "score": 12,
+     "level": "quiet", "from_min": 420},
+    {"start": "12:15", "until": "12:30", "role": "stratum", "rank": 1, "score": 140,
+     "level": "heavy", "from_min": 735},
+    {"start": "16:00", "until": "16:15", "role": "stratum", "rank": 1, "score": 65,
+     "level": "busy", "from_min": 960},
+]
+DRAWN = [
+    {"start": "09:00", "until": "09:15", "role": "random", "rank": 1, "score": 30,
+     "from_min": 540},
+    {"start": "13:00", "until": "13:15", "role": "random", "rank": 2, "score": 110,
+     "from_min": 780},
+]
+
+
+def _planned(chosen: list[dict[str, Any]], windows: Any, **kw: Any) -> dict[str, Any]:
+    return {"chosen": chosen, "candidates": [], "mode": kw.get("mode")}
+
+
+def test_the_busiest_window_is_queued_whatever_the_rule(stubs: dict[str, Any],
+                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    """One window a store, and it is meant to be the busiest. Under the stratified rule every
+    chosen window has the same role and rank, so going by those took whichever came first -
+    and the strata are built quiet upwards, so that was the quietest window of the day."""
+    client = stubs["client"]
+    for rule, chosen, want in (("stratified", STRATA, "12:15"), ("random", DRAWN, "13:00")):
+        monkeypatch.setattr(sampling, "plan", functools.partial(_planned, chosen))
+        got = client.post("/api/retailnext/queue", json={
+            "codes": ["CN-123"], "date": "2026-09-19", "mode": rule}).json()
+        assert [i["start"] for i in got["items"]] == [want], rule
+        client.post("/api/retailnext/queue/forget", json={"id": got["items"][0]["id"]})
+        _settled(client)
+
+
+def test_more_than_one_comes_down_busiest_first(stubs: dict[str, Any],
+                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sampling, "plan", functools.partial(_planned, STRATA))
+    got = stubs["client"].post("/api/retailnext/queue", json={
+        "codes": ["CN-123"], "date": "2026-09-19", "mode": "stratified",
+        "per_store": 3}).json()
+    assert [i["start"] for i in got["items"]] == ["12:15", "16:00", "07:00"]
+    _settled(stubs["client"])

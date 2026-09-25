@@ -878,9 +878,15 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                 continue
             name = str(store.get("name") or "")
             # the busiest window first, then the rest, and only as many as were asked for:
-            # queueing a store's whole plan fills the queue faster than anyone can count it
+            # queueing a store's whole plan fills the queue faster than anyone can count it.
+            # By the traffic in the window, not by what the rule called it: under the
+            # stratified rule every window chosen is a "stratum" of rank 1, and the strata are
+            # built quiet upwards, so going by role and rank took the quietest window of the
+            # day. Role and rank only settle a tie, which is where the peak rule puts its
+            # busiest anyway.
             busiest = sorted(plan["chosen"],
-                             key=lambda w: (w.get("role") != "peak", w.get("rank") or 99))
+                             key=lambda w: (-float(w.get("score") or 0),
+                                            w.get("role") != "peak", w.get("rank") or 99))
             for w in busiest[:max(1, b.per_store)]:
                 chosen_by = sampling.record(plan, w["start"], w["until"])
                 item = _item(str(store.get("store_id") or code), name, day.isoformat(), w, b,
