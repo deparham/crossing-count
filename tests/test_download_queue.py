@@ -272,3 +272,31 @@ def test_more_than_one_comes_down_busiest_first(stubs: dict[str, Any],
         "per_store": 3}).json()
     assert [i["start"] for i in got["items"]] == ["12:15", "16:00", "07:00"]
     _settled(stubs["client"])
+
+
+def test_a_both_ways_validation_picks_its_window_on_both(stubs: dict[str, Any],
+                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    """retailnext.windows scores "in plus out for both". The page has to send a single
+    direction as well, since the wizard opens on one, so a both validation was having its
+    window picked on entries alone - a different quarter of an hour at most stores."""
+    asked: list[str] = []
+
+    def windows(rows: Any, minutes: int, direction: str) -> Any:
+        asked.append(direction)
+        return rows
+
+    monkeypatch.setattr(rn, "windows", windows)
+    client = stubs["client"]
+    client.post("/api/retailnext/queue", json={
+        "codes": ["CN-123"], "date": "2026-09-19", "direction": "in",
+        "direction_for": "both"})
+    assert asked == ["both"]  # not the "in" the page sends for the wizard's sake
+    _settled(client)
+
+    asked.clear()
+    client.post("/api/retailnext/queue/forget", json={"id": client.get(
+        "/api/retailnext/queue").json()["items"][0]["id"]})
+    client.post("/api/retailnext/queue", json={
+        "codes": ["JB-401"], "date": "2026-09-19", "direction": "out"})
+    assert asked == ["out"]  # and with nothing else said, the direction given stands
+    _settled(client)

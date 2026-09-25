@@ -870,8 +870,14 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                 uuid_ = str(store["uuid"])
                 rows = rn.day_traffic(conn, uuid_, day, store.get("time_zone"))
                 cameras = len(rn.video_channels(nodes, uuid_)) or len(rn.entrances(nodes, uuid_)) or 1
-                plan = sampling.plan(rn.windows(rows, b.minutes, b.direction), mode=b.mode,
-                                     length_min=b.minutes, direction=b.direction,
+                # the window is picked on the traffic being validated: entries for an in
+                # validation, exits for an out one, the two added for a both. The page has to
+                # send a single direction as well, because the wizard opens on one, so the
+                # traffic actually validated comes through direction_for; scoring a both
+                # validation on entries alone picks the wrong quarter of an hour.
+                scoring = b.direction_for or b.direction
+                plan = sampling.plan(rn.windows(rows, b.minutes, scoring), mode=b.mode,
+                                     length_min=b.minutes, direction=scoring,
                                      cameras=cameras, seed=b.seed, day=day.isoformat())
             except (rn.RetailNextError, sampling.SamplingError) as exc:
                 problems.append(f"{code}: {exc}")
