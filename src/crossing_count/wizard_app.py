@@ -7,6 +7,7 @@ video and shown in a frame.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -818,9 +819,27 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
             mine.rn_working = True
             threading.Thread(target=_drain, args=(mine,), daemon=True).start()
 
+    def _counted(path: str | None) -> bool:
+        """Whether this footage already has a finished validation.
+
+        A downloaded window stays "ready" for as long as the app is open, so without this the
+        page offers the first of them again the moment the second is opened, and a person goes
+        round in circles between two windows. Counted means a report was made, not merely
+        opened: somebody who starts one and stops is still pointed back at it.
+        """
+        if not path:
+            return False
+        kept = ((runs_root or paths.data_root()) / default_run_dir(path, None)
+                / "wizard" / "state.json")
+        try:
+            return bool(json.loads(kept.read_text(encoding="utf-8")).get("report"))
+        except (OSError, ValueError):
+            return False
+
     def _queued(mine: _Current) -> dict[str, Any]:
-        return {"items": list(mine.rn_queue), "working": mine.rn_working,
-                "ready": [i for i in mine.rn_queue if i["state"] == "ready"]}
+        items = [{**i, "counted": _counted(i.get("path"))} for i in mine.rn_queue]
+        return {"items": items, "working": mine.rn_working,
+                "ready": [i for i in items if i["state"] == "ready"]}
 
     def _item(code: str, store: str, day: str, window: dict[str, Any], b: Any,
               chosen_by: dict[str, Any] | None) -> dict[str, Any]:

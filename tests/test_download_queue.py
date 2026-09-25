@@ -6,6 +6,7 @@ RetailNext is stubbed at its own edge, so what runs here is the queue itself.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from datetime import datetime
@@ -17,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from crossing_count import retailnext as rn
 from crossing_count import sampling
+from crossing_count.util import default_run_dir
 from crossing_count.wizard_app import create_wizard_app
 
 # the words retailnext.windows really uses for a window's edges: "start" and "until".
@@ -181,3 +183,44 @@ def test_taking_one_out_of_the_queue(stubs: dict[str, Any]) -> None:
     left = client.post("/api/retailnext/queue/forget", json={"id": done[0]["id"]}).json()
     assert [i["id"] for i in left["items"]] == [done[1]["id"]]
     assert Path(done[0]["path"]).is_file()  # the footage itself is left where it was
+
+
+def _validated(root: Path, video: str) -> None:
+    """Write the record a finished validation leaves behind for that footage."""
+    where = root / "data" / default_run_dir(video, None) / "wizard"
+    where.mkdir(parents=True, exist_ok=True)
+    (where / "state.json").write_text(json.dumps({"report": {"path": "x.pptx"}}))
+
+
+def test_the_one_just_counted_is_not_offered_again(stubs: dict[str, Any],
+                                                   tmp_path: Path) -> None:
+    """Finish one and the queue moves past it. It used to stay "ready" for ever, so the page
+    offered the first of them again the moment you opened the second: round and round between
+    two windows, never reaching the third."""
+    client = stubs["client"]
+    client.post("/api/retailnext/queue", json={
+        "codes": ["CN-123", "JB-401", "RW-409"], "date": "2026-09-19"})
+    done = _settled(client)
+    assert [i["counted"] for i in done["items"]] == [False, False, False]
+
+    _validated(tmp_path, done["items"][0]["path"])
+    after = client.get("/api/retailnext/queue").json()
+    assert [i["counted"] for i in after["items"]] == [True, False, False]
+    assert [i["code"] for i in after["ready"] if not i["counted"]] == ["JB-401", "RW-409"]
+
+    _validated(tmp_path, done["items"][1]["path"])
+    last = client.get("/api/retailnext/queue").json()
+    assert [i["code"] for i in last["ready"] if not i["counted"]] == ["RW-409"]
+
+
+def test_footage_opened_but_not_finished_is_still_offered(stubs: dict[str, Any],
+                                                          tmp_path: Path) -> None:
+    """Counted means a report was made, not merely opened: somebody who starts one and stops
+    should still be pointed back at it."""
+    client = stubs["client"]
+    client.post("/api/retailnext/queue", json={"codes": ["CN-123"], "date": "2026-09-19"})
+    done = _settled(client)
+    where = tmp_path / "data" / default_run_dir(done["items"][0]["path"], None) / "wizard"
+    where.mkdir(parents=True, exist_ok=True)
+    (where / "state.json").write_text(json.dumps({"report": None}))  # opened, nothing finished
+    assert client.get("/api/retailnext/queue").json()["items"][0]["counted"] is False

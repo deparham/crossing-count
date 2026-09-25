@@ -846,18 +846,23 @@ async function renderQueue(open = false) {
   if (box.hidden) return;
   const line = (i) => {
     const pct = i.total ? ` ${Math.round(100 * i.done / i.total)}%` : "";
-    const what = i.state === "downloading" ? `downloading${pct}` : QSTATE[i.state] || i.state;
+    const what = i.counted ? "counted"
+      : i.state === "downloading" ? `downloading${pct}` : QSTATE[i.state] || i.state;
     const cls = i.state === "ready" ? "ok" : i.state === "failed" ? "err" : "muted";
-    const act = i.state === "ready" ? `<button data-open="${esc(i.id)}">Count this one</button>` : "";
+    const act = i.state === "ready"
+      ? `<button data-open="${esc(i.id)}">${i.counted ? "Open again" : "Count this one"}</button>` : "";
     const drop = `<button data-forget="${esc(i.id)}" title="Take it out of the list">×</button>`;
     return `<tr><td>${esc(i.label)}</td><td class="${cls}">${esc(what)}${i.state === "failed" ? `: ${esc(i.message)}` : ""}</td><td style="white-space:nowrap">${act} ${drop}</td></tr>`;
   };
-  box.innerHTML = `<b>Footage queue</b> <span class="muted">${q.ready.length} ready, ${q.items.filter((i) => i.state !== "ready" && i.state !== "failed").length} to come${q.working ? "" : " (nothing running)"}</span>
+  const counted = q.items.filter((i) => i.counted).length;
+  const waiting = q.ready.filter((i) => !i.counted).length;
+  box.innerHTML = `<b>Footage queue</b> <span class="muted">${waiting} to count, ${q.items.filter((i) => i.state !== "ready" && i.state !== "failed").length} to come${counted ? `, ${counted} counted` : ""}${q.working ? "" : " (nothing running)"}</span>
     <div style="max-height:260px;overflow-y:auto;margin-top:6px"><table class="ivs">${q.items.map(line).join("")}</table></div>`;
   if (q.items.some((i) => i.state !== "ready" && i.state !== "failed")) {
     clearTimeout(W.qTimer); W.qTimer = setTimeout(() => renderQueue(), 3000);
   }
-  if (open && q.ready.length) openQueued(q.ready[0]);
+  const first = q.ready.find((i) => !i.counted);  // never the one already counted
+  if (open && first) openQueued(first);
 }
 async function openQueued(item) {
   try {
@@ -1836,11 +1841,17 @@ async function nextUp() {
   try { q = await api("/api/retailnext/queue"); } catch (e) { box.hidden = true; return; }
   W.queue = q;
   const here = s.filename || "";
-  const ready = (q.ready || []).filter((i) => !(i.paths || []).some((p) => p.endsWith(here)));
+  // not this one, and not one already counted: a downloaded window stays "ready" for as long
+  // as the app is open, so going by "ready" alone offers the first of them again and again
+  const mine = (i) => (i.paths || []).some((p) => p.endsWith(here));
+  const ready = (q.ready || []).filter((i) => !mine(i) && !i.counted);
   const coming = q.items.filter((i) => i.state !== "ready" && i.state !== "failed");
+  const done = q.items.filter((i) => i.counted && !mine(i)).length;
   if (!ready.length && !coming.length) { box.hidden = true; return; }
+  const left = [coming.length ? `${coming.length} still coming` : "", done ? `${done} done` : ""]
+    .filter(Boolean).join(", ");
   box.innerHTML = ready.length
-    ? `<b>Next: ${esc(ready[0].label)}</b> <span class="muted">${coming.length ? `, and ${coming.length} more still coming` : "— the last one"}</span>
+    ? `<b>Next: ${esc(ready[0].label)}</b> <span class="muted">${ready.length > 1 || coming.length ? `— ${ready.length - 1 + coming.length} after this one${left ? ` (${left})` : ""}` : "— the last one"}</span>
        <div style="margin-top:8px"><button id="goNext" class="primary">Count the next one →</button></div>`
     : `<b>Still coming</b> <span class="muted">${esc(coming[0].label)}: ${esc(coming[0].state === "downloading" ? "downloading" : "RetailNext is preparing it")}. This page will offer it when it is down.</span>`;
   if (ready.length) $("goNext").addEventListener("click", () => openQueued(ready[0]));
