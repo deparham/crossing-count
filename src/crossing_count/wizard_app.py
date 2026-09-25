@@ -61,9 +61,6 @@ HOST_ONLY = frozenset({
     ("POST", "/api/quit"), ("POST", "/api/settings"), ("POST", "/api/reveal"),
     ("POST", "/api/runs/reveal"), ("POST", "/api/audit/marks/reclassify"),
     ("POST", "/api/gold/freeze"), ("POST", "/api/network"),
-    # the team's spreadsheet is one file everyone's rows live in, rewritten in place: two
-    # people writing it at once is how a row goes missing, so it is this computer's to write
-    ("POST", "/api/sheet"),
     # the Microsoft account is this computer's, exactly as its RetailNext keys are
     ("POST", "/api/microsoft"), ("POST", "/api/microsoft/signin"),
     ("POST", "/api/microsoft/forget"),
@@ -331,12 +328,6 @@ class MicrosoftIn(BaseModel):
     tenant: str = ""  # Directory (tenant) ID; not a secret
     client_id: str = ""  # Application (client) ID; not a secret
     host: str = ""  # e.g. acme.sharepoint.com, when the sheet's own links do not say
-
-
-class SheetIn(BaseModel):
-    workbook: str = ""  # which spreadsheet, when the folder holds more than one
-    accuracy: float | None = None  # the person's own figure, over the one offered
-    link: str = ""  # a share link copied out of SharePoint, over the folder's own address
 
 
 class NetworkIn(BaseModel):
@@ -1233,25 +1224,6 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         signing_in.pop("started", None)
         graph.forget()
         return microsoft()
-
-    @app.get("/api/sheet")
-    def sheet_says(workbook: str = "", link: str = "") -> dict[str, Any]:
-        """What would change in the team's spreadsheet: nothing is written."""
-        try:
-            return {"sheet": wiz().sheet_plan(delivery_root(), workbook, link=link)}
-        except WizardError as exc:
-            raise HTTPException(400, str(exc)) from exc
-
-    @app.post("/api/sheet")
-    def sheet_write(d: SheetIn) -> dict[str, Any]:
-        root = delivery_root()
-        if root is None:
-            raise HTTPException(400, "Set the folder for finished validations first "
-                                     "(Report page).")
-        try:
-            return wiz().sheet_write(root, d.workbook, d.accuracy, d.link)
-        except WizardError as exc:
-            raise HTTPException(400, str(exc)) from exc
 
     @app.get("/api/examples")
     def examples() -> dict[str, Any]:

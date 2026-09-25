@@ -22,6 +22,8 @@ from __future__ import annotations
 import functools
 import re
 import shutil
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -172,7 +174,8 @@ def deliver(root: Path, store: dict[str, Any], report: Path,
             raise DeliveryError(f"{src.name} could not be copied to {out} ({exc}).") from exc
         done.append(dst.name)
     return {"folder": str(out), "files": done,
-            "footage": bool(video is not None and video.is_file())}
+            "footage": bool(video is not None and video.is_file()),
+            "warning": sync_warning(out)}
 
 
 # ---------- straight to SharePoint, rather than into the folder OneDrive carries up ----------
@@ -226,3 +229,46 @@ def online_deliver(place: graph.Place, report: Path, video: Path | None = None,
             "footage": bool(video is not None and video.is_file()),
             "url": f"{place.site}/{place.library.replace(' ', '%20')}/"
                    + "/".join(quote(p) for p in place.path.split("/"))}
+
+
+# ---------- whether a delivery into the synced folder will actually leave this computer ----------
+# Copying into the OneDrive folder is a write to a disk: the sync client carries it up
+# afterwards, or it does not. There is no local mark that means "uploaded" - on this drive 46
+# of 60 files demonstrably on the server carry com.apple.FinderInfo and 14 do not, synced
+# either way - so nothing here guesses at one. Only what can be known for certain is said.
+SYNC_APPS = {"darwin": ("OneDrive",), "win32": ("OneDrive.exe",)}
+
+
+def syncs_itself(path: Path) -> bool:
+    """Whether this is somewhere a sync client is meant to carry up."""
+    return graph.library_root(path) is not None
+
+
+def sync_running() -> bool | None:
+    """Whether OneDrive is running. None when this computer cannot be asked."""
+    names = SYNC_APPS.get(sys.platform)
+    if not names:
+        return None
+    try:
+        if sys.platform == "win32":
+            out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {names[0]}"],
+                                 capture_output=True, text=True, timeout=5, check=False)
+            return names[0].lower() in out.stdout.lower()
+        out = subprocess.run(["/usr/bin/pgrep", "-x", names[0]],
+                             capture_output=True, text=True, timeout=5, check=False)
+        return bool(out.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def sync_warning(folder: Path) -> str:
+    """What is certainly wrong about a delivery here reaching the customer, or "".
+
+    Whether the upload has actually happened needs the server, which is what delivering
+    through SharePoint itself does instead. This says only the one thing that can be known
+    from here: that nothing is going anywhere at all yet.
+    """
+    if syncs_itself(folder) and sync_running() is False:
+        return ("OneDrive is not running, so this stays on this computer until it is. Start "
+                "OneDrive and it will go up; until then the customer's folder is empty.")
+    return ""

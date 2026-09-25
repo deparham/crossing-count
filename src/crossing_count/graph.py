@@ -1,10 +1,10 @@
 """SharePoint itself, rather than the folder OneDrive keeps in step with it.
 
-Writing into the synced folder and leaving the rest to OneDrive is what put a validation's
-row on one computer and nowhere else: the workbook was rebuilt, the sync engine lost the file
-it had been watching, and the change sat on the disk while the team filled the same rows in
-by hand. Here the live workbook is fetched from the server, changed, and put back, so there
-is no second copy to fall behind and no sync to wait on.
+Copying into the synced folder and leaving the rest to OneDrive means a delivery is only
+delivered once the sync client has finished with it, and a 79 MB export can leave the
+customer's folder half there for a quarter of an hour - or, if the client loses track of a
+file, for good. Here the report and the footage are put on the server by the app itself, so
+the upload is the delivery: it either worked or it said why.
 
 A put carries the eTag the file was fetched with, so a colleague who saved in between is
 found out (412) instead of quietly written over.
@@ -276,6 +276,12 @@ def drive_of(place: Place) -> str:
     if (place.site, place.library) not in _drives:
         _drives[(place.site, place.library)] = drive_id(site_id(place.site), place.library)
     return _drives[(place.site, place.library)]
+
+
+def library_root(local: Path) -> Path | None:
+    """The synced library's own folder ("validations - Documents"), above the team's folders."""
+    m = SYNCED.search(local.as_posix())
+    return Path(local.as_posix()[:m.start("rest")].rstrip("/")) if m else None
 
 
 def place_for(local: Path, host: str) -> Place | None:

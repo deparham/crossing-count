@@ -306,3 +306,45 @@ def test_sharepoint_refusing_is_a_delivery_problem_in_words(tmp_path: Path,
     place = graph.Place("https://acme.sharepoint.com/sites/v", "Shared Documents", "RAG/X")
     with pytest.raises(delivery.DeliveryError, match="507"):
         delivery.online_deliver(place, report)
+
+
+# ---------- whether a delivery into the synced folder will leave this computer ----------
+
+def test_a_delivery_with_no_onedrive_running_says_so(tmp_path: Path,
+                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    """Copying into the OneDrive folder is a write to a disk. If nothing is carrying it up,
+    the customer's folder is empty and the person should hear it now, not tomorrow."""
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path / "home"))
+    synced = (tmp_path / "Library/CloudStorage/OneDrive-AcmePtyLtd/validations - Documents"
+              / "External" / "RAG")
+    (synced / "Connor").mkdir(parents=True)
+    plain = tmp_path / "somewhere"
+    plain.mkdir()
+    assert delivery.syncs_itself(synced) is True
+    assert delivery.syncs_itself(plain) is False  # nothing carries this anywhere
+
+    monkeypatch.setattr(delivery, "sync_running", lambda: False)
+    assert "OneDrive is not running" in delivery.sync_warning(synced)
+    assert delivery.sync_warning(plain) == ""  # not on a synced drive, so nothing to say
+    monkeypatch.setattr(delivery, "sync_running", lambda: True)
+    assert delivery.sync_warning(synced) == ""
+    monkeypatch.setattr(delivery, "sync_running", lambda: None)  # cannot be asked
+    assert delivery.sync_warning(synced) == ""  # and nothing is claimed either way
+
+
+def test_the_warning_comes_back_with_the_delivery(tmp_path: Path,
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(tmp_path / "home"))
+    synced = (tmp_path / "Library/CloudStorage/OneDrive-AcmePtyLtd/validations - Documents"
+              / "External" / "RAG")
+    (synced / "Connor").mkdir(parents=True)
+    report = tmp_path / "r.pptx"
+    report.write_bytes(b"deck")
+
+    monkeypatch.setattr(delivery, "sync_running", lambda: False)
+    got = delivery.deliver(synced, {"code": "CN-212", "name": "Northland"}, report)
+    assert got["files"] == ["r.pptx"]  # it was copied all the same
+    assert "OneDrive is not running" in got["warning"]
+
+    monkeypatch.setattr(delivery, "sync_running", lambda: True)
+    assert delivery.deliver(synced, {"code": "CN-231", "name": "Epping"}, report)["warning"] == ""

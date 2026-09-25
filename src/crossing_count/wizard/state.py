@@ -38,7 +38,6 @@ from .. import (
     runs,
     sampling,
     sensors,
-    sheet,
     validation,
 )
 from .. import correspondence as co
@@ -612,11 +611,6 @@ class Wizard:
         if not graph.signed_in():
             return None
         host = str(paths.load_settings().get("graph_host") or "").strip()
-        if not host:
-            chosen = sheet.find_workbook(root)
-            if chosen is not None:
-                with contextlib.suppress(sheet.TrackerError):
-                    host = sheet.host_in(chosen)
         if not host or not self.state["store"].get("code"):
             return None
         with contextlib.suppress(delivery.DeliveryError):
@@ -660,136 +654,7 @@ class Wizard:
             self._decide("delivered", after={"folder": got["folder"], "files": got["files"],
                                              "footage": got["footage"]})
             self._save()
-        return {**got, "sheet": self.sheet_after_delivery(root)}
-
-    # ---------- the team's own spreadsheet ----------
-    # One row a validation, in the folder finished work is delivered to. Every accuracy the
-    # tool can work out goes in, however few crossings it rests on: the spreadsheet is the
-    # team's own record of what was measured, and a blank cell there reads as "not done"
-    # rather than "too few to quote". The report is the other way round - below
-    # validation.MIN_VERIFIED_FOR_PCT it prints the counts and the difference instead of a
-    # percentage - so the panel says beside the number what it rests on, and the report is
-    # unchanged.
-
-    def sheet_accuracy(self, c: dict[str, Any]) -> dict[str, Any]:
-        """Each direction's accuracy, and the one number for the sheet's single column.
-
-        The lower of the directions is offered: it never flatters the sensor the way a
-        combined figure can, where five too many in and five too few out read as agreement.
-        """
-        each = {d: c["accuracy"][d]["accuracy_pct"] for d in self.dirs()
-                if c["accuracy"][d]["accuracy_pct"] is not None}
-        thin = [c["quote"][d]["reason"] for d in self.dirs()
-                if not c["quote"][d]["rate"] and c["quote"][d]["reason"]]
-        return {"each": each, "pct": min(each.values()) if each else None,
-                "thin": list(dict.fromkeys(thin))}
-
-    def sheet_plan(self, root: Path | None, workbook: str = "", accuracy: float | None = None,
-                   link: str = "") -> dict[str, Any] | None:
-        """What would change in the spreadsheet, for someone to agree to before it does.
-
-        None when there is no folder for finished work, so nothing here goes looking for a
-        spreadsheet on a drive nobody has pointed the tool at.
-        """
-        if root is None:
-            return None
-        here = sheet.workbooks(root)
-        chosen = next((p for p in here if p.name == workbook), None) or sheet.find_workbook(root)
-        out: dict[str, Any] = {"workbooks": [p.name for p in here],
-                               "file": chosen.name if chosen else "",
-                               "written": self.state.get("sheet")}
-        if chosen is None:
-            out["problem"] = (f"Which spreadsheet? {root} holds {len(here)} of them."
-                              if here else f"There is no spreadsheet in {root}.")
-            return out
-        start = self._period()[0]
-        if start is None:
-            out["problem"] = "The footage has no date, so which sheet it belongs to is unknown."
-            return out
-        day = start.date()
-        c = self.counts()
-        acc = self.sheet_accuracy(c)
-        store = self.state["store"]
-        folder = delivery.where(root, store) if store.get("code") else None
-        # the address the upload itself came back with, when it went straight to SharePoint:
-        # that one is the server's own, not one worked out from a path on this disk
-        sent = str((self.state.get("delivered") or {}).get("url") or "")
-        where = link or sent or (sheet.link_for(chosen, folder) if folder else "")
-        about: dict[str, Any] = {"code": str(store.get("code") or ""),
-                 "brand": delivery.brand_of(str(store.get("code") or "")) or "",
-                 "store": str(store.get("name") or ""), "day": day,
-                 "accuracy": acc["pct"] if accuracy is None else accuracy, "link": where}
-        place, etag = self.sheet_online(root, chosen), ""
-        try:
-            if place is not None:  # the file on SharePoint, not the copy OneDrive keeps
-                said, etag = sheet.online_plan(place, **about)
-            else:
-                said = sheet.plan(chosen, **about)
-        except (sheet.TrackerError, delivery.DeliveryError, graph.GraphError) as exc:
-            out["problem"] = str(exc)
-            return out
-        return {**out, "plan": said, "day": day.isoformat(), "accuracy": acc,
-                "incomplete": c["incomplete"], "link": where, "etag": etag,
-                "online": place is not None, "asking": sheet.needs_asking(said)}
-
-    def sheet_online(self, root: Path, workbook: Path) -> sheet.Online | None:
-        """Where this workbook is on SharePoint, when the app can write there itself.
-
-        None when no Microsoft account is connected, or when nothing says which host the
-        team's SharePoint is on - and then the workbook on this disk is written instead, and
-        OneDrive carries it up when it can.
-        """
-        if not graph.signed_in():
-            return None
-        host = str(paths.load_settings().get("graph_host") or "").strip()
-        if not host:
-            with contextlib.suppress(sheet.TrackerError):
-                host = sheet.host_in(workbook)
-        return sheet.online_for(root, workbook.name, host) if host else None
-
-    def sheet_write(self, root: Path, workbook: str = "", accuracy: float | None = None,
-                    link: str = "") -> dict[str, Any]:
-        """Put this validation in the spreadsheet, exactly as the plan said it would be."""
-        with self._lock:
-            said = self.sheet_plan(root, workbook, accuracy, link)
-            if said is None or said.get("problem"):
-                raise WizardError((said or {}).get("problem")
-                                  or "No folder for finished work is set.")
-            place = self.sheet_online(root, Path(said["plan"]["file"] or said["file"]))
-            try:
-                if place is not None:
-                    got = sheet.online_write(place, said["plan"], said.get("etag", ""))
-                else:
-                    got = sheet.write(Path(said["plan"]["file"]), said["plan"])
-            except (sheet.TrackerError, graph.GraphError) as exc:
-                raise WizardError(str(exc)) from exc
-            self.state["sheet"] = {**got, "at": _now(), "file": said["file"]}
-            self._decide("sheet_updated", after={"file": said["file"], "sheet": got.get("sheet"),
-                                                 "row": got.get("row"),
-                                                 "adding": got.get("adding"),
-                                                 "online": got.get("online", False)})
-            self._save()
             return got
-
-    def sheet_after_delivery(self, root: Path | None) -> dict[str, Any] | None:
-        """Put the row in without being asked, now the folder the link points at exists.
-
-        Only when the row is nobody's result yet - one put aside for this store, or a store
-        not listed at all. A row that already gives an accuracy is somebody's earlier
-        validation, and replacing a number the whole team reads is left to a person
-        (sheet.needs_asking). Nothing here is allowed to stop a delivery that has worked.
-        """
-        if root is None or self.state.get("sheet"):
-            return None
-        try:
-            said = self.sheet_plan(root)
-            if said is None or said.get("problem") or not said.get("plan"):
-                return said
-            if why := str(said.get("asking") or ""):
-                return {**said, "waiting_on_a_person": why}
-            return {"written": self.sheet_write(root), "by_itself": True}
-        except (WizardError, sheet.TrackerError, graph.GraphError, OSError) as exc:
-            return {"problem": str(exc)}
 
     def finalise(self, shared: Path | None = None) -> dict[str, Any]:
         """Give this validation an ID and keep it, with everything needed to reproduce it,
