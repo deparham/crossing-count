@@ -146,7 +146,9 @@ def status() -> dict[str, Any]:
         out["reason"] = ("This copy was not built by GitHub: it is updated by installing a new "
                          "one.")
         return out
-    out.update(build=int(info["build"]), platform=info["platform"])
+    # which repository this copy was built from: a token has to be scoped to that one, and
+    # the page tells the person so rather than naming a repository it cannot know
+    out.update(build=int(info["build"]), platform=info["platform"], repo=str(info["repo"]))
     tok = token()
     if not tok:
         out.update(needs_token=True, reason="Enter a GitHub token once to hear of new versions.")

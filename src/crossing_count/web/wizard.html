@@ -178,7 +178,7 @@
 </div>
 <div class="card" id="updCard" hidden>
   <div class="big">Hear about new versions</div>
-  <div class="muted">New versions of CrossingCount are kept on a private GitHub repository, so this app needs a GitHub token that can read it. Ask whoever looks after CrossingCount for one. To make one: on GitHub, your picture → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token; Repository access: Only select repositories → crossing-count; Repository permissions: Contents → Read-only.</div>
+  <div class="muted">New versions of CrossingCount are kept on a private GitHub repository, so this app needs a GitHub token that can read it. Ask whoever looks after CrossingCount for one. To make one: on GitHub, your picture → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token; Repository access: Only select repositories → <b id="updRepo">the CrossingCount repository</b>; Repository permissions: Contents → Read-only.</div>
   <div class="grid2"><label>GitHub token <input id="updTokenIn" type="password" autocomplete="off" spellcheck="false"></label></div>
   <button id="updTokenSave" class="primary">Save</button>
   <span class="muted">Kept in this computer's Keychain (Credential Manager on Windows), never in a file.</span>
@@ -626,6 +626,8 @@ async function checkUpdate() {  // a newer version: on GitHub, or on this comput
   $("updateApp").textContent = u.behind ? "Update available" : "Restart for the new version";
   $("updateApp").title = u.changes.length ? u.changes.join("\n") : "A newer version is ready";
   $("updToken").hidden = !u.needs_token;
+  // the repository this copy was built from: a token scoped to any other one will not read it
+  if (u.repo) $("updRepo").textContent = u.repo;
   $("updBanner").hidden = !newer || stored("updLater") === updId(u);
   if (newer) {
     $("updWhat").innerHTML = esc(u.installed ? `Build ${u.latest} is ready; this is build ${u.build}.`

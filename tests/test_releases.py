@@ -188,3 +188,15 @@ def test_the_build_writes_its_number_and_what_it_carries(
         assert builtin.github_token() is None
     finally:
         builtin._data.cache_clear()
+
+
+def test_the_status_says_which_repository_this_copy_came_from(
+        built: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """A token has to be scoped to the repository the copy was built from, and there is more
+    than one now. The page names that one rather than whichever it was written against."""
+    monkeypatch.setattr(releases, "token", lambda: None)
+    said = releases.status()
+    assert said["needs_token"] is True and said["repo"] == "o/r"
+
+    built["repo"] = "ParhamITOI/CrossCounter"  # a copy built from the other repository
+    assert releases.status()["repo"] == "ParhamITOI/CrossCounter"
