@@ -210,6 +210,38 @@ class Wizard:
     # ---- steps before counting ---------------------------------------------------------
 
     @_open_only
+    def resplit(self, pictures: int) -> list[str]:
+        """Forget which camera each picture was, because the pictures themselves have changed.
+
+        A picture is referred to by its place in the video, so cutting the video up differently
+        makes every one of those references mean something else. Only offered while that costs
+        nothing: once the tool has counted, or once anyone has counted by hand, the answers are
+        tied to cameras that are about to stop existing, and re-splitting would quietly
+        re-point them. Then the footage is opened again instead.
+        """
+        with self._lock:
+            self._check_open()
+            if self.state["job"]["status"] not in ("idle", "stopped"):
+                raise WizardError("The tool is counting this footage. Stop it first.")
+            if self.state["job"].get("finished_at"):
+                raise WizardError("This footage has been counted, and the crossings found are "
+                                  "each against one of the pictures as they are now. To split "
+                                  "it differently, open it again and start over.")
+            counted = len(self.state["manual"].get("counts", []))
+            if counted:
+                raise WizardError(f"{counted} crossing(s) have been counted by hand against the "
+                                  f"pictures as they are now. To split it differently, open it "
+                                  f"again and start over.")
+            was = [c["sensor"] for c in self.state["cameras"]]
+            self.state["cameras"] = []
+            self._decide("resplit", after={"pictures": pictures, "forgot": was})
+            self._save()
+        if not was:
+            return []
+        said = (f"{len(was)} camera(s) were named against the old pictures and have been "
+                f"forgotten: name them again.")
+        return [said]
+
     def set_cameras(self, existing: list[dict[str, Any]], tiles: list[dict[str, Any]]) -> None:
         """Use the saved drawing of each picture (the newest, if a picture has several)."""
         chosen: dict[int, dict[str, Any]] = {}

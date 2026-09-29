@@ -41,6 +41,7 @@ from . import (
     updates,
     validation,
 )
+from . import layout as lay
 from . import overlay as ov
 from . import retailnext as rn
 from . import video as vid
@@ -235,6 +236,10 @@ class StoreIn(BaseModel):
     location: str | None = None
     report_date: str | None = None
     operator: str | None = None
+
+
+class SplitIn(BaseModel):
+    cameras: int  # how many cameras this video holds, said by whoever is looking at it
 
 
 class ModeIn(BaseModel):
@@ -1044,6 +1049,29 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                 c["picture"] is not None and c["match"] is not None
                 and c["overlay_hue"] is not None
                 and ov.MARK_HUES[0] <= c["overlay_hue"] <= ov.MARK_HUES[1] for c in cfgs)}
+
+    @app.post("/api/pictures/split")
+    def split_pictures(b: SplitIn) -> dict[str, Any]:
+        """Cut the video into the number of cameras a person says it holds.
+
+        The last word on a split, after what the export said and what the picture itself
+        looks like. Whoever is about to count knows how many entrances they are looking at,
+        and no amount of reading the pixels beats being told.
+        """
+        s = setup()
+        if not 1 <= b.cameras <= lay.TOLD_MAX:
+            raise HTTPException(400, f"A video holds between 1 and {lay.TOLD_MAX} cameras.")
+        tiles = lay.detect_tiles_in(s.median, b.cameras)
+        if len(tiles) != b.cameras:
+            raise HTTPException(400, f"This video does not divide into {b.cameras} pictures of "
+                                     f"the same size. It is {s.median.shape[1]}x"
+                                     f"{s.median.shape[0]}.")
+        try:  # asked before the pictures change, so a refusal leaves them as they were
+            notes = wiz().resplit(b.cameras)
+        except WizardError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        s.tiles = tiles
+        return {**public(), "notes": notes, "pictures": len(tiles)}
 
     @app.post("/api/mode")
     def mode(m: ModeIn) -> dict[str, Any]:

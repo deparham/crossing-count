@@ -272,6 +272,7 @@
     <div class="big">Which cameras will you count?</div>
     <div class="muted">Name each camera as it is in RetailNext, and untick any you don't want to count.</div>
     <div id="namesWarn" class="warn" style="margin:8px 0" hidden></div>
+    <div id="splitFix" class="sub" style="margin:8px 0"></div>
     <div id="names" class="pics"></div>
     <button id="namesDone" class="primary">Next →</button>
   </div>
@@ -994,6 +995,7 @@ function showNames() {
   const many = W.drawn && W.drawn.too_many;
   $("namesWarn").hidden = !many;
   if (many) $("namesWarn").textContent = many;
+  renderSplitFix();
   const current = Object.fromEntries(W.st.cameras.map((c) => [c.picture, c.sensor]));
   $("names").innerHTML = W.st.pictures.map((p, i) => {
     const drawn = W.drawn && W.drawn.pictures[i] && W.drawn.pictures[i].configs[0];
@@ -1002,6 +1004,33 @@ function showNames() {
     return `<figure><img src="${pic(i)}" alt="Picture ${i + 1}"><label>Camera name <input type="text" data-pic="${i}" value="${esc(name)}" placeholder="e.g. RW-128-PB1"></label>` +
       `<label style="flex-direction:row;align-items:center;gap:6px" class="muted"><input type="checkbox" data-inc="${i}" ${include ? "checked" : ""}> Count this camera</label></figure>`;
   }).join("");
+}
+// ---------- saying how many cameras the video holds ----------
+// The last word on a split, after what the export said and what the picture looks like.
+// Whoever is about to count knows how many entrances they are looking at.
+function renderSplitFix() {
+  const box = $("splitFix"), n = W.st.pictures.length;
+  const most = 6;  // layout.TOLD_MAX
+  const store = W.drawn && W.drawn.store_cameras;
+  box.innerHTML = `<b>${n} camera picture${n === 1 ? "" : "s"} found</b>
+    <span class="muted">${store ? ` — RetailNext says this store has ${store}.` : ""} Not right? Say how many this video holds and it will be cut again.</span>
+    <div style="margin-top:6px;display:flex;gap:6px;align-items:center">
+      <select id="splitN">${Array.from({ length: most }, (_, k) => k + 1).map((k) =>
+        `<option value="${k}"${k === n ? " selected" : ""}>${k} camera${k === 1 ? "" : "s"}</option>`).join("")}</select>
+      <button id="splitGo">Split again</button></div>`;
+  $("splitGo").addEventListener("click", async () => {
+    const cameras = +$("splitN").value;
+    if (cameras === W.st.pictures.length) return msg("That is how it is split already.", "warn");
+    if (W.st.cameras.length && !confirm(`Cut this video into ${cameras} pictures?\n\nThe cameras named against the pictures as they are now will be forgotten, and you will name them again.`)) return;
+    $("splitGo").disabled = true;
+    try {
+      const r = await api("/api/pictures/split", { cameras });
+      setState(r);
+      msg((r.notes || []).join(" ") || `Split into ${r.pictures} picture(s).`, "ok");
+      refreshDrawn();
+    } catch (e) { msg(e.message, "err"); }
+    finally { showNames(); }
+  });
 }
 document.querySelectorAll("#marksCard [data-marks]").forEach((b) => b.addEventListener("click", async () => {
   try { setState(await api("/api/marks", { marks: b.dataset.marks === "1" })); ENTER.draw(); } catch (e) { msg(e.message, "err"); }
