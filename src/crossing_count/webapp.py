@@ -58,14 +58,21 @@ def _pts(a: Any) -> list[Pt]:
 
 
 class Setup:
-    def __init__(self, video: Path, sites_dir: Path) -> None:
+    def __init__(self, video: Path, sites_dir: Path, expect: int = 0) -> None:
+        """`expect` is how many cameras the footage is known to hold, when that is known.
+
+        A RetailNext download is asked for named channels and the names are kept beside the
+        file, so the number of pictures in it is a fact rather than something to work out from
+        the pixels. Given it, the split cannot come out at one camera for a two-camera export
+        or at two for a single camera with a hard line down its picture.
+        """
         self.video = video
         self.sites_dir = sites_dir
         self.info = vid.probe(video)
         self.audit = vid.audit_timebase(video)
         self.median = vid.median_of_video(video, self.audit.duration_s,
                                           interval_s=self.audit.median_interval_s)
-        self.tiles = lay.detect_tiles_in(self.median)
+        self.tiles = lay.detect_tiles_in(self.median, expect)
         self._frames: dict[float, NDArray[np.uint8]] = {}
         self._marks: list[dict[str, Any]] | None = None
         # The store the footage is known to be from (a RetailNext download: its code and

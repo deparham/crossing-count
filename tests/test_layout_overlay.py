@@ -151,3 +151,64 @@ def test_what_counts_as_the_shape_of_a_picture() -> None:
     assert lay._shaped_like_pictures([0, 640, 1280], [0, 480, 960])  # 2x2
     assert not lay._shaped_like_pictures([0, 640], [0, 240, 480])  # halved across: 640x240
     assert not lay._shaped_like_pictures([0, 160, 320, 480, 640], [0, 480])  # quartered down
+
+
+# ---------- when the export says how many cameras it holds ----------
+# A RetailNext download is asked for named channels (CN-212-PB1, CN-212-PB2, ...) and the
+# names are kept beside the file. Then the number of pictures is a fact, not something to
+# work out from the pixels, and the two ways the pixels get it wrong both stop happening.
+
+def _joined(parts: list[np.ndarray], across: bool = True) -> np.ndarray:
+    return np.concatenate(parts, axis=1 if across else 0)
+
+
+def test_two_cameras_that_look_like_one_are_still_split_when_the_count_is_known() -> None:
+    """The bug: two channels whose pictures meet with almost no step between them - similar
+    scenes, similar brightness - read as one camera, so one line and one row in the report
+    stood for two entrances."""
+    left = texture(480, 640, seed=11, mean=120)
+    right = texture(480, 640, seed=12, mean=121)  # all but identical: no seam to find
+    frame = _joined([left, right])
+    assert len(lay.detect_tiles_in(frame)) == 1  # what the pixels alone make of it
+
+    tiles = lay.detect_tiles_in(frame, expect=2)
+    assert [(t.x0, t.x1) for t in tiles] == [(0, 640), (640, 1280)]
+    assert all(t.height == 480 for t in tiles)
+
+
+def test_one_camera_with_a_hard_line_is_not_split_when_the_count_is_known() -> None:
+    """The other way round: a single fisheye with a pillar or a counter line down it. Told
+    there is one camera, nothing can halve it."""
+    frame = texture(480, 640, seed=13, mean=120)
+    frame[:, 318:322] = 250  # a hard edge down the whole height, on an even division
+    tiles = lay.detect_tiles_in(frame, expect=1)
+    assert len(tiles) == 1
+    assert (tiles[0].width, tiles[0].height) == (640, 480)
+
+
+def test_the_arrangement_the_picture_agrees_with_wins() -> None:
+    """Four cameras can be a row or a square, and both give four. The joins decide."""
+    square = _joined([_joined([texture(240, 320, seed=s, mean=m) for s, m in pair])
+                      for pair in (((21, 90), (22, 170)), ((23, 60), (24, 200)))], across=False)
+    assert square.shape == (480, 640, 3)
+    tiles = lay.detect_tiles_in(square, expect=4)
+    assert len(tiles) == 4
+    assert [(t.x0, t.y0) for t in tiles] == [(0, 0), (320, 0), (0, 240), (320, 240)]
+
+    row = _joined([texture(480, 320, seed=s, mean=m)
+                   for s, m in ((31, 80), (32, 160), (33, 70), (34, 190))])
+    inline = lay.detect_tiles_in(row, expect=4)
+    assert [(t.x0, t.x1) for t in inline] == [(0, 320), (320, 640), (640, 960), (960, 1280)]
+
+
+def test_three_cameras_side_by_side() -> None:
+    row = _joined([texture(480, 400, seed=s, mean=m) for s, m in ((41, 80), (42, 170), (43, 60))])
+    tiles = lay.detect_tiles_in(row, expect=3)
+    assert [(t.x0, t.x1) for t in tiles] == [(0, 400), (400, 800), (800, 1200)]
+
+
+def test_a_count_that_cannot_be_made_falls_back_to_reading_the_pixels() -> None:
+    """Never worse than before: if nothing divides into that many, the old way still answers."""
+    tiles = lay.detect_tiles_in(two_tile_frame(), expect=5)  # more than GRID_MAX
+    assert [(t.x0, t.x1) for t in tiles] == [(0, 640), (640, 1280)]
+    assert lay.detect_tiles_in(two_tile_frame(), expect=0) == lay.detect_tiles_in(two_tile_frame())

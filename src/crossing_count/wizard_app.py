@@ -477,7 +477,11 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                                      f"{LOCK_IDLE_S // 60} minutes without using it.")
         try:
             w = Wizard(path, sites, runs_root, commands)
-            s = Setup(w.video, sites)
+            # how many cameras this footage holds, when it is a download that says so: the
+            # channels were asked for by name and kept beside the file. Worked out before the
+            # pictures are split rather than read afterwards, which is what left a two-camera
+            # export counted as one (identify_download below only names them).
+            s = Setup(w.video, sites, expect=_channels_in(path))
         except (WizardError, ValueError, OSError, FFmpegError) as exc:
             raise HTTPException(400, f"Could not open {path.name}: {exc}") from exc
         name = operator_name()
@@ -493,6 +497,16 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
             app.mount(draw, create_app(w.video, sites, setup=s))
             mine.wizard, mine.setup, mine.draw = w, s, draw + "/"
         return {**public(), "notes": notes}
+
+    def _channels_in(path: Path) -> int:
+        """How many cameras this footage holds, or 0 when nothing says.
+
+        Read from what was kept when it was downloaded: a local file, no network. A name alone
+        does not say - "Export - Multiple Channels - ..." is any number of them - so only a
+        remembered list of channels counts.
+        """
+        info = rn.download_info(path) or {}
+        return len([c for c in (info.get("cameras") or []) if str(c).strip()])
 
     def identify_download(w: Wizard, s: Setup, path: Path) -> list[str]:
         """Footage downloaded from RetailNext: its brand, store and cameras are known, so the

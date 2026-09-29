@@ -183,24 +183,8 @@ def _shaped_like_pictures(xs: list[int], ys: list[int]) -> bool:
                for a, b in zip(xs, xs[1:]) for c, d in zip(ys, ys[1:]) if d > c)
 
 
-def detect_tiles_in(median: Image) -> list[Tile]:
-    g = cv2.cvtColor(median, cv2.COLOR_BGR2GRAY).astype(np.float64)
-    rows = np.nonzero(g.mean(axis=1) > BLACK_LEVEL)[0]
-    cols = np.nonzero(g.mean(axis=0) > BLACK_LEVEL)[0]
-    if len(rows) == 0 or len(cols) == 0:
-        raise ValueError("frame is entirely black; cannot find camera pictures")
-    y0, y1 = int(rows[0]), int(rows[-1]) + 1
-    x0, x1 = int(cols[0]), int(cols[-1]) + 1
-    region = g[y0:y1, x0:x1]
-    down = np.median(np.abs(np.diff(region, axis=1)), axis=0)  # each column, along its rows
-    across = np.median(np.abs(np.diff(region, axis=0)), axis=1)
-    cx = [x0 + s for s in _grid(_seams(down, x1 - x0), x1 - x0)]
-    cy = [y0 + s for s in _grid(_seams(across, y1 - y0), y1 - y0)]
-    # the most pictures whose pieces are still shaped like pictures; one picture last of all
-    for gx, gy in ((cx, cy), (cx, []), ([], cy), ([], [])):
-        xs, ys = [x0, *gx, x1], [y0, *gy, y1]
-        if _shaped_like_pictures(xs, ys):
-            break
+def _cells(g: NDArray[np.float64], xs: list[int], ys: list[int]) -> list[Tile]:
+    """The tiles a grid of cuts makes, skipping the empty slots."""
     tiles: list[Tile] = []
     for r in range(len(ys) - 1):
         for c in range(len(xs) - 1):
@@ -211,5 +195,71 @@ def detect_tiles_in(median: Image) -> list[Tile]:
     return tiles
 
 
-def detect_tiles(frames: Sequence[Image]) -> list[Tile]:
-    return detect_tiles_in(median_image(frames))
+def _even(length: int, n: int) -> list[int]:
+    """Where n equal parts of `length` are cut."""
+    return [round(length * k / n) for k in range(1, n)]
+
+
+def _support(down: NDArray[np.float64], across: NDArray[np.float64],
+             gx: list[int], gy: list[int]) -> float:
+    """How much the picture itself agrees that these are the joins: the size of the step
+    across each cut. Two arrangements can both give the right number of pictures, and this is
+    what says which one the export actually has."""
+    at = [float(down[c - 1]) for c in gx if 0 < c <= len(down)]
+    at += [float(across[c - 1]) for c in gy if 0 < c <= len(across)]
+    return sum(at) / len(at) if at else 0.0
+
+
+def _as_many_as_asked(g: NDArray[np.float64], box: tuple[int, int, int, int], expect: int,
+                      down: NDArray[np.float64], across: NDArray[np.float64]) -> list[Tile]:
+    """Cut the picture into exactly `expect` camera pictures.
+
+    Used when the export itself says how many cameras it holds, which a RetailNext download
+    does: it is asked for named channels and the names are kept beside the file. Then the
+    number is not something to work out from the pixels at all, and only the arrangement is -
+    two cameras side by side or one above the other, four in a row or in a square. Every
+    arrangement that gives the right number is tried and the one the picture agrees with most
+    is taken (_support), so a join that is faint still wins over a division with nothing on it.
+    """
+    x0, y0, x1, y1 = box
+    best: tuple[float, list[Tile]] | None = None
+    for cols in range(1, GRID_MAX + 1):
+        for rows in range(1, GRID_MAX + 1):
+            if not expect <= cols * rows <= GRID_MAX:  # a slot may be empty, none may be lost
+                continue
+            gx, gy = _even(x1 - x0, cols), _even(y1 - y0, rows)
+            tiles = _cells(g, [x0, *[x0 + c for c in gx], x1], [y0, *[y0 + c for c in gy], y1])
+            if len(tiles) != expect:
+                continue
+            score = _support(down, across, gx, gy)
+            if best is None or score > best[0]:
+                best = (score, tiles)
+    return best[1] if best else []
+
+
+def detect_tiles_in(median: Image, expect: int = 0) -> list[Tile]:
+    """The camera pictures in one frame. `expect`, when it is known, is how many there are."""
+    g = cv2.cvtColor(median, cv2.COLOR_BGR2GRAY).astype(np.float64)
+    rows = np.nonzero(g.mean(axis=1) > BLACK_LEVEL)[0]
+    cols = np.nonzero(g.mean(axis=0) > BLACK_LEVEL)[0]
+    if len(rows) == 0 or len(cols) == 0:
+        raise ValueError("frame is entirely black; cannot find camera pictures")
+    y0, y1 = int(rows[0]), int(rows[-1]) + 1
+    x0, x1 = int(cols[0]), int(cols[-1]) + 1
+    region = g[y0:y1, x0:x1]
+    down = np.median(np.abs(np.diff(region, axis=1)), axis=0)  # each column, along its rows
+    across = np.median(np.abs(np.diff(region, axis=0)), axis=1)
+    if expect >= 1 and (asked := _as_many_as_asked(g, (x0, y0, x1, y1), expect, down, across)):
+        return asked
+    cx = [x0 + s for s in _grid(_seams(down, x1 - x0), x1 - x0)]
+    cy = [y0 + s for s in _grid(_seams(across, y1 - y0), y1 - y0)]
+    # the most pictures whose pieces are still shaped like pictures; one picture last of all
+    for gx, gy in ((cx, cy), (cx, []), ([], cy), ([], [])):
+        xs, ys = [x0, *gx, x1], [y0, *gy, y1]
+        if _shaped_like_pictures(xs, ys):
+            break
+    return _cells(g, xs, ys)
+
+
+def detect_tiles(frames: Sequence[Image], expect: int = 0) -> list[Tile]:
+    return detect_tiles_in(median_image(frames), expect)
