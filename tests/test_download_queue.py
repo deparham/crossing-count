@@ -300,3 +300,44 @@ def test_a_both_ways_validation_picks_its_window_on_both(stubs: dict[str, Any],
         "codes": ["JB-401"], "date": "2026-09-19", "direction": "out"})
     assert asked == ["out"]  # and with nothing else said, the direction given stands
     _settled(client)
+
+
+def test_footage_that_came_back_short_is_called_out(stubs: dict[str, Any],
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """RetailNext sometimes returns less than the window asked for. Hearing it at the download
+    is worth a great deal more than finding out after a count has been made on it."""
+    from types import SimpleNamespace
+
+    from crossing_count import video as vid
+
+    seen: dict[str, float] = {}
+
+    def timebase(path: Any) -> Any:
+        return SimpleNamespace(duration_s=seen.get("duration", 900.0))
+
+    monkeypatch.setattr(vid, "audit_timebase", timebase)
+    client = stubs["client"]
+
+    seen["duration"] = 898.0  # a second or two under, on a key frame: nothing to say
+    client.post("/api/retailnext/queue", json={"codes": ["CN-123"], "date": "2026-09-19"})
+    assert _settled(client)["items"][0]["warning"] == ""
+
+    seen["duration"] = 310.0  # five minutes of the fifteen asked for
+    client.post("/api/retailnext/queue", json={"codes": ["JB-401"], "date": "2026-09-19"})
+    said = next(i for i in _settled(client)["items"] if i["code"] == "JB-401")
+    assert "returned less footage" in said["warning"] and "5.2 min of the 15" in said["warning"]
+    assert said["state"] == "ready"  # it is still there to look at, and still counted as down
+
+
+def test_unreadable_footage_is_not_this_check_s_business(stubs: dict[str, Any],
+                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    from crossing_count import video as vid
+
+    def broken(path: Any) -> Any:
+        raise OSError("not a video")
+
+    monkeypatch.setattr(vid, "audit_timebase", broken)
+    client = stubs["client"]
+    client.post("/api/retailnext/queue", json={"codes": ["CN-123"], "date": "2026-09-19"})
+    done = _settled(client)["items"][0]
+    assert done["state"] == "ready" and done["warning"] == ""

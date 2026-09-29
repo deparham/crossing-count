@@ -43,6 +43,7 @@ from . import (
 )
 from . import overlay as ov
 from . import retailnext as rn
+from . import video as vid
 from .examples import check_folder
 from .localweb import WEB_DIR, local_only, video_range
 from .util import default_run_dir
@@ -75,6 +76,11 @@ class RunIn(BaseModel):
     confirm: bool = False  # run a count that was already checked (the check is kept)
 
 
+# How far a downloaded video may fall short of the window asked for before it is worth
+# saying. Exports land a second or two under, on a key frame: one measured 897.5s against the
+# 900 asked for. Minutes short is a different thing, and someone should hear it before they
+# count it rather than after.
+FOOTAGE_SLACK_S = 20.0
 EXPORT_POLL_S = 5.0  # how often to ask RetailNext whether an export is ready
 EXPORT_WAIT_S = 1800.0  # and for how long, before giving up
 CALIBRATE_S = 60.0  # how much of the window to export again with marks, to draw the line on
@@ -735,6 +741,29 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                 "windows": plan["chosen"], "considered": len(plan["candidates"]),
                 "sampling": {k: v for k, v in plan.items() if k not in ("candidates", "chosen")}}
 
+    def _as_long_as_asked(dests: list[Path], want_s: float) -> str:
+        """Whether the footage that came down covers the window that was asked for.
+
+        Only its length can be checked from here. The file carries no note of the period it
+        shows - the exports arrive with nothing but the encoder's own tags - so footage of the
+        right length from the wrong quarter of an hour still reads as right, and the clock
+        burned into the picture remains the only thing that would say otherwise. What this
+        catches is the export that came back short, which is worth hearing before a count is
+        made on it rather than after.
+        """
+        short = []
+        for p in dests:
+            try:
+                got = float(vid.audit_timebase(p).duration_s)
+            except (OSError, ValueError, FFmpegError):
+                continue  # unreadable footage is the counting page's to complain about
+            if want_s - got > FOOTAGE_SLACK_S:
+                short.append(f"{p.name} runs {got / 60:.1f} min of the {want_s / 60:.0f} asked "
+                             f"for")
+        return ("RetailNext returned less footage than the window: "
+                + "; ".join(short) + ". Count it only if the part you need is in it.") if short \
+            else ""
+
     def _fetch(item: dict[str, Any]) -> None:
         """Export one window from RetailNext and download it. Raises RetailNextError or OSError.
 
@@ -794,7 +823,8 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                                          "twin": twin})
         item.update(state="ready", message="Downloaded.",
                     path=str(dests[-1 if item["marks"] else 0]),
-                    paths=[str(p) for p in dests])
+                    paths=[str(p) for p in dests],
+                    warning=_as_long_as_asked(dests, (end_at - start_at).total_seconds()))
 
     def _drain(mine: _Current) -> None:
         """Work through one person's queue in order, one window at a time.

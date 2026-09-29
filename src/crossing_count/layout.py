@@ -39,7 +39,13 @@ BLACK_LEVEL = 8.0  # mean grey level at or below which a row/column is letterbox
 HEADER_MAX = 100.0
 HEADER_LOOK = 12  # rows below a candidate boundary that must all be picture, not more bar
 HEADER_RISE = 1.5  # how much brighter than the bar every one of them has to be
-GRID_MAX = 4  # the most camera pictures one export holds
+GRID_MAX = 4  # the most camera pictures to find in an export by reading the picture alone
+# When the channels say how many there are, that guard is not needed and gets in the way:
+# CN-323 and YD-407 have five cameras each, and four was the most anything here could split
+# into. Guessing five pictures out of the pixels is still refused (GRID_MAX); being told
+# five is not a guess.
+TOLD_MAX = 6  # the most pictures to cut into when the count is known
+TOLD_SPARE = 2  # empty slots a grid may carry: five cameras sit in a 3x2 with one to spare
 GRID_SLACK = 0.01  # a seam this far from an even division of the picture is still that one
 # A camera picture is roughly as tall as it is wide: every one on hand is 4:3 or 1.2:1.
 # Anything far outside that is not a picture but a piece of one.
@@ -223,9 +229,10 @@ def _as_many_as_asked(g: NDArray[np.float64], box: tuple[int, int, int, int], ex
     """
     x0, y0, x1, y1 = box
     best: tuple[float, list[Tile]] | None = None
-    for cols in range(1, GRID_MAX + 1):
-        for rows in range(1, GRID_MAX + 1):
-            if not expect <= cols * rows <= GRID_MAX:  # a slot may be empty, none may be lost
+    for cols in range(1, TOLD_MAX + 1):
+        for rows in range(1, TOLD_MAX + 1):
+            # room for every camera, and no more empty slots than a grid really carries
+            if not expect <= cols * rows <= expect + TOLD_SPARE:
                 continue
             gx, gy = _even(x1 - x0, cols), _even(y1 - y0, rows)
             tiles = _cells(g, [x0, *[x0 + c for c in gx], x1], [y0, *[y0 + c for c in gy], y1])

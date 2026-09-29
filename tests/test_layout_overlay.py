@@ -207,8 +207,30 @@ def test_three_cameras_side_by_side() -> None:
     assert [(t.x0, t.x1) for t in tiles] == [(0, 400), (400, 800), (800, 1200)]
 
 
+def test_five_cameras_in_a_grid_with_a_slot_to_spare() -> None:
+    """CN-323 and YD-407 have five cameras each. Four was the most anything here could split
+    into, so their exports came out as four pictures or one."""
+    row = [texture(240, 320, seed=s, mean=m) for s, m in ((51, 80), (52, 170), (53, 60))]
+    second = [texture(240, 320, seed=s, mean=m) for s, m in ((54, 190), (55, 100))]
+    second.append(np.zeros((240, 320, 3), dtype=np.uint8))  # the sixth slot, empty
+    frame = _joined([_joined(row), _joined(second)], across=False)
+    assert frame.shape == (480, 960, 3)
+
+    tiles = lay.detect_tiles_in(frame, expect=5)
+    assert len(tiles) == 5, [(t.x0, t.y0, t.x1, t.y1) for t in tiles]
+    assert [(t.x0, t.y0) for t in tiles] == [(0, 0), (320, 0), (640, 0), (0, 240), (320, 240)]
+
+
+def test_reading_the_pixels_alone_still_refuses_to_find_five() -> None:
+    """Being told five is not a guess; guessing five out of the pixels is still refused, which
+    is what keeps one camera's picture from being cut into pieces."""
+    row = _joined([texture(480, 256, seed=s, mean=m)
+                   for s, m in ((61, 60), (62, 180), (63, 70), (64, 200), (65, 90))])
+    assert len(lay.detect_tiles_in(row)) <= lay.GRID_MAX
+
+
 def test_a_count_that_cannot_be_made_falls_back_to_reading_the_pixels() -> None:
     """Never worse than before: if nothing divides into that many, the old way still answers."""
-    tiles = lay.detect_tiles_in(two_tile_frame(), expect=5)  # more than GRID_MAX
+    tiles = lay.detect_tiles_in(two_tile_frame(), expect=99)
     assert [(t.x0, t.x1) for t in tiles] == [(0, 640), (640, 1280)]
     assert lay.detect_tiles_in(two_tile_frame(), expect=0) == lay.detect_tiles_in(two_tile_frame())

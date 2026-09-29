@@ -849,11 +849,11 @@ async function renderQueue(open = false) {
     const pct = i.total ? ` ${Math.round(100 * i.done / i.total)}%` : "";
     const what = i.counted ? "counted"
       : i.state === "downloading" ? `downloading${pct}` : QSTATE[i.state] || i.state;
-    const cls = i.state === "ready" ? "ok" : i.state === "failed" ? "err" : "muted";
+    const cls = i.warning ? "warn" : i.state === "ready" ? "ok" : i.state === "failed" ? "err" : "muted";
     const act = i.state === "ready"
       ? `<button data-open="${esc(i.id)}">${i.counted ? "Open again" : "Count this one"}</button>` : "";
     const drop = `<button data-forget="${esc(i.id)}" title="Take it out of the list">×</button>`;
-    return `<tr><td>${esc(i.label)}</td><td class="${cls}">${esc(what)}${i.state === "failed" ? `: ${esc(i.message)}` : ""}</td><td style="white-space:nowrap">${act} ${drop}</td></tr>`;
+    return `<tr><td>${esc(i.label)}${i.warning ? `<div class="warn" style="font-size:12px;overflow-wrap:anywhere">${esc(i.warning)}</div>` : ""}</td><td class="${cls}">${esc(what)}${i.state === "failed" ? `: ${esc(i.message)}` : ""}</td><td style="white-space:nowrap">${act} ${drop}</td></tr>`;
   };
   const counted = q.items.filter((i) => i.counted).length;
   const waiting = q.ready.filter((i) => !i.counted).length;
