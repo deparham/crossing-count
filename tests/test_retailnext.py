@@ -216,6 +216,88 @@ def test_a_store_is_found_in_whichever_subscription_has_it() -> None:
         rn.find_store_in({"rag": NODES, "gazman": gazman}, "ZZ-404")
 
 
+def _store(uuid: str, name: str, **more: Any) -> dict[str, Any]:
+    return {"uuid": uuid, "location_type": "store", "store_id": "", "name": name,
+            "time_zone": "Australia/Perth", "parent_uuid": "r0", "archive_date": None, **more}
+
+
+PERDAMAN: list[dict[str, Any]] = [  # a brand whose stores RetailNext gives no store id ("")
+    {"uuid": "r0", "location_type": "region", "name": "Perdaman"},
+    _store("p1", "Northam Blvd"),
+    _store("p2", "Coogee Shopping Centre"),
+    _store("p3", "Margaret River"),
+    _store("p4", "Margaret River Central"),
+    _store("p5", "Northam Blvd", archive_date="2024-03-01T00:00:00Z"),  # closed, then reopened
+    _store("p6", "Carousel / Cannington"),
+    {"uuid": "ep1", "location_type": "entrance", "parent_uuid": "p1", "name": "SpecSavers Entrance"},
+    {"uuid": "vp1", "type": "video", "parent_uuid": "ep1", "name": "SpecSavers Entrance"},
+    {"uuid": "ep2", "location_type": "entrance", "parent_uuid": "p2", "name": "SpecSavers Entrance"},
+    {"uuid": "vp2", "type": "video", "parent_uuid": "ep2", "name": "SpecSavers Entrance"},
+]
+
+
+def test_a_store_without_a_store_id_is_found_by_its_uuid_or_its_whole_name() -> None:
+    """Perdaman's stores have no store id in RetailNext, so their name is their code. A whole
+    name is never taken for a longer one, and a store RetailNext archived never stands in the
+    way of the open one of the same name."""
+    def found(code: str, nodes: list[dict[str, Any]] = PERDAMAN) -> str:
+        return str(rn.find_store(nodes, code)["uuid"])
+
+    assert found("p1") == found("P1") == "p1"
+    assert found(" northam  BLVD ") == "p1"  # not the archived Northam Blvd
+    assert found("Margaret River") == "p3"  # not Margaret River Central
+    assert (found("Central"), found("Coogee"), found("Carousel / Cannington")) == ("p4", "p2", "p6")
+    with pytest.raises(rn.RetailNextError, match="2 store.*Margaret River, Margaret River Central"):
+        found("River")
+    with pytest.raises(rn.RetailNextError, match="no store"):
+        found("")
+    assert found("Northam Blvd", [PERDAMAN[5]]) == "p5"  # an archived store alone is still found
+    twin = {**NODES[0], "uuid": "s0", "archive_date": "2024-03-01T00:00:00Z"}
+    assert found("CN-123", [twin, *NODES]) == "s1"
+
+
+def test_only_a_connected_brand_before_the_first_slash_counts_as_one() -> None:
+    """A store's name can hold a "/" of its own ("Carousel / Cannington")."""
+    plaza = {"uuid": "s7", "location_type": "store", "store_id": "CN-777", "name": "Northam Blvd Plaza"}
+    sets = {"perdaman": PERDAMAN, "rag": [*NODES, plaza]}
+
+    def found(code: str) -> tuple[str, str]:
+        sub, store = rn.find_store_in(sets, code)
+        return sub, str(store["uuid"])
+
+    assert found("perdaman/Carousel / Cannington") == found("Carousel / Cannington") == (
+        "perdaman", "p6")
+    assert found("Perdaman/Northam Blvd") == found("perdaman/p1") == ("perdaman", "p1")
+    assert found("rag/CN-777") == ("rag", "s7")
+    with pytest.raises(rn.RetailNextError, match="perdaman/Northam Blvd"):
+        found("Northam Blvd")  # a whole name in one brand, part of a name in the other: say which
+    with pytest.raises(rn.RetailNextError, match="None of the connected"):
+        found("gazman/CN-123")  # a brand not connected is never looked for in another
+
+
+def test_footage_of_a_store_without_a_store_id(credentials: dict[tuple[str, str], str],
+                                               tmp_path: Path) -> None:
+    assert rn.store_code({"store_id": "", "name": " Northam  Blvd "}) == "Northam Blvd"
+    assert rn.store_code(NODES[0]) == "CN-123"
+    assert rn.store_code({"store_id": "", "name": "", "uuid": "u9"}) == "u9"
+    summary = rn.store_summary("perdaman", PERDAMAN, PERDAMAN[1])
+    assert (summary["code"], summary["store_id"], summary["store_uuid"], summary["cameras"]) == (
+        "Northam Blvd", "", "p1", ["SpecSavers Entrance"])
+    assert rn.store_summary("rag", NODES, NODES[0])["store_id"] == "CN-123"
+
+    start, end = rn.local_period(date(2026, 9, 12), "11:15", "11:30", "Australia/Perth")
+    name = rn.footage_name("Carousel / Cannington", start, end, marks=True)
+    assert name.startswith("Export - Carousel Cannington marked - ")  # a name Windows will take
+    assert not rn.NOT_IN_FILE_NAMES.search(name)
+    assert rn.download_info(tmp_path / name) == {"code": "Carousel Cannington", "marks": True}
+
+    # downloaded before stores with no id were known by their name: kept with an empty code
+    old = tmp_path / "Export - NORTHAM BLVD - 2026-09-12-111500 AWST to 2026-09-12-113000 AWST.mp4"
+    rn.remember_download(old, {**{k: v for k, v in summary.items() if k != "store_id"}, "code": ""})
+    kept = rn.download_info(old)
+    assert kept is not None and (kept["code"], kept["store_id"]) == ("Northam Blvd", "")
+
+
 ARMADALE: list[dict[str, Any]] = [  # a store keeping its camera's video under the store itself
     {"uuid": "s2", "location_type": "store", "store_id": "392", "name": "392 Perri Cutten Armadale",
      "time_zone": "Australia/Hobart"},
@@ -354,7 +436,7 @@ def test_the_app_finds_the_busiest_time_and_downloads_it(monkeypatch: pytest.Mon
         time.sleep(0.05)
     assert stopped == [1]  # the app closes itself, after answering
     assert client.get("/api/retailnext/stores").json()["stores"] == [
-        {"code": "CN-123", "name": "Tweed Heads CN-123", "subscription": "acme"}]
+        {"code": "CN-123", "store_id": "CN-123", "name": "Tweed Heads CN-123", "subscription": "acme"}]
     assert [s["code"] for s in client.get(
         "/api/retailnext/stores", params={"subscription": "acme"}).json()["stores"]] == ["CN-123"]
     assert client.get("/api/retailnext/stores", params={"subscription": "other"}).status_code == 400
@@ -378,6 +460,92 @@ def test_the_app_finds_the_busiest_time_and_downloads_it(monkeypatch: pytest.Mon
     assert kept is not None and kept["sampling"]["role"] == "peak"
     assert (kept["sampling"]["window"]["start"], kept["sampling"]["seed"]) == (
         "11:15", found["sampling"]["seed"])
+
+
+def _settle(client: TestClient, path: str, done: Any) -> dict[str, Any]:
+    got: dict[str, Any] = {}
+    for _ in range(300):
+        got = client.get(path).json()
+        if done(got):
+            return got
+        time.sleep(0.02)
+    raise AssertionError(f"{path} never settled: {got}")
+
+
+def test_a_brand_whose_stores_have_no_store_id(monkeypatch: pytest.MonkeyPatch,
+                                               tmp_path: Path) -> None:
+    """Perdaman's stores have no store id in RetailNext. They were left out of the list, so
+    the brand showed no stores at all; now each is listed, found, downloaded and queued by
+    its name, and always as the very store picked."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("CROSSING_COUNT_HOME", str(home))
+    rag = [*NODES, {"uuid": "s7", "location_type": "store", "store_id": "CN-777",
+                    "name": "Northam Blvd Plaza", "time_zone": "Australia/Sydney"},
+           {"uuid": "v7", "type": "video", "parent_uuid": "s7", "name": "Plaza_Entrance"}]
+    monkeypatch.setattr(rn, "connections", lambda: [rn.Connection("perdaman", "AK", "SK"),
+                                                    rn.Connection("rag", "AK", "SK")])
+    monkeypatch.setattr(rn, "locations", lambda conn, types=None:
+                        PERDAMAN if conn.subscription == "perdaman" else rag)
+    rows = [{"start": f"11:{m:02d}", "finish": f"11:{m + 15:02d}", "in": i, "out": o,
+             "validity": "complete"} for m, i, o in ((0, 3, 2), (15, 8, 9), (30, 2, 4))]
+    monkeypatch.setattr(rn, "day_traffic", lambda conn, uuid, day, tz, minutes=15: rows)
+    exports: list[tuple[list[str], bool]] = []
+
+    def fake_start(conn: Any, channels: list[str], start: Any, end: Any, marks: bool) -> str:
+        exports.append((channels, marks))
+        return "x1"
+
+    def fake_download(url: str, dest: Path, progress: Any = None) -> Path:
+        dest.write_bytes(b"v")
+        return dest
+
+    monkeypatch.setattr(rn, "start_export", fake_start)
+    monkeypatch.setattr(rn, "export_status", lambda conn, export_id: ("ready", "https://s/f.mp4"))
+    monkeypatch.setattr(rn, "download", fake_download)
+    footage = tmp_path / "footage"
+    footage.mkdir()
+    client = TestClient(create_wizard_app(tmp_path, tmp_path / "runs", [footage]))
+
+    listed = client.get("/api/retailnext/stores", params={"subscription": "perdaman"}).json()
+    names = ["Carousel / Cannington", "Coogee Shopping Centre", "Margaret River",
+             "Margaret River Central", "Northam Blvd"]  # and not the archived Northam Blvd
+    assert [s["code"] for s in listed["stores"]] == names
+    assert all(s["store_id"] == "" and s["code"] == s["name"] for s in listed["stores"])
+    every = client.get("/api/retailnext/stores").json()["stores"]
+    assert [s["code"] for s in every] == ["CN-123", "CN-777", *names]  # those with an id first
+
+    found = client.post("/api/retailnext/busiest", json={
+        "code": "perdaman/Northam Blvd", "date": "2026-09-12", "minutes": 15,
+        "direction": "out"}).json()
+    assert (found["store"], found["code"], found["subscription"]) == (
+        "Northam Blvd", "Northam Blvd", "perdaman")
+    client.post("/api/retailnext/download", json={"code": "perdaman/Northam Blvd",
+                                                  "date": "2026-09-12", "start": "11:15",
+                                                  "until": "11:30"})
+    job = _settle(client, "/api/retailnext/download", lambda j: j["state"] in ("done", "failed"))
+    assert job["state"] == "done", job
+    assert Path(job["path"]).name == (
+        "Export - Northam Blvd - 2026-09-12-111500 AWST to 2026-09-12-113000 AWST.mp4")
+    assert exports == [(["vp1"], False)]  # Northam Blvd's own camera, never the Plaza's
+    kept = rn.download_info(Path(job["path"]))
+    assert kept is not None and kept["sampling"]["role"] == "peak"
+    assert (kept["code"], kept["store_id"], kept["subscription"], kept["store_uuid"]) == (
+        "Northam Blvd", "", "perdaman", "p1")
+
+    queued = client.post("/api/retailnext/queue", json={
+        "codes": ["perdaman/Northam Blvd", "perdaman/Coogee Shopping Centre"],
+        "date": "2026-09-13"}).json()
+    assert queued["added"] == 2 and queued["problems"] == []
+    labels = [i["label"] for i in queued["items"][1:]]
+    assert labels[0].startswith("Northam Blvd · ") and labels[1].startswith(
+        "Coogee Shopping Centre · ")  # the name once, and no brand
+    assert len({i["id"] for i in queued["items"]}) == 3
+    _settle(client, "/api/retailnext/queue", lambda q: not q["working"])
+    assert exports[1:] == [(["vp1"], False), (["vp2"], False)]  # each its own store's camera
+    assert client.post("/api/retailnext/download", json={
+        "code": "perdaman/Nowhere", "date": "2026-09-12", "start": "11:15",
+        "until": "11:30"}).status_code == 400  # refused at once, not queued to fail later
 
 
 def test_each_camera_is_asked_at_its_own_entrance(server: list[Any]) -> None:

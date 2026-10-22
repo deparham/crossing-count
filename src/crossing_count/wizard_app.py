@@ -144,7 +144,7 @@ class ConnectIn(BaseModel):
 
 
 class BusiestIn(BaseModel):
-    code: str  # the store's code, e.g. CN-123
+    code: str  # the store in its brand: rag/CN-123, or perdaman/Northam Blvd for a store with no id
     date: str  # YYYY-MM-DD
     minutes: int = 15
     direction: str = "out"  # in, out or both: the busiest for the traffic validated
@@ -160,9 +160,13 @@ class PictureIn(BaseModel):
     picture: int
 
 
-def _bare(code: str) -> str:
-    """A store code without its brand ("rag/CN-123" -> "CN-123")."""
-    return code.rpartition("/")[2].strip().upper()
+def _store_key(info: dict[str, Any], code: str) -> str:
+    """How to ask RetailNext again for downloaded footage's store: by its brand and uuid when
+    they were kept (exact, and a rename does not lose it), else by its brand and code."""
+    sub, uuid_ = str(info.get("subscription") or ""), str(info.get("store_uuid") or "")
+    if sub and uuid_:
+        return f"{sub}/{uuid_}"
+    return f"{sub}/{code}" if sub else code
 
 
 class DownloadIn(BaseModel):
@@ -564,7 +568,8 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         return conns[sub], sets[sub], store
 
     def rn_camera_count(code: str) -> int | None:
-        """How many cameras RetailNext says this store has, or None when it cannot be asked.
+        """How many cameras RetailNext says this store has (asked by code, or "brand/uuid"),
+        or None when it cannot be asked.
 
         A check on the pictures found that has nothing to do with the pictures: no wall,
         line or shadow can fool it. It is a ceiling, not an answer - an export can hold
@@ -705,7 +710,9 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
 
     @app.get("/api/retailnext/stores")
     def retailnext_stores(subscription: str | None = None) -> dict[str, Any]:
-        """One connected subscription's stores (or every one's), each with its subscription."""
+        """One connected subscription's stores (or every one's), each with its subscription.
+        A store RetailNext gives no store id is listed by its name, with store_id "", after
+        the stores that have one."""
         conns = rn_connections()
         if subscription:
             if subscription not in conns:
@@ -718,11 +725,13 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                 nodes = rn_locations(conn)
             except rn.RetailNextError as exc:
                 raise HTTPException(400, f"{sub}: {exc}") from exc
-            stores += [{"code": str(n["store_id"]), "name": str(n.get("name") or ""),
-                        "subscription": sub} for n in nodes
-                       if n.get("location_type") == "store" and n.get("store_id")
+            stores += [{"code": rn.store_code(n), "store_id": str(n.get("store_id") or "").strip(),
+                        "name": str(n.get("name") or ""), "subscription": sub} for n in nodes
+                       if n.get("location_type") == "store" and n.get("uuid")
                        and not n.get("archive_date")]
-        return {"stores": sorted(stores, key=lambda s: (s["code"], s["subscription"]))}
+        return {"stores": sorted(stores, key=lambda s: (
+            not s["store_id"], s["code"] if s["store_id"] else s["code"].lower(),
+            s["subscription"]))}
 
     @app.post("/api/retailnext/busiest")
     def retailnext_busiest(b: BusiestIn) -> dict[str, Any]:
@@ -740,8 +749,8 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                                  seed=b.seed, day=day.isoformat())
         except (rn.RetailNextError, sampling.SamplingError) as exc:
             raise HTTPException(400, str(exc)) from exc
-        me().rn_plan = {**plan, "request": [_bare(b.code), b.date]}
-        return {"store": store.get("name"), "code": store.get("store_id"),
+        me().rn_plan = {**plan, "request": [uuid_, b.date]}  # the store found, not the words typed
+        return {"store": store.get("name"), "code": rn.store_code(store),
                 "subscription": conn.subscription, "time_zone": store.get("time_zone"),
                 "windows": plan["chosen"], "considered": len(plan["candidates"]),
                 "sampling": {k: v for k, v in plan.items() if k not in ("candidates", "chosen")}}
@@ -777,7 +786,8 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         all read at the moment the work is done.
         """
         day = date.fromisoformat(item["date"])
-        conn, nodes, store = rn_store(item["code"])
+        # the very store queued, in its own brand: a name could match another store by now
+        conn, nodes, store = rn_store(f"{item['subscription']}/{item['store_uuid']}")
         tz = store.get("time_zone")
         if not tz:
             raise rn.RetailNextError(f"RetailNext gives no time zone for {store.get('name')}.")
@@ -793,8 +803,8 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         # one export, or the same window twice: the clean one to count on and to count by hand,
         # the marked one for RetailNext's own line and for watching its tracker (a pair)
         wanted = [False, True] if item["both"] else [item["marks"]]
-        dests = [rn.free_path(target, rn.footage_name(str(store.get("store_id") or item["code"]),
-                                                      start_at, end_at, m)) for m in wanted]
+        dests = [rn.free_path(target, rn.footage_name(rn.store_code(store), start_at, end_at, m))
+                 for m in wanted]
         item.update(cameras=sorted(channels), of=len(wanted),
                     store=store.get("name") or item.get("store"))
         for which, (marks, where) in enumerate(zip(wanted, dests, strict=True), start=1):
@@ -881,16 +891,20 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         return {"items": items, "working": mine.rn_working,
                 "ready": [i for i in items if i["state"] == "ready"]}
 
-    def _item(code: str, store: str, day: str, window: dict[str, Any], b: Any,
+    def _item(sub: str, store: dict[str, Any], day: str, window: dict[str, Any], b: Any,
               chosen_by: dict[str, Any] | None) -> dict[str, Any]:
         # a window's own words for its edges: retailnext.windows gives "start" and "until"
         frm, until = str(window["start"]), str(window["until"])
-        return {"id": f"{code}-{day}-{frm}".replace(":", ""), "code": _bare(code),
-                "store": store, "date": day, "start": frm, "until": until,
+        code, name = rn.store_code(store), str(store.get("name") or "")
+        # kept by brand and uuid, which the worker asks for again: the store picked is the one
+        # exported, even where two stores share a name
+        return {"id": f"{sub}/{store['uuid']}-{day}-{frm}".replace(":", ""), "code": code,
+                "subscription": sub, "store_uuid": str(store["uuid"]),
+                "store": name, "date": day, "start": frm, "until": until,
                 "marks": bool(b.marks), "both": bool(b.both), "sampling": chosen_by,
                 "count": getattr(b, "count", "auto"),
                 "direction": getattr(b, "direction_for", "") or getattr(b, "direction", ""),
-                "label": f"{code} {store} · {frm}–{until}"
+                "label": " ".join(dict.fromkeys(x for x in (code, name) if x)) + f" · {frm}–{until}"
                          + (f" · {window.get('role')}" if window.get("role") else ""),
                 "state": "waiting", "message": "Waiting for the ones before it.",
                 "done": 0, "total": None, "which": 1, "of": 2 if b.both else 1,
@@ -922,7 +936,6 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
             except (rn.RetailNextError, sampling.SamplingError) as exc:
                 problems.append(f"{code}: {exc}")
                 continue
-            name = str(store.get("name") or "")
             # the busiest window first, then the rest, and only as many as were asked for:
             # queueing a store's whole plan fills the queue faster than anyone can count it.
             # By the traffic in the window, not by what the rule called it: under the
@@ -935,8 +948,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
                                             w.get("role") != "peak", w.get("rank") or 99))
             for w in busiest[:max(1, b.per_store)]:
                 chosen_by = sampling.record(plan, w["start"], w["until"])
-                item = _item(str(store.get("store_id") or code), name, day.isoformat(), w, b,
-                             chosen_by)
+                item = _item(conn.subscription, store, day.isoformat(), w, b, chosen_by)
                 if not any(i["id"] == item["id"] for i in mine.rn_queue):
                     mine.rn_queue.append(item)
                     added.append(item)
@@ -963,9 +975,13 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         mine = me()
         if any(i["state"] in ("waiting", "exporting", "downloading") for i in mine.rn_queue):
             raise HTTPException(409, "A download is already under way.")
-        plan = (mine.rn_plan if mine.rn_plan and mine.rn_plan["request"] == [_bare(b.code), b.date]
-                else None)
-        item = _item(b.code, "", b.date, {"start": b.start, "until": b.until}, b,
+        try:  # usually answered from the locations busiest has just fetched
+            conn, _, store = rn_store(b.code)
+        except rn.RetailNextError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        plan = (mine.rn_plan if mine.rn_plan
+                and mine.rn_plan["request"] == [str(store["uuid"]), b.date] else None)
+        item = _item(conn.subscription, store, b.date, {"start": b.start, "until": b.until}, b,
                      sampling.record(plan, b.start, b.until) if plan else None)
         mine.rn_queue = [i for i in mine.rn_queue if i["id"] != item["id"]]
         mine.rn_queue.append(item)
@@ -987,10 +1003,10 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
             raise HTTPException(400, "The video's name has no clock time, so RetailNext's "
                                      "numbers cannot be looked up.")
         code = w.state["store"]["code"]
-        sub = (w.state.get("retailnext") or {}).get("subscription")  # the footage's own brand
+        kept = w.state.get("retailnext") or {}  # the footage's own brand and store
         try:
-            conn, nodes, store = rn_store(f"{sub}/{code}" if sub else code)
-            adapter = sensors.RetailNextAdapter(conn, nodes, str(store.get("store_id") or code))
+            conn, nodes, store = rn_store(_store_key(kept, code))
+            adapter = sensors.RetailNextAdapter(conn, nodes, str(store["uuid"]))
             data = adapter.fetch([c["sensor"] for c in w.state["cameras"]], start, end)
         except rn.RetailNextError as exc:
             raise HTTPException(400, str(exc)) from exc
@@ -1026,7 +1042,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         info = w.state.get("retailnext") or {}
         code = str(info.get("code") or w.state["store"].get("code")
                    or (rn.download_info(w.video) or {}).get("code") or "")
-        have = rn_camera_count(code)
+        have = rn_camera_count(_store_key(info, code) if code else "")
         many = f"More pictures than cameras: {len(s.tiles)} were found in this video, but " \
                f"RetailNext says {code} has {have}. One camera's picture may have been cut " \
                f"in two. Count only the pictures that are whole cameras." \
@@ -1329,7 +1345,7 @@ def create_wizard_app(sites_dir: Path | None = None, runs_root: Path | None = No
         if mine.rn_job and mine.rn_job.get("state") in ("exporting", "downloading"):
             raise HTTPException(409, "A download is already under way.")
         try:
-            conn, nodes, store = rn_store(f"{info['subscription']}/{info['code']}")
+            conn, nodes, store = rn_store(_store_key(info, str(info["code"])))
             channels = rn.video_channels(nodes, str(store["uuid"]))
             if not channels:
                 raise rn.RetailNextError(f"RetailNext has no camera video for "

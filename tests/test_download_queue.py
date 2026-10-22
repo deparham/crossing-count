@@ -43,10 +43,17 @@ def stubs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     monkeypatch.setattr(rn, "connections", lambda: [rn.Connection("acme", "A", "S")])
     monkeypatch.setattr(rn, "locations", lambda conn: [])
-    # the store's uuid is its code, so the stubs below can tell the stores apart
-    monkeypatch.setattr(rn, "find_store_in", lambda sets, code: ("acme", {
-        "uuid": code.upper(), "store_id": code.upper(), "name": f"{code.upper()} store",
-        "time_zone": "Australia/Sydney"}))
+    # the store's uuid is its code, so the stubs below can tell the stores apart. The worker
+    # asks again by brand and uuid ("acme/CN-123"); each lookup is kept for checking
+    state["asked"] = []
+
+    def find_store_in(sets: Any, code: str) -> tuple[str, dict[str, Any]]:
+        state["asked"].append(code)
+        bare = (code.partition("/")[2] or code).upper()
+        return "acme", {"uuid": bare, "store_id": bare, "name": f"{bare} store",
+                        "time_zone": "Australia/Sydney"}
+
+    monkeypatch.setattr(rn, "find_store_in", find_store_in)
     monkeypatch.setattr(rn, "day_traffic", lambda conn, uuid, day, tz=None: [uuid])
     monkeypatch.setattr(rn, "windows", lambda rows, minutes, direction: rows)
     monkeypatch.setattr(sampling, "plan", lambda windows, **kw: {
@@ -112,6 +119,17 @@ def test_one_window_a_store_the_busiest_one(stubs: dict[str, Any]) -> None:
     assert [i["state"] for i in done["items"]] == ["ready"] * 3
     assert stubs["exported"] == ["CN-123@10:45", "JB-401@11:15", "RW-409@13:15"]
     assert all(Path(i["path"]).is_file() for i in done["items"])
+
+
+def test_the_worker_asks_for_the_very_store_it_queued(stubs: dict[str, Any]) -> None:
+    """Queued by whatever the page sent, fetched by brand and uuid: a store known only by its
+    name (RetailNext gives it no store id) cannot turn into another by the time its turn comes."""
+    client = stubs["client"]
+    client.post("/api/retailnext/queue", json={"codes": ["CN-123"], "date": "2026-09-19"})
+    (item,) = _settled(client)["items"]
+    assert stubs["asked"] == ["CN-123", "acme/CN-123"]
+    assert (item["subscription"], item["store_uuid"], item["code"]) == ("acme", "CN-123", "CN-123")
+    assert item["id"].startswith("acme/CN-123-")
 
 
 def test_more_than_one_a_store_only_when_it_is_asked_for(stubs: dict[str, Any]) -> None:

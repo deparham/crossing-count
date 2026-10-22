@@ -81,18 +81,35 @@ def folder_name(brand: str, store: str, code: str) -> str:
     """"Connor Tweed Heads - CN-123": the brand, where the store is, and its code.
 
     Read by people on a shared drive, so it keeps its capitals and spaces; only what a file
-    system will not take is replaced.
+    system will not take is replaced. A store known by its name, because RetailNext gives it
+    no store id, is not named twice ("Perdaman Northam Blvd").
     """
     words = " ".join(w for w in (brand, str(store).strip()) if w)
-    return NOT_IN_NAMES.sub("-", f"{words} - {str(code).strip()}").strip(" .")
+    same = " ".join(str(code).casefold().split()) == " ".join(str(store).casefold().split())
+    tail = "" if same else f" - {str(code).strip()}"
+    return NOT_IN_NAMES.sub("-", f"{words}{tail}").strip(" .")
 
 
 def destination(root: Path, store: dict[str, Any]) -> tuple[Path, str, bool]:
-    """Where this validation belongs, its brand, and whether the brand's folder is there."""
+    """Where this validation belongs, its brand, and whether the brand's folder is there.
+
+    A store RetailNext gives no store id comes with its RetailNext brand ("subscription"),
+    since its code cannot say it: it is filed in a folder already there for that brand, and
+    never in a new one made from a subscription name nobody chose as a folder.
+    """
     code = str(store.get("code") or "").strip()
     if not code:
         raise DeliveryError("The store code is empty, so there is no brand to file this under.")
     brand = brand_of(code)
+    sub = str(store.get("subscription") or "").strip()
+    if brand is None and sub:
+        there = brand_folder(root, sub)
+        if not there.is_dir():
+            raise DeliveryError(
+                f"{code} has no store ID in RetailNext, so nothing says which brand folder it "
+                f"goes in, and {root} has no folder for {sub}. Make that folder there first, "
+                f"or file this validation by hand.")
+        brand = there.name
     if brand is None:
         raise DeliveryError(
             f"{code} does not say which brand it is. Add its prefix on the Report page "

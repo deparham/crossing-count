@@ -62,6 +62,34 @@ def test_footage_from_retailnext_takes_its_store_and_cameras(manual: Wizard) -> 
     assert manual.use_download({"code": "392", "cameras": ["Armadale_Entrance"]}) == []
 
 
+def test_footage_of_a_store_without_a_store_id_keeps_its_store(manual: Wizard) -> None:
+    """Perdaman's stores have no store id in RetailNext: the name is the code, and the footage
+    still brings its brand, cameras and sampling with it."""
+    manual.use_download({"subscription": "perdaman", "code": "Northam Blvd", "store_id": "",
+                         "name": "Northam Blvd", "store_uuid": "p1",
+                         "cameras": ["SpecSavers Entrance", "Back"], "sampling": {"role": "peak"}})
+    store = manual.state["store"]
+    assert (store["code"], store["name"]) == ("Northam Blvd", "Northam Blvd")
+    assert manual.state["retailnext"]["store_uuid"] == "p1"
+    assert manual.state["sampling"]["role"] == "peak"
+    # its code says no brand, so delivery is told the RetailNext brand; a store with an id is not
+    assert manual._delivered_store()["subscription"] == "perdaman"
+    manual.use_download({"subscription": "gazman", "code": "392", "store_id": "392",
+                         "name": "392 Perri Cutten Armadale", "cameras": ["Armadale_Entrance"]})
+    assert manual._delivered_store()["subscription"] == ""
+
+
+def test_a_store_known_by_its_name_is_not_named_twice_in_the_report(manual: Wizard) -> None:
+    manual.manual_add("CN-9-PB1", 21.0, "in")
+    manual.manual_watched("CN-9-PB1", 0.0, 60.0)
+    manual.manual_done()
+    manual.set_sensor({"in": 1})
+    manual.set_store(name="Northam Blvd", code="Northam Blvd", operator="Pat")
+    assert manual.make_report().name.startswith("Northam Blvd camera validation")
+    kept = json.loads(Path(manual.state["report"]["data"]).read_text())["data"]
+    assert (kept["store_name"], kept["store_code"]) == ("Northam Blvd", "")
+
+
 def test_only_the_footages_own_store_drawings_are_offered(two_tile_video: dict[str, Any]) -> None:
     s = Setup(two_tile_video["video"], two_tile_video["dir"])
     assert {c["site"] for c in s.existing()} == {"SYN"}

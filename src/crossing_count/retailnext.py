@@ -503,10 +503,25 @@ def export_status(conn: Connection, export_id: str) -> tuple[str, str]:
 _DOWNLOAD_NAME = re.compile(r"^Export - (?P<code>.+?)(?P<marks> marked)? - \d{4}-\d{2}-\d{2}-\d{6}\b")
 
 
+def _squash(text: Any) -> str:
+    """Lower case, with runs of spaces as one: how a typed code or name is compared."""
+    return " ".join(str(text or "").lower().split())
+
+
+def store_code(store: dict[str, Any]) -> str:
+    """What people call a store: RetailNext's store id (CN-123), or, for a store RetailNext
+    gives none (Perdaman's are all ""), its name as RetailNext spells it. A store already
+    found is asked for again by its brand and uuid, never by this."""
+    return (str(store.get("store_id") or "").strip()
+            or " ".join(str(store.get("name") or "").split()) or str(store.get("uuid") or ""))
+
+
 def store_summary(subscription: str, nodes: list[dict[str, Any]], store: dict[str, Any]
                   ) -> dict[str, Any]:
-    """What footage of this store is: brand, store and its cameras in export order."""
-    return {"subscription": subscription, "code": str(store.get("store_id") or ""),
+    """What footage of this store is: brand, store and its cameras in export order. Its
+    store_id is "" when RetailNext gives it none, and its code is then its name."""
+    return {"subscription": subscription, "code": store_code(store),
+            "store_id": str(store.get("store_id") or "").strip(),
             "name": str(store.get("name") or ""), "store_uuid": str(store["uuid"]),
             "time_zone": store.get("time_zone"),
             "cameras": list(video_channels(nodes, str(store["uuid"])))}
@@ -538,7 +553,11 @@ def download_info(video: Path) -> dict[str, Any] | None:
     except (OSError, ValueError):
         data = {}
     if isinstance(data, dict) and isinstance(data.get(video.name), dict):
-        return dict(data[video.name])
+        kept = dict(data[video.name])
+        if not kept.get("code") and kept.get("name"):  # a store with no store id, kept before
+            # its code was left empty then; its name is its code now (store_code)
+            kept.update(code=" ".join(str(kept["name"]).split()), store_id="")
+        return kept
     m = _DOWNLOAD_NAME.match(video.name)
     if not m or m["code"].strip().lower() == "multiple channels":
         return None
@@ -550,7 +569,10 @@ NOT_IN_FILE_NAMES = re.compile(r'[<>:"/\\|?*]')  # characters Windows refuses in
 
 def footage_name(code: str, start: datetime, end: datetime, marks: bool) -> str:
     """Named like RetailNext's own exports, so the store and the clock are read from it:
-    "Export - CN-123 - 2026-09-12-113000 AEST to 2026-09-12-114500 AEST.mp4"."""
+    "Export - CN-123 - 2026-09-12-113000 AEST to 2026-09-12-114500 AEST.mp4". A store known
+    by its name loses what Windows forbids ("Carousel / Cannington" -> "Carousel Cannington")."""
+    code = " ".join(NOT_IN_FILE_NAMES.sub(" ", code).split())
+
     def at(t: datetime) -> str:  # a zone without a name ("UTC+10:00") loses what Windows forbids
         return f"{t:%Y-%m-%d-%H%M%S} {NOT_IN_FILE_NAMES.sub('', t.tzname() or '')}".strip()
 
@@ -633,11 +655,17 @@ def traffic_table(answer: Any) -> list[dict[str, Any]]:
 
 
 def find_store(nodes: list[dict[str, Any]], code: str) -> dict[str, Any]:
-    """The store with this code: RetailNext's store id (e.g. CN-123), else its name."""
-    c = code.strip().lower()
+    """The store with this code: RetailNext's store id (e.g. CN-123) or its uuid, else its
+    whole name, else part of its name. Some stores have no store id at all, so their name is
+    their code ("Margaret River" is not "Margaret River Central"). A store still open comes
+    before one RetailNext has archived, which the store list never shows."""
+    c = _squash(code)
     stores = [n for n in nodes if n.get("location_type") == "store"]
-    hits = [n for n in stores if c and str(n.get("store_id") or "").lower() == c]
-    hits = hits or [n for n in stores if c and c in str(n.get("name", "")).lower()]
+    by_id = [n for n in stores if c in (_squash(n.get("store_id")), _squash(n.get("uuid")))]
+    whole = [n for n in stores if _squash(n.get("name")) == c]
+    part = [n for n in stores if c in _squash(n.get("name"))]
+    hits = next((h for h in (by_id, whole, part) if h), []) if c else []
+    hits = [n for n in hits if not n.get("archive_date")] or hits
     if len(hits) != 1:
         found = ", ".join(str(n.get("name")) for n in hits[:5])
         raise RetailNextError(f"RetailNext has {len(hits) or 'no'} store(s) with the code "
@@ -647,8 +675,12 @@ def find_store(nodes: list[dict[str, Any]], code: str) -> dict[str, Any]:
 
 def find_store_in(sets: dict[str, list[dict[str, Any]]], code: str) -> tuple[str, dict[str, Any]]:
     """(subscription, store) for a store code, in whichever connected subscription has it.
-    "rag/CN-123" says which, for a code two customers share."""
-    hint, _, bare = code.strip().rpartition("/")
+    "rag/CN-123" says which, for a code two customers share. Only a connected brand before
+    the first "/" counts as one, because a store's name can hold a "/" of its own; any other
+    text before it is part of the code, and is never looked up in another brand."""
+    head, slash, rest = code.strip().partition("/")
+    hint = next((s for s in sets if slash and s.lower() == head.strip().lower()), "")
+    bare = rest.strip() if hint else code.strip()
     hits: list[tuple[str, dict[str, Any]]] = []
     errors: list[RetailNextError] = []
     for sub, nodes in sets.items():

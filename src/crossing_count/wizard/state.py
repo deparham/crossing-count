@@ -109,6 +109,11 @@ def _dur(seconds: float) -> str:
     return f"{s // 60} min {s % 60} s" if s >= 60 else f"{s} s"
 
 
+def _same_words(a: str, b: str) -> bool:
+    """A store's code that is its name (RetailNext gives it no store id), case and spaces aside."""
+    return " ".join(str(a).casefold().split()) == " ".join(str(b).casefold().split())
+
+
 # ---- the count ---------------------------------------------------------------------------
 
 P = ParamSpec("P")
@@ -460,8 +465,11 @@ class Wizard:
                     notes.append(f"This footage is RetailNext's store {code}, not {store['code']}.")
                 store["code"] = code
                 # RetailNext's names carry the code ("392 Perri Cutten Armadale"): the report
-                # shows it beside the name already
-                store["name"] = (" ".join(full.replace(code, " ").split())
+                # shows it beside the name already. A store RetailNext gives no store id is
+                # known by its name, which is not taken out of itself.
+                no_id = "store_id" in info and not info["store_id"]
+                store["name"] = (" ".join(full.split()) if no_id
+                                 else " ".join(full.replace(code, " ").split())
                                  or self._stores().get(code, ""))
             names = [str(n) for n in info.get("cameras") or []]
             for cam in list(self.state["cameras"]):
@@ -646,8 +654,17 @@ class Wizard:
         if not host or not self.state["store"].get("code"):
             return None
         with contextlib.suppress(delivery.DeliveryError):
-            return delivery.online_where(root, self.state["store"], host)
+            return delivery.online_where(root, self._delivered_store(), host)
         return None
+
+    def _delivered_store(self) -> dict[str, Any]:
+        """The store as delivery files it. A store RetailNext gives no store id has a code
+        that cannot say its brand, so the RetailNext brand its footage came from goes with it;
+        any other store's brand still comes from its code alone."""
+        kept = self.state.get("retailnext") or {}
+        no_id = "store_id" in kept and not kept["store_id"]
+        return {**self.state["store"],
+                "subscription": str(kept.get("subscription") or "") if no_id else ""}
 
     def delivery_plan(self, root: Path | None, footage: bool) -> dict[str, Any] | None:
         """Where this validation would be delivered and what would go with it, to be agreed
@@ -661,7 +678,7 @@ class Wizard:
             place = self.delivery_online(root)
             if place is not None:
                 return delivery.online_plan(place, report, self.video if footage else None)
-            return delivery.plan(root, self.state["store"], report,
+            return delivery.plan(root, self._delivered_store(), report,
                                  self.video if footage else None)
         except (delivery.DeliveryError, graph.GraphError) as exc:
             return {"problem": str(exc)}
@@ -678,7 +695,7 @@ class Wizard:
                     got = delivery.online_deliver(place, report,
                                                   self.video if footage else None)
                 else:
-                    got = delivery.deliver(root, self.state["store"], report,
+                    got = delivery.deliver(root, self._delivered_store(), report,
                                            self.video if footage else None)
             except (delivery.DeliveryError, graph.GraphError) as exc:
                 raise WizardError(str(exc)) from exc
@@ -2233,7 +2250,9 @@ class Wizard:
             "frames_title": ("VALIDATION FRAMES — BUSIEST MOMENT"
                              if self.manual() or self.total_only()
                              else "VALIDATION FRAMES — AUTOMATED DETECTION OVERLAY"),
-            "store_name": store["name"], "store_code": store["code"],
+            # a store known by its name (RetailNext gives it no store id) is not named twice
+            "store_name": store["name"],
+            "store_code": "" if _same_words(store["code"], store["name"]) else store["code"],
             "location": store["location"] or "Entrance",
             "report_date": store["report_date"] or datetime.now().astimezone().strftime("%d/%m/%Y"),
             "captured_date": start.strftime("%d/%m/%Y") if start else "",
@@ -2297,7 +2316,9 @@ class Wizard:
             data = self.report_data(c, rows, frame, caption, thumbs, self.unsure_rows())
             start, end = self._period()
             when = f"{start:%Y-%m-%d %H%M}-{end:%H%M}" if start and end else "report"
-            words = f"{store['code']} {store['name']} camera validation {when}"
+            who = (store["name"] if _same_words(store["code"], store["name"])
+                   else f"{store['code']} {store['name']}")
+            words = f"{who} camera validation {when}"
             out = self.dir / (re.sub(r"[^A-Za-z0-9 ._-]+", "-", words).strip() + ".pptx")
             build_report(data, out, logo)
             pdf = build_pdf(data, out.with_suffix(".pdf"), logo)

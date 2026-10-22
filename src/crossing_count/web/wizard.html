@@ -790,8 +790,10 @@ async function rnBrand() {  // a connected brand: its stores; one not connected 
 async function rnStoresFor(sub) {  // only the chosen brand's stores
   W.rnStores = W.rnStores || {};
   try {
-    if (!W.rnStores[sub]) W.rnStores[sub] = (await api(`/api/retailnext/stores?subscription=${encodeURIComponent(sub)}`)).stores;
-    $("rnStores").innerHTML = W.rnStores[sub].map((s) => `<option value="${esc(s.code)}">${esc(s.name)}</option>`).join("");
+    // asked again while it has none: RetailNext may have been put right since
+    if (!(W.rnStores[sub] || []).length) W.rnStores[sub] = (await api(`/api/retailnext/stores?subscription=${encodeURIComponent(sub)}`)).stores;
+    // a store RetailNext gives no store ID is picked by its name
+    $("rnStores").innerHTML = W.rnStores[sub].map((s) => `<option value="${esc(s.code)}">${esc(s.store_id ? s.name : "no store ID in RetailNext")}</option>`).join("");
     renderPicks();
   } catch (e) { msg(e.message, "err"); }
 }
@@ -811,7 +813,8 @@ async function rnConnect() {
 }
 $("rnConnect").addEventListener("click", rnConnect);
 $("rnSecret").addEventListener("keydown", (e) => { if (e.key === "Enter") rnConnect(); });
-const rnCode = (code) => (code.includes("/") ? code : `${rnSubName($("rnSub").value)}/${code}`);  // in the chosen brand
+// in the chosen brand, unless the text already names a connected one: a store's name can hold a "/" of its own
+const rnCode = (code) => (W.rnSubs.some((s) => code.toLowerCase().startsWith(`${s.toLowerCase()}/`)) ? code : `${rnSubName($("rnSub").value)}/${code}`);
 const RN_MODE = { peak: "the busiest windows and a control window of lower traffic", stratified: "a window from each traffic level", random: "windows drawn at random from the trading hours" };
 const rnRole = (w) => (w.role === "peak" ? (w.rank > 1 ? `${w.rank}${["st", "nd", "rd"][w.rank - 1] || "th"} busiest` : "busiest")
   : w.role === "control" ? "control window, drawn at random" : w.role === "stratum" ? "drawn at random from its level" : "drawn at random");
@@ -880,16 +883,22 @@ function renderPicks() {
   const q = $("rnFilter").value.trim().toLowerCase();
   const hit = all.filter((s) => !q || s.code.toLowerCase().includes(q) || (s.name || "").toLowerCase().includes(q));
   const shown = hit.slice(0, 200);
+  // stores RetailNext gives no store ID: listed, and named, by their name in RetailNext
+  const noId = all.filter((s) => !s.store_id).map((s) => s.name || s.code);
+  const why = !noId.length ? ""
+    : `<div class="muted" style="margin-bottom:6px">RetailNext gives no store ID to ${noId.length === all.length ? `any of ${esc(sub)}'s stores`
+        : esc(noId.slice(0, 5).join(", ")) + (noId.length > 5 ? "…" : "")}. They are listed, and their footage and reports named, by their name in RetailNext. Once RetailNext gives them one, restart CrossingCount.</div>`;
   $("rnPickList").innerHTML = !all.length
-    ? '<div class="muted">Choose a connected brand to see its stores.</div>'
+    ? ((W.rnStores || {})[sub] ? `<div class="muted">RetailNext lists no open store for ${esc(sub)}.</div>`
+                               : '<div class="muted">Choose a connected brand to see its stores.</div>')
     : !shown.length ? `<div class="muted">No store of ${esc(sub)} matches “${esc(q)}”.</div>`
-    : `<table class="ivs">${shown.map((s) => {
+    : `${why}<table class="ivs">${shown.map((s) => {
         const id = `${sub}/${s.code}`;
-        return `<tr><td style="width:2em"><input type="checkbox" data-pick="${esc(id)}" ${W.picked.has(id) ? "checked" : ""}></td><td><b>${esc(s.code)}</b></td><td>${esc(s.name || "")}</td></tr>`;
+        return `<tr><td style="width:2em"><input type="checkbox" data-pick="${esc(id)}" ${W.picked.has(id) ? "checked" : ""}></td><td>${s.store_id ? `<b>${esc(s.code)}</b>` : '<span class="muted">no store ID</span>'}</td><td>${esc(s.name || "")}</td></tr>`;
       }).join("")}</table>${hit.length > shown.length ? `<div class="muted">and ${hit.length - shown.length} more: narrow the search</div>` : ""}`;
   const n = W.picked.size;
-  $("rnPicked").innerHTML = n
-    ? `Ticked ${n} store${n > 1 ? "s" : ""}: ${[...W.picked].map((c) => esc(c.split("/").pop())).join(", ")} · <a href="#" id="rnClear">clear</a>`
+  $("rnPicked").innerHTML = n  // everything after the brand: a store's name may hold a "/" of its own
+    ? `Ticked ${n} store${n > 1 ? "s" : ""}: ${[...W.picked].map((c) => esc(c.slice(c.indexOf("/") + 1))).join(", ")} · <a href="#" id="rnClear">clear</a>`
     : "No store ticked yet.";
   $("rnQueue").textContent = n ? `Queue these ${n} store${n > 1 ? "s" : ""}` : "Queue the ticked stores";
   if ($("rnClear")) $("rnClear").addEventListener("click", (e) => { e.preventDefault(); W.picked.clear(); renderPicks(); });

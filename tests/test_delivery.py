@@ -66,6 +66,22 @@ def test_a_code_that_says_no_brand_is_refused_rather_than_guessed(drive: Path) -
     assert delivery.brand_of("PC-392") == "Perri Cutten"
 
 
+def test_a_store_with_no_store_id_files_under_its_retailnext_brand(drive: Path) -> None:
+    """Perdaman's stores have no store id in RetailNext, so their code (the name) says no
+    brand. Their RetailNext brand does, but only into a folder already there for it."""
+    assert delivery.folder_name("Perdaman", "Northam Blvd", "Northam Blvd") == "Perdaman Northam Blvd"
+    store = {"code": "Northam Blvd", "name": "Northam Blvd", "subscription": "perdaman"}
+    with pytest.raises(delivery.DeliveryError, match="no store ID in RetailNext.*perdaman"):
+        delivery.where(drive, store)
+    assert not (drive / "perdaman").exists()  # never made from a subscription's name
+    (drive / "PERDAMAN").mkdir()
+    assert delivery.where(drive, store) == drive / "PERDAMAN" / "PERDAMAN Northam Blvd"
+    # a name that looks like a code is filed by its RetailNext brand, never guessed from it
+    with pytest.raises(delivery.DeliveryError, match="no folder for rag"):
+        delivery.where(drive, {"code": "Narellan YD-649", "name": "Narellan YD-649",
+                               "subscription": "rag"})
+
+
 def test_what_would_be_copied_is_said_before_anything_is(drive: Path, tmp_path: Path) -> None:
     report = tmp_path / "Connor Tweed Heads camera validation.pptx"
     report.write_bytes(b"deck")
